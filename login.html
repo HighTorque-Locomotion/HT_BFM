@@ -22,8 +22,13 @@
         body: JSON.stringify({ password })
       });
       const data = await res.json();
+      console.log("Login response:", data); // Debug log
       if(data.success){
-        window.location.href = "/"; // Redirect to homepage after successful login
+        console.log("Login successful, redirecting to homepage"); // Debug log
+        // 延迟一下确保cookie设置完成
+        setTimeout(() => {
+          window.location.href = "/"; // Redirect to homepage after successful login
+        }, 100);
       } else {
         alert("Incorrect password!");
       }

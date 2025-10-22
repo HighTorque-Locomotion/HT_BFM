@@ -10,8 +10,8 @@ export default function handler(req, res) {
     const SECRET_PASSWORD = process.env.WEBSITE_PASSWORD || "liyitang2025";
   
     if (password === SECRET_PASSWORD) {
-      // 设置 HTTP Only Cookie，有效期 1 小时
-      res.setHeader("Set-Cookie", "auth=1; HttpOnly; Path=/; Max-Age=3600");
+      // 设置普通 Cookie，有效期 1 小时
+      res.setHeader("Set-Cookie", "auth=1; Path=/; Max-Age=3600");
       return res.json({ success: true });
     } else {
       return res.json({ success: false });
