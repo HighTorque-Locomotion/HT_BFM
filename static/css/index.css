@@ -280,7 +280,7 @@ body {
 }
 
 .formula-text {
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1em;
   font-weight: 400;
   color: #495057;
@@ -383,7 +383,7 @@ body {
 }
 
 .inference-control h4 {
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1.2em;
   font-weight: bold;
   color: #495057;
@@ -415,7 +415,7 @@ body {
 }
 
 .wrist-label {
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1em;
   font-weight: bold;
   color: #495057;
@@ -430,7 +430,7 @@ body {
 
 .reward-button {
   padding: 12px 24px;
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1em;
   font-weight: bold;
   color: white;
@@ -466,7 +466,7 @@ body {
 .continuous-play-btn {
   margin-top: 15px;
   padding: 10px 20px;
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1em;
   font-weight: bold;
   color: white;
@@ -615,7 +615,7 @@ body {
   color: white;
   padding: 4px 8px;
   border-radius: 4px;
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 0.8em;
   font-weight: bold;
   z-index: 10;
@@ -659,7 +659,7 @@ body {
   border: none;
   padding: 8px 16px;
   border-radius: 5px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 0.9em;
   cursor: pointer;
   transition: background-color 0.3s;
@@ -715,7 +715,7 @@ body {
   background-color: #ffffff;
   transform: rotateY(180deg);
   padding: 20px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 0.9em;
   line-height: 1.6;
 }
@@ -845,7 +845,7 @@ body {
   background-color: #ffffff;
   transform: rotateY(180deg);
   padding: 20px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 0.9em;
   line-height: 1.6;
   font-size: clamp(0.8em, 1vw, 1em);
@@ -945,7 +945,7 @@ body {
 .timeline-current-time {
   text-align: center;
   margin-top: 30px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   color: #333;
 }
 
@@ -1032,7 +1032,7 @@ body {
   font-size: 1.2rem;
   font-weight: bold;
   text-align: center;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   transition: opacity 0.3s ease;
 }
 
@@ -1095,14 +1095,14 @@ body {
 
 .inference-card-content p {
   margin: 5px 0;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
 }
 
 .inference-card-content .formula {
   background: #f8f9fa;
   padding: 8px;
   border-radius: 5px;
-  font-family: 'Courier New', monospace;
+  font-family: monospace;
   font-size: 0.8rem;
   margin-top: 8px;
 }
@@ -1145,7 +1145,7 @@ body {
   font-weight: bold;
   cursor: pointer;
   transition: all 0.3s ease;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   text-align: center;
 }
 
@@ -1175,7 +1175,7 @@ body {
 }
 
 .tab-content p {
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   line-height: 1.6;
   margin-bottom: 15px;
 }
@@ -1208,7 +1208,7 @@ body {
   font-weight: bold;
   cursor: pointer;
   transition: all 0.3s ease;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   text-align: left;
   border-bottom: 1px solid rgba(255,255,255,0.1);
 }
@@ -1241,12 +1241,12 @@ body {
 .sub-tab-content h4 {
   color: #004bb3;
   margin-bottom: 10px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
 }
 
 .sub-tab-content p {
   margin-bottom: 15px;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   line-height: 1.5;
 }
 
@@ -1255,7 +1255,7 @@ body {
   padding: 15px;
   border-radius: 8px;
   margin: 15px 0;
-  font-family: Georgia, serif;
+  font-family: 'Google Sans', sans-serif;
   border-left: 4px solid #004bb3;
 }
 
@@ -1505,7 +1505,7 @@ body {
 }
 
 .placeholder-text {
-  font-family: "Times New Roman", Times, serif;
+  font-family: 'Google Sans', sans-serif;
   font-size: 1em;
   color: #6c757d;
   text-align: center;

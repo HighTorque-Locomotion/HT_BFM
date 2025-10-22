@@ -69,7 +69,7 @@
         color: white;
         padding: 10px 20px;
         border-radius: 5px;
-        font-family: Georgia, serif;
+        font-family: 'Google Sans', sans-serif;
         font-size: 14px;
         z-index: 10000;
         pointer-events: none;
@@ -732,7 +732,7 @@
           padding: 8px 16px;
           border-radius: 4px;
           cursor: pointer;
-          font-family: Georgia, serif;
+          font-family: 'Google Sans', sans-serif;
           font-size: 0.9em;
         `;
         
@@ -1037,7 +1037,7 @@
     <!-- <div class="columns is-centered">
       <img src="./resources/approach.png" ></img>
     </div> -->
-    <p style="font-family: Georgia, serif; font-size: 0.9em;">
+    <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">
        Building <span style="color:#b36b00; font-weight:bold;">Behavioral Foundation Models</span> (BFMs) for humanoid robots has the potential to unify diverse control tasks under a single, promptable generalist policy. However, existing approaches are either exclusively deployed on simulated humanoid characters, or specialized to specific tasks such as tracking. We propose <span style="color:#3a6902; font-weight:bold;">B</span><span style="color:#b63620; font-weight:bold;">F</span><span style="color:#004bb3; font-weight:bold;">M</span><span style="color:#b36b00; font-weight:bold;">-Zero</span></span>, a framework that learns an effective shared latent representation that embeds <span style="color:#3a6902; font-weight:bold;">motions</span>, <span style="color:#b63620; font-weight:bold;">goals</span>, and <span style="color:#004bb3; font-weight:bold;">rewards</span> into a common space, enabling a single policy to be prompted for multiple downstream tasks without retraining. This well-structured latent space in BFM-Zero enables versatile and robust whole-body skills on a Unitree G1 humanoid in the real world, via diverse inference methods, including zero-shot <span style="color:#3a6902; font-weight:bold;">motion tracking</span>, <span style="color:#b63620; font-weight:bold;">goal reaching</span>, and <span style="color:#004bb3; font-weight:bold;">reward optimization</span>, and few-shot optimization-based adaptation. Unlike prior on-policy reinforcement learning (RL) frameworks, BFM-Zero builds upon recent advancements in <span style="color:#b36b00; font-weight:bold;">unsupervised RL</span> and <span style="color:#b36b00; font-weight:bold;">Forward-Backward (FB)</span> models, which offer an <span style="color:#b36b00; font-weight:bold;">objective-centric, explainable, and smooth latent representation</span> of whole-body motions. We further extend BFM-Zero with critical reward shaping, domain randomization, and history-dependent asymmetric learning to bridge the sim-to-real gap. Those key design choices are quantitatively ablated in simulation. A first-of-its-kind model, BFM-Zero establishes a step toward scalable, promptable behavioral foundation models for whole-body humanoid control.
     </p>
   </div>
@@ -1057,7 +1057,7 @@
               <img src="./static/images/pretraining.png" alt="Pre-training Image">
       </div>
             <div class="flip-card-back">
-              <p style="font-family: Georgia, serif; font-size: 0.9em;">The objective is to learn <strong>a unified latent representation</strong> that embeds tasks (e.g., target motions, rewards, goals) into a shared space and <strong>a promptable policy</strong> that conditions on this representation to perform diverse tasks without retraining.</p>
+              <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">The objective is to learn <strong>a unified latent representation</strong> that embeds tasks (e.g., target motions, rewards, goals) into a shared space and <strong>a promptable policy</strong> that conditions on this representation to perform diverse tasks without retraining.</p>
       </div>
       </div>
     </div>
@@ -1073,7 +1073,7 @@
                 <img src="./static/images/inference.png" alt="Inference Image">
       </div>
               <div class="flip-card-back">
-                <p style="font-family: Georgia, serif; font-size: 0.7em;">At test time, BFM-Zero can be used to solve different tasks including <span style="color:#b00202; font-weight:bold;">motion tracking</span>, <span style="color:#b00202; font-weight:bold;">goal reaching</span>, and <span style="color:#b00202; font-weight:bold;">reward optimization</span> in <span style="color:#b00202; font-weight:bold;">zero-shot</span> fashion.</p>
+                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">At test time, BFM-Zero can be used to solve different tasks including <span style="color:#b00202; font-weight:bold;">motion tracking</span>, <span style="color:#b00202; font-weight:bold;">goal reaching</span>, and <span style="color:#b00202; font-weight:bold;">reward optimization</span> in <span style="color:#b00202; font-weight:bold;">zero-shot</span> fashion.</p>
       </div>
       </div>
       </div>
@@ -1087,7 +1087,7 @@
                 <img src="./static/images/adaptation.png" alt="Adaptation Image">
       </div>
               <div class="flip-card-back">
-                <p style="font-family: Georgia, serif; font-size: 0.7em;">BFM-Zero supports <span style="color:#b00202; font-weight:bold;">few-shot adaptation</span> for tasks that require additional fine-tuning. This enables the model to quickly adapt to new environments or specific requirements with minimal additional training.</p>
+                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">BFM-Zero supports <span style="color:#b00202; font-weight:bold;">few-shot adaptation</span> for tasks that require additional fine-tuning. This enables the model to quickly adapt to new environments or specific requirements with minimal additional training.</p>
       </div>
     </div>
     </div>
@@ -1154,7 +1154,7 @@
   <h2 class="title is-3" style="text-align: center; color: #3a6902;">Goal Reaching</h2>
   <div class="container" style="max-width: 60%; margin: 0 auto;">
     <!-- 视频时间轴控制 -->
-    <h4 style="text-align: center; margin-bottom: 15px; font-family: Georgia, serif;">Click image for real-world goal pose, click ▶ for natural transition, and drag the progress bar to view frame by frame.</h4>
+    <h4 style="text-align: center; margin-bottom: 15px; font-family: 'Google Sans', sans-serif;">Click image for real-world goal pose, click ▶ for natural transition, and drag the progress bar to view frame by frame.</h4>
     <div class="video-timeline-container">
       <div class="timeline-marks" id="timelineMarks"></div>
       <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="25" step="0.1" value="0" style="background: #5a8a2a !important;">
@@ -1165,7 +1165,7 @@
       <div class="column has-text-centered">
         <video id="frameVideo" width="100%" height="auto" muted playsinline src="./resources/goal_reaching/full/full-2.mp4" poster="./resources/loading-icon.gif" style="border: 1px solid #bbb; border-radius: 10px; margin: 1.0%;"></video>
       </div>
-      <h4 style="text-align: center; margin-bottom: 15px; font-family: Georgia, serif;">We also test diverse initial on the ground pose to a standing pose. BFM-Zero can achieve relative gentle and natural transitions to any goal pose.</h4>
+      <h4 style="text-align: center; margin-bottom: 15px; font-family: 'Google Sans', sans-serif;">We also test diverse initial on the ground pose to a standing pose. BFM-Zero can achieve relative gentle and natural transitions to any goal pose.</h4>
     <!-- Goal Reaching 视频画廊 -->
     <div class="video-gallery">
       <!-- 左箭头按钮 -->
@@ -1182,8 +1182,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: T-Pose</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">You see: it can naturally, smoothly get up from the ground and reach T-Pose.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: T-Pose</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">You see: it can naturally, smoothly get up from the ground and reach T-Pose.</p>
     </div>
         </div>
 
@@ -1194,8 +1194,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: T-Pose</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">A running-like posture emerged spontaneously before he fully stabilized.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: T-Pose</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">A running-like posture emerged spontaneously before he fully stabilized.</p>
       </div>
       </div>
 
@@ -1206,8 +1206,8 @@
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">For other pose that is not that symmetric, it can still reach the target pose naturally.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">For other pose that is not that symmetric, it can still reach the target pose naturally.</p>
       </div>
     </div>
 
@@ -1218,8 +1218,8 @@
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">It quickly stabilizes on tiptoes, even when the initial stand-up is unstable.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">It quickly stabilizes on tiptoes, even when the initial stand-up is unstable.</p>
       </div>
     </div>
         
@@ -1230,8 +1230,8 @@
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">It's fine even if it fails to stand up on the first try.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">It's fine even if it fails to stand up on the first try.</p>
       </div>
     </div>
         
@@ -1242,8 +1242,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">Sometimes, if the initial pose is weird and not natural, it chooses to get up quickly first.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Sometimes, if the initial pose is weird and not natural, it chooses to get up quickly first.</p>
     </div>
   </div>
         
@@ -1254,8 +1254,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">Anyway, it has a large probability to efficiently reach the target pose.</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Anyway, it has a large probability to efficiently reach the target pose.</p>
       </div>
       </div>
         
@@ -1266,8 +1266,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">Yes, a large...</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Yes, a large...</p>
       </div>
       </div>
         
@@ -1278,8 +1278,8 @@
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-            <p style="font-family: Georgia, serif; font-size: 0.85em;">...large probability</p>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">...large probability</p>
       </div>
       </div>
       
@@ -1289,8 +1289,8 @@
           Your browser does not support the video tag.
         </video>
         <div class="video-info">
-          <h4 style="font-family: Georgia, serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
-          <p style="font-family: Georgia, serif; font-size: 0.85em;">Even if the wrist is totally broken:)</p>
+          <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture</h4>
+          <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Even if the wrist is totally broken:)</p>
       </div>
       </div>
     </div>
@@ -1318,7 +1318,7 @@
   <!-- Highlight Video Section -->
   <div class="container" style="max-width: 60%; margin: 0 auto;">
     <div style="text-align: center; margin-bottom: 30px;">
-        <h4 style="font-family: Georgia, serif; color: #666; margin-bottom: 20px;">
+        <h4 style="font-family: 'Google Sans', sans-serif; color: #666; margin-bottom: 20px;">
           Check our <span style="color: #dc3545; font-weight: bold;">highlight tracking video</span> in dancing with <span style="color: #dc3545; font-weight: bold;">safe, natural, and gentle recovery</span> even when confronted with unexpected falls.<br>
           <span style="font-style: italic;">(Strongly recommend turning on sound)</span>
         </h4>
@@ -1332,7 +1332,7 @@
   <div class="container" style="max-width: 60%; margin: 0 auto;">
     <!-- 视频画廊 -->
     <div style="text-align: center; margin-bottom: 20px;">
-      <h4 style="font-family: Georgia, serif; color: #666; margin-bottom: 15px;">
+      <h4 style="font-family: 'Google Sans', sans-serif; color: #666; margin-bottom: 15px;">
         More motion tracking demos including styled locomotion, boxing, playing ball games and dancing. All demos come from <span style="color: #dc3545; font-weight: bold;">a single, continuous video shooting with the same policy.</span>
       </h4>
       <button onclick="showFullVideo()" class="full-video-btn">
@@ -1446,7 +1446,7 @@
 
   <div class="container" style="max-width: 80%; margin: 0 auto;">
       
-  <h4 style="text-align: center; margin-bottom: 15px; font-family: Georgia, serif;">We do not have <span style="color: #004bb3;">any labeled rewards</span> in our pre-training process.The reward inference (optimization) happens in the test time. Users can prompt in any type of reward function they want w.r.t. the robot states, and the policy <span style="color: #004bb3;">zero-shot</span> output the optimized skills without retraining.</h4>
+  <h4 style="text-align: center; margin-bottom: 15px; font-family: 'Google Sans', sans-serif;">We do not have <span style="color: #004bb3;">any labeled rewards</span> in our pre-training process.The reward inference (optimization) happens in the test time. Users can prompt in any type of reward function they want w.r.t. the robot states, and the policy <span style="color: #004bb3;">zero-shot</span> output the optimized skills without retraining.</h4>
     <div class="tabs-container">
       <div class="tabs-header">
         <button class="tab-button active" onclick="showTab('basic-locomotion')">Basic Locomotion</button>
@@ -1957,8 +1957,8 @@
             <source src="./resources/disturbance/disturbance-1.mp4" type="video/mp4">
             Your browser does not support the video tag.
       </video>
-          <h4 style="font-family: Georgia, serif; font-size: 1.1em; margin-bottom: 10px;">Disturbance Rejection 1</h4>
-          <p style="font-family: Georgia, serif; font-size: 0.9em;">Demonstrates BFM-Zero's ability to maintain stability and recover from external disturbances.</p>
+          <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1.1em; margin-bottom: 10px;">Disturbance Rejection 1</h4>
+          <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Demonstrates BFM-Zero's ability to maintain stability and recover from external disturbances.</p>
     </div>
       </div>
       <div class="column is-half">
@@ -1967,8 +1967,8 @@
             <source src="./resources/disturbance/disturbance-2.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
-          <h4 style="font-family: Georgia, serif; font-size: 1.1em; margin-bottom: 10px;">Disturbance Rejection 2</h4>
-          <p style="font-family: Georgia, serif; font-size: 0.9em;">Shows robust performance under various disturbance conditions and quick recovery.</p>
+          <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1.1em; margin-bottom: 10px;">Disturbance Rejection 2</h4>
+          <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Shows robust performance under various disturbance conditions and quick recovery.</p>
         </div>
       </div>
     </div>
@@ -1993,7 +1993,7 @@
               <source src="./resources/adaptation/before_adapt.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em; margin-top: 8px; color: #dc3545;">Before Adaptation</h4>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-top: 8px; color: #dc3545;">Before Adaptation</h4>
           </div>
         </div>
       </div>
@@ -2001,7 +2001,7 @@
       <!-- 箭头 -->
       <div style="flex: 0 0 auto; text-align: center;">
         <div style="margin: 20px 0;">
-          <div style="font-family: Georgia, serif; font-size: 1.0em; font-weight: bold; color: #666; margin-bottom: 10px; line-height: 1.3;">
+          <div style="font-family: 'Google Sans', sans-serif; font-size: 1.0em; font-weight: bold; color: #666; margin-bottom: 10px; line-height: 1.3;">
             <div>Adaptation in Sim</div>
             <div style="font-size: 0.8em; margin-top: 5px;">for less than 2 minutes</div>
           </div>
@@ -2017,7 +2017,7 @@
               <source src="./resources/adaptation/after_adapt.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
-            <h4 style="font-family: Georgia, serif; font-size: 0.9em; margin-top: 8px; color: #28a745;">After Adaptation</h4>
+            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-top: 8px; color: #28a745;">After Adaptation</h4>
           </div>
         </div>
       </div>
@@ -2028,7 +2028,7 @@
 <section class="section">
   <h2 class="title is-2" style="text-align: center;">Space Interpolation</h2>
   <div class="container" style="max-width: 80%; margin: 0 auto;">\
-    <h4 style="text-align: center; margin-bottom: 15px; font-family: Georgia, serif;">The structured nature of the learned space enables smooth interpolation between latent representations. We can leverage Spherical Linear Interpolation to generate intermediate latent vectors along the geodesic arc between the two end-points.</h4>
+    <h4 style="text-align: center; margin-bottom: 15px; font-family: 'Google Sans', sans-serif;">The structured nature of the learned space enables smooth interpolation between latent representations. We can leverage Spherical Linear Interpolation to generate intermediate latent vectors along the geodesic arc between the two end-points.</h4>
     
     <div style="text-align: center; margin: 20px 0;">
       <p style="margin-bottom: 10px;">$$z_{t} := \frac{\sin((1-t)\theta)}{\sin \theta}z_0 + \frac{\sin(t\theta)}{\sin \theta}z_1, \quad \theta := \arccos\left(\langle z_0, z_1 \rangle\right), \ z_0\ne z_1, t\in[0,1].$$</p>
@@ -2041,8 +2041,8 @@
             <source src="./resources/interpolation/interpolation1.mp4" type="video/mp4">
             Your browser does not support the video tag.
       </video>
-          <h4 style="font-family: Georgia, serif; font-size: 0.9em; margin-bottom: 10px;">Interpolation between strafe-left and strafe-right</h4>
-          <!-- <p style="font-family: Georgia, serif; font-size: 0.9em;">Hightlight: The robot almost stop at t=0.5, demonstrates the structured nature of the learned space.</p> -->
+          <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-bottom: 10px;">Interpolation between strafe-left and strafe-right</h4>
+          <!-- <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Hightlight: The robot almost stop at t=0.5, demonstrates the structured nature of the learned space.</p> -->
     </div>
       </div>
       <div class="column is-half">
@@ -2051,8 +2051,8 @@
             <source src="./resources/interpolation/interpolation2.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
-          <h4 style="font-family: Georgia, serif; font-size: 0.9em; margin-bottom: 10px;">Interpolation between arms-low-low and arms-low-high</h4>
-          <!-- <p style="font-family: Georgia, serif; font-size: 0.9em;">Shows robust performance under various disturbance conditions and quick recovery.</p> -->
+          <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-bottom: 10px;">Interpolation between arms-low-low and arms-low-high</h4>
+          <!-- <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Shows robust performance under various disturbance conditions and quick recovery.</p> -->
         </div>
       </div>
     </div>
