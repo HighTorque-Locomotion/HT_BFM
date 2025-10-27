@@ -2403,16 +2403,16 @@
 
 <section class="section" id="approach">
   <h2 class="title is-2" style="text-align: center;">Approach</h2>
-  <div class="container" style="width:75%; margin: 0 auto;">
+  <div class="container" style="width:85%; margin: 0 auto;">
     <!-- <div class="columns is-centered">
       <img src="./resources/approach.png" ></img>
     </div> -->
     <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; text-align: center;">An overview of the  <span style="color:#3a6902; font-weight:bold;">B</span><span style="color:#b63620; font-weight:bold;">F</span><span style="color:#004bb3; font-weight:bold;">M</span><span style="color:#b36b00; font-weight:bold;">-Zero</span></span>: After the pre-training stage, BFM-Zero forms a latent space that can be used for zero-shot inference and few-shot adaptation. 
     </p>
   </div>
-  <div class="container" style="display: flex; justify-content: center;">
+  <div class="container" style="display: flex; justify-content: center; margin-top: 40px;">
     
-    <div class="flip-cards-container" style="margin-left: 10%;">
+    <div class="flip-cards-container" style="margin-left: 10%; transform: scale(1.3); transform-origin: center; width: 77%; height: auto; overflow: visible;">
       <!-- Left: First flip card -->
       <div class="flip-card-left">
         <div class="flip-card">
@@ -2421,7 +2421,7 @@
               <img src="./static/images/pretraining.png" alt="Pre-training Image">
       </div>
             <div class="flip-card-back">
-              <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">The objective is to learn  <span style="color:#b00202; font-weight:bold;">a unified latent representation</span> that embeds tasks (e.g., target motions, rewards, goals) into a shared space and <span style="color:#b00202; font-weight:bold;">a promptable policy</span> that conditions on this representation to perform diverse tasks without retraining.</p>
+              <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">Objective: Learn a <span style="color:#b00202; font-weight:bold;">unified latent representation</span> that embeds tasks (e.g., target motions, rewards, goals) into a shared space and a <span style="color:#b00202; font-weight:bold;">promptable policy</span> that conditions on this representation to perform diverse tasks without retraining.</p>
       </div>
       </div>
     </div>
@@ -2437,7 +2437,7 @@
                 <img src="./static/images/inference.png" alt="Inference Image">
       </div>
               <div class="flip-card-back">
-                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">At test time, BFM-Zero can be used to solve different tasks including <span style="color:#b00202; font-weight:bold;">motion tracking</span>, <span style="color:#b00202; font-weight:bold;">goal reaching</span>, and <span style="color:#b00202; font-weight:bold;">reward optimization</span> in <span style="color:#b00202; font-weight:bold;">zero-shot</span> fashion.</p>
+                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">BFM-Zero can <span style="color:#b00202; font-weight:bold;">zero-shot</span> perform tasks including motion tracking, goal reaching, and reward optimization.</p>
       </div>
       </div>
       </div>
@@ -2451,7 +2451,7 @@
                 <img src="./static/images/adaptation.png" alt="Adaptation Image">
       </div>
               <div class="flip-card-back">
-                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">BFM-Zero supports <span style="color:#b00202; font-weight:bold;">few-shot adaptation</span> for tasks that require additional fine-tuning. This enables the model to quickly adapt to new environments or specific requirements with minimal additional training.</p>
+                <p style="font-family: 'Google Sans', sans-serif; font-size: 0.7em;">BFM-Zero supports <span style="color:#b00202; font-weight:bold;">few-shot adaptation</span>to quickly adapt to specific requirements with minimal additional training.</p>
       </div>
     </div>
     </div>
@@ -2461,20 +2461,25 @@
   </div>
 </section>
 
-
-<section class="section" id="zero-shot">
-  <h2 class="title is-2" style="text-align: center;">Zero-shot Inference</h2>
-  <h3 class="title is-6" style="text-align: center;"><strong>ALL DEMOS ARE FROM <span style="color: #b00202;"><strong></strong>THE SAME POLICY.</strong></span></strong></h3>
-  <div class="container" style="width:70%; margin: 0 auto;">
-    <!-- <div class="columns is-centered">
-      <img src="./resources/approach.png" ></img>
-    </div> -->
-    <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; text-align: center;">
-     At test time, BFM-Zero can be used to solve different tasks including <span style="color:#b00202; font-weight:bold;">motion tracking</span>, <span style="color:#b00202; font-weight:bold;">goal reaching</span>, and <span style="color:#b00202; font-weight:bold;">reward optimization</span> in <span style="color:#b00202; font-weight:bold;">zero-shot</span> fashion.
-    </p>
-  </div>
-  <div class="container">
-    <div class="inference-cards">
+<section class="section" id="how-it-works" style="background-color: #fafafa;">
+  <div class="container" style="width:85%; margin: 0 auto;">
+    <h3 class="title is-3" style="text-align: center; margin-bottom: 40px;">How it works: <span style="color: #b63620; font-weight: bold;">Unsupervised</span> RL and <span style="color: #b63620; font-weight: bold;">Zero-shot</span> inference</h3>
+    
+    <!-- Pre-training overview -->
+    <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 30px;">
+      <p style="font-family: 'Google Sans', sans-serif; font-size: 1em; text-align: left; margin-bottom: 20px; color: #333; max-width: 100%; padding-left: 35px;">
+        In pre-training, BFM aims to learn a latent space $z\in Z$, a forward <span style="color: #004bb3; font-weight: bold;">$\boldsymbol{F}(s, a, z)$</span> and a backward <span style="color: #3a6902; font-weight: bold;">$\boldsymbol{B}(s)$</span> representations, and a $z$-conditioned policy $\pi_z$ such that:
+      </p>
+      <div style="margin: 10px 0; padding-left: 60px;">
+        <ol style="text-align: left; max-width: 100%; margin: 0 auto; font-family: 'Google Sans', sans-serif; font-size: clamp(0.75em, 1.2vw, 0.95em); line-height: 2.0; padding-left: 0; padding-right: 35px;">
+          <li style="margin-bottom: 20px; padding-left: 15px; word-wrap: break-word; overflow-wrap: break-word;">Starting from $\{s,a\}$ and follow $\pi_z$, the visitation probability of $s'$ is approximately <span style="color: #004bb3; font-weight: bold;">$\boldsymbol{F}(s, a, z)^\top$</span><span style="color: #3a6902; font-weight: bold;">$\boldsymbol{B}(s')$</span>.</li>
+          <li style="margin-bottom: 20px; padding-left: 15px; word-wrap: break-word; overflow-wrap: break-word;">The Q-function of $\pi_z$ is given by <span style="color: #004bb3; font-weight: bold;">$\boldsymbol{F}^\top $</span>$z$ but not learned with supervision from any specific rewards.</li>
+          <li style="margin-bottom: 20px; padding-left: 15px; word-wrap: break-word; overflow-wrap: break-word;">In inference time, for various objectives (goal reaching, tracking, reward optimization), we can use following fomulas to compute $z$ in a <strong style="color: #b63620;">zero-shot</strong> way:</li>
+        </ol>
+      </div>
+      
+      <!-- Three inference cards -->
+      <div class="inference-cards" style="margin-top: 40px;">
       <!-- Goal Reaching card -->
       <div class="inference-card">
         <div class="inference-card-title">
@@ -2519,6 +2524,28 @@
     </div>
     </div>
   </div>
+    
+    <!-- Remark box -->
+    <div style="background: linear-gradient(135deg, #fff5f5 0%, #fef0f0 100%); padding: 30px; border-radius: 12px; border-left: 5px solid #b63620; box-shadow: 0 2px 8px rgba(182, 54, 32, 0.1);">
+      <p style="font-family: 'Google Sans', sans-serif; font-size: 0.95em; margin: 0; color: #333; line-height: 1.6;">
+        <span style="color: #b63620; font-weight: bold; font-size: 1.1em;">🔑 Remark:</span> Compared to other frameworks, we don't give the model any specific reward in the training, i.e., it is an <strong style="color: #b63620;">unsupervised RL</strong> problem. Moreover, the learned representation <span style="color: #004bb3; font-weight: bold;">$\boldsymbol{F}$</span>, <span style="color: #3a6902; font-weight: bold;">$\boldsymbol{B}$</span> and latent $Z$ are <strong style="color: #b63620;">aware of humanoid dynamics</strong>.
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="zero-shot">
+  <h2 class="title is-2" style="text-align: center;">Zero-shot Inference</h2>
+  <h3 class="title is-5" style="text-align: center;"><strong>ALL demos are <span style="color: #b00202;"><strong></strong>real-time</span></strong> and from <span style="color: #b00202;"><strong></strong>the same policy</span></strong>.</h3>
+  <!-- <div class="container" style="width:70%; margin: 0 auto;"> -->
+    <!-- <div class="columns is-centered">
+      <img src="./resources/approach.png" ></img>
+    </div> -->
+    <!-- <p style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; text-align: center;">
+     At test time, BFM-Zero can be used to solve different tasks including <span style="color:#b00202; font-weight:bold;">motion tracking</span>, <span style="color:#b00202; font-weight:bold;">goal reaching</span>, and <span style="color:#b00202; font-weight:bold;">reward optimization</span> in <span style="color:#b00202; font-weight:bold;">zero-shot</span> fashion.
+    </p> -->
+  <!-- </div> -->
 </section>
 
 
@@ -2692,7 +2719,7 @@
     <div style="text-align: center; margin-bottom: 30px;">
         <h4 style="font-family: 'Google Sans', sans-serif; color: #666; margin-bottom: 20px;">
           Check our <span style="color: #dc3545; font-weight: bold;">highlight tracking video</span> in dancing with <span style="color: #dc3545; font-weight: bold;">safe, natural, and gentle recovery</span> even when confronted with unexpected falls.<br>
-          <span style="font-style: italic;">(Strongly recommend turning on sound)</span>
+          <!-- <span style="font-style: italic;">(Strongly recommend turning on sound)</span> -->
         </h4>
       <video width="80%" height="auto" controls autoplay muted loop style="border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <source src="./resources/tracking/tracking_highlight2/tracking_highlight2-1.mp4" type="video/mp4">
