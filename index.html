@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>BFM-Zero: A Promptable Behavioral Foundation Model for Humanoid Control Using Unsupervised Reinforcement Learning</title>
 
+  <!-- Favicon -->
+  <!-- <link rel="icon" type="image/png" href="./resources/logo.png"> -->
+  
   <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
         rel="stylesheet">
   <link rel="stylesheet" href="./static/css/bulma.min.css">
@@ -1088,8 +1091,7 @@
   <script src="./static/js/bulma-slider.min.js"></script>
   <script src="./static/js/index.js"></script>
   <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-  
-  <!-- Configure MathJax before loading -->
+
   <script>
     window.MathJax = {
       tex: {
@@ -1100,7 +1102,7 @@
   </script>
   
   <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-  
+    
   <script>
 
     // Check HTTP Only Cookie
@@ -1125,21 +1127,7 @@
       console.log("Authenticated successfully or running locally"); // Debug log
     }
 
-    // Re-render MathJax on page load
-    document.addEventListener('DOMContentLoaded', function() {
-      // Try multiple times to ensure MathJax renders
-      setTimeout(function() {
-        if (window.MathJax && window.MathJax.typesetPromise) {
-          window.MathJax.typesetPromise();
-        }
-      }, 100);
-      
-      setTimeout(function() {
-        if (window.MathJax && window.MathJax.typesetPromise) {
-          window.MathJax.typesetPromise();
-        }
-      }, 1000);
-    });
+    // MathJax rendering will be handled by the load event at the bottom of the page
     
     // Global variables and functions
     let currentVideoIndex = 0;
@@ -1975,6 +1963,16 @@
       });
     }
 
+      // Performance monitoring object
+      let performanceMetrics = {
+        totalVideos: 0,
+        loadingVideos: 0,
+        loadedVideos: 0,
+        failedVideos: 0,
+        maxConcurrentLoads: 3,
+        networkSpeed: 'unknown'
+      };
+      
       // Initialize video covers after page load
       document.addEventListener('DOMContentLoaded', function() {
         // No longer need complex background generation, use video directly as background
@@ -2373,7 +2371,7 @@
       const placeholder = document.querySelector('.video-placeholder');
       
       if (rightWristValue && leftWristValue) {
-        // Show image based on combination
+        // Show image based on composition
         let imageKey = '';
         if (rightWristValue === 'high' && leftWristValue === 'high') {
           imageKey = 'hh';
@@ -2759,7 +2757,7 @@
   <div class="container" style="width:85%; margin: 40px auto 0;">
     <div style="background: white; padding: 40px 30px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
       <p style="font-family: 'Google Sans', sans-serif; font-size: 1.15em; margin: 0; color: #333; line-height: 1.7; text-align: center;">
-        The <em><strong>well-regularized, dynamics-aware</strong></em> latent space ✨ also enables <em>natural and smooth</em> transitions during <a href="#goal-reaching" style="color: #3a6902; text-decoration: underline;">goal reaching</a>, <em>natural and gentle</em> recovery in <a href="#motion-tracking" style="color: #b63620; text-decoration: underline;">motion tracking</a> and <a href="#disturbance-rejection" style="color: #666; text-decoration: underline;">disturbance rejection</a>, <em>near-optimal</em> zero-shot <a href="#reward-optimization" style="color: #004bb3; text-decoration: underline;">reward optimization</a>, and <em>efficient</em> <a href="#few-shot-adaptation" style="color: #666; text-decoration: underline;">few-shot adaptation</a> ⚡.
+        The <em><strong>well-regularized, dynamics-aware</strong></em> latent space ✨ also enables <em>natural and smooth</em> transitions during <a href="#goal-reaching" style="color: #3a6902; text-decoration: underline;">goal reaching</a>, <em>natural and gentle</em> recovery in <a href="#motion-tracking" style="color: #b63620; text-decoration: underline;">motion tracking</a> and <a href="#disturbance-rejection" style="color: #666; text-decoration: underline;">disturbance rejection</a>, <em>zero-shot</em> <a href="#reward-optimization" style="color: #004bb3; text-decoration: underline;">reward optimization</a> (for any given reward at test time), and <em>efficient</em> <a href="#few-shot-adaptation" style="color: #666; text-decoration: underline;">few-shot adaptation</a> ⚡.
       </p>
     </div>
     </div>
@@ -2887,7 +2885,7 @@
           </video>
           <div class="video-info">
             <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture <img src="./resources/pose.png" alt="Pose" style="width: 30px; height: auto; vertical-align: middle; margin-left: 5px;"></h4>
-            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Besides, BFM-Zero maintains a high likelihood of efficient goal reaching...</p>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">Besides, BFM-Zero maintains a high rate of efficient goal reaching...</p>
       </div>
       </div>
         
@@ -2899,7 +2897,7 @@
           </video>
           <div class="video-info">
             <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture <img src="./resources/pose.png" alt="Pose" style="width: 30px; height: auto; vertical-align: middle; margin-left: 5px;"></h4>
-            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">...a high likelihood of efficient goal reaching...</p>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">...a high rate of efficient goal reaching...</p>
       </div>
       </div>
         
@@ -2911,7 +2909,7 @@
           </video>
           <div class="video-info">
             <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em;">Target: Hands-on-hips posture <img src="./resources/pose.png" alt="Pose" style="width: 30px; height: auto; vertical-align: middle; margin-left: 5px;"></h4>
-            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">...a high likelihood of efficient goal reaching.</p>
+            <p style="font-family: 'Google Sans', sans-serif; font-size: 0.85em;">...a high rate of efficient goal reaching.</p>
       </div>
       </div>
       
@@ -3084,7 +3082,7 @@
         <button class="tab-button" onclick="showTab('arm-control')">Arm Control</button>
         <button class="tab-button" onclick="showTab('base-height')">Base Height Control</button>
         <button class="tab-button" onclick="showTab('behavior-diversity')">Behavior Diversity</button>
-        <button class="tab-button" onclick="showTab('skill-combination')">Skill Combination</button>
+        <button class="tab-button" onclick="showTab('skill-composition')">Skill Composition</button>
       </div>
       
       <div id="basic-locomotion" class="tab-content active">
@@ -3388,9 +3386,8 @@
           </div>
         </div>
     </div>
-
-      <div id="skill-combination" class="tab-content">
-        <h3>Skill Combination</h3>
+    <div id="skill-composition" class="tab-content">
+    <h3>Skill Composition</h3>
         <p>Taking the arm control and basic locomotion as examples, we can combine them to form new skills.</p>
         <div class="reward-formula">
           $$R = w_{\text{arm}} \cdot R_{\text{arm}} + w_{\text{loco}} \cdot R_{\text{loco}} $$
@@ -3725,23 +3722,44 @@
 </footer>
 
 <script>
-  // Ensure MathJax renders on mobile
+  // Ensure MathJax renders
   window.addEventListener('load', function() {
+    console.log('Page loaded, attempting to render MathJax...');
     if (window.MathJax && window.MathJax.typesetPromise) {
-      MathJax.typesetPromise().catch(function(err) {
+      console.log('MathJax found, rendering...');
+      MathJax.typesetPromise().then(function() {
+        console.log('MathJax render successful');
+      }).catch(function(err) {
         console.log('MathJax typeset error:', err);
       });
+    } else {
+      console.log('MathJax not found');
     }
   });
   
   // Also retry after a delay for slow connections
   setTimeout(function() {
+    console.log('Retrying MathJax render after 2 seconds...');
     if (window.MathJax && window.MathJax.typesetPromise) {
-      MathJax.typesetPromise().catch(function(err) {
+      MathJax.typesetPromise().then(function() {
+        console.log('MathJax retry render successful');
+      }).catch(function(err) {
         console.log('MathJax retry typeset error:', err);
       });
     }
   }, 2000);
+  
+  // Additional retry after 5 seconds for very slow connections
+  setTimeout(function() {
+    console.log('Final MathJax render attempt after 5 seconds...');
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      MathJax.typesetPromise().then(function() {
+        console.log('MathJax final render successful');
+      }).catch(function(err) {
+        console.log('MathJax final render error:', err);
+      });
+    }
+  }, 5000);
 </script>
 </body>
 </html>
