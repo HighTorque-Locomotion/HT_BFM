@@ -1630,6 +1630,42 @@
     const totalSlides = 7; // Updated to 7 videos
     const itemWidth = 320; // Width of each video (300px + 20px gap)
     
+    // Function to check if video is visible (global scope)
+    function isVideoVisible(video) {
+      const rect = video.getBoundingClientRect();
+      const windowHeight = window.innerHeight;
+      return rect.top < windowHeight && rect.bottom > 0;
+    }
+    
+    // Enhanced auto-play with loading protection (global scope)
+    function startAutoPlayForVideo(video) {
+      if (!video.hasAttribute('data-auto-playing')) {
+        video.setAttribute('data-auto-playing', 'true');
+        
+        // Get video source for logging
+        const videoSrc = video.src || video.currentSrc || (video.querySelector('source')?.src) || 'unknown';
+        
+        // Check if video is ready to play
+        if (video.readyState >= 3) { // HAVE_FUTURE_DATA or higher
+          console.log('Video ready, starting auto-play:', videoSrc);
+          video.play().catch(e => {
+            console.log('Auto-play failed:', e);
+            video.removeAttribute('data-auto-playing');
+          });
+        } else {
+          // Wait for video to be ready
+          console.log('Video not ready, waiting for canplay event:', videoSrc);
+          video.addEventListener('canplay', function() {
+            console.log('Video can play now, starting auto-play:', videoSrc);
+            this.play().catch(e => {
+              console.log('Auto-play failed after canplay:', e);
+              this.removeAttribute('data-auto-playing');
+            });
+          }, { once: true });
+        }
+      }
+    }
+    
     function moveGallery(direction) {
       const container = document.getElementById('galleryContainer');
       
@@ -1767,7 +1803,7 @@
       
       // Create video element
       const video = document.createElement('video');
-      video.src = './resources/tracking/full/full-1.mp4';
+      video.src = './resources/tracking/full/full-1_firefox.mp4';
       video.controls = true;
       video.autoplay = true;
       video.style.cssText = `
@@ -2116,48 +2152,6 @@
       // Initialize gallery auto-play
       initializeGalleryAutoPlay();
       
-      
-      // Function to check if video is visible
-      function isVideoVisible(video) {
-        const rect = video.getBoundingClientRect();
-        const windowHeight = window.innerHeight;
-        return rect.top < windowHeight && rect.bottom > 0;
-      }
-      
-      // Enhanced auto-play with loading protection
-      function startAutoPlayForVideo(video) {
-        if (!video.hasAttribute('data-auto-playing')) {
-          video.setAttribute('data-auto-playing', 'true');
-          
-          // Check if video is ready to play
-          if (video.readyState >= 3) { // HAVE_FUTURE_DATA or higher
-            console.log('Video ready, starting auto-play:', video.src);
-            video.play().catch(e => {
-              console.log('Auto-play failed:', e);
-              video.removeAttribute('data-auto-playing');
-            });
-          } else {
-            // Wait for video to be ready
-            console.log('Video not ready, waiting for canplay event:', video.src);
-            video.addEventListener('canplay', function() {
-              console.log('Video can play now, starting auto-play:', video.src);
-              this.play().catch(e => {
-                console.log('Auto-play failed after canplay:', e);
-                this.removeAttribute('data-auto-playing');
-              });
-            }, { once: true });
-            
-            // Fallback timeout to prevent infinite waiting
-            setTimeout(() => {
-              if (video.hasAttribute('data-auto-playing') && video.paused) {
-                console.log('Auto-play timeout, removing attribute:', video.src);
-                video.removeAttribute('data-auto-playing');
-              }
-            }, 5000); // 5 second timeout
-          }
-        }
-      }
-      
       // Function to pause video for optimization
       function pauseVideoForOptimization(video) {
         if (video.hasAttribute('data-auto-playing')) {
@@ -2500,14 +2494,14 @@
   <section class="hero is-link is-fullheight video" style="overflow: hidden; position:relative;" id="video">
     <div class="hero-video" style="height: 100%; width: 177.77777778vh; min-width: 100%;min-height: 56.25vw;">
       <video playsinline autoplay muted loop preload="auto" style="width: 100%; height: 100%; object-fit: cover;">
-        <source src="./resources/head/head_new.mp4" type="video/mp4">
+        <source src="./resources/head/head_new_firefox.mp4" type="video/mp4">
         Your browser does not support the video tag.
       </video>
     </div>
     <div class="hero-video is-hidden-tablet is-inline-block-mobile"
       style="height: 154.28571428vw; width: 100%; min-width:64.81481481vh;min-height:100%;">
       <video playsinline autoplay muted loop preload="auto" style="width: 100%; height: 100%; object-fit: cover;">
-        <source src="./resources/head/head_new.mp4" type="video/mp4">
+        <source src="./resources/head/head_new_firefox.mp4" type="video/mp4">
         Your browser does not support the video tag.
       </video>
     </div>
@@ -2847,7 +2841,9 @@
 
     <!-- Main video (for frame-by-frame viewing) -->
       <div class="column has-text-centered">
-        <video id="frameVideo" width="90%" height="auto" muted playsinline src="./resources/goal_reaching/full/full-2.mp4" style="border: 1px solid #bbb; border-radius: 10px; margin: 1.0%;"></video>
+        <video id="frameVideo" width="90%" height="auto" muted playsinline style="border: 1px solid #bbb; border-radius: 10px; margin: 1.0%;">
+          <source src="./resources/goal_reaching/full/full-2_firefox.mp4" type="video/mp4">
+        </video>
       </div>
       <h4 style="text-align: center; margin-bottom: 15px; font-family: 'Google Sans', sans-serif;">We also test diverse initial on the ground pose to a standing pose. <strong></strong>Follow the gallery to see the full description of the performance.</strong></h4>
     <!-- Goal Reaching video gallery -->
@@ -2862,7 +2858,7 @@
         <!-- Video item 2 - Any-to-Target 2 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/ANY2T/any2T/any2T-2.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2T/any2T-2_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2874,7 +2870,7 @@
         <!-- Video item 1 - Any-to-Target 1 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/ANY2T/any2T/any2T-1.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2T/any2T-1_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2886,7 +2882,7 @@
         <!-- Video item 3 - Any-to-Pose 1 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-4.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-4_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -2898,7 +2894,7 @@
         <!-- Video item 4 - Any-to-Pose 2 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-2.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-2_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -2910,7 +2906,7 @@
         <!-- Video item 5 - Any-to-Pose 3 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-7.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-7_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -2922,7 +2918,7 @@
         <!-- Video item 6 - Any-to-Pose 4 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-3.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-3_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2934,7 +2930,7 @@
         <!-- Video item 7 - Any-to-Pose 5 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-5.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-5_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2946,7 +2942,7 @@
         <!-- Video item 8 - Any-to-Pose 6 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-1.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-1_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2958,7 +2954,7 @@
         <!-- Video item 9 - Any-to-Pose 7 -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/goal_reaching/any2pose/any2pose-6.mp4" type="video/mp4">
+            <source src="./resources/goal_reaching/any2pose/any2pose-6_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <div class="video-info">
@@ -2969,7 +2965,7 @@
       
       <div class="gallery-item">
         <video muted playsinline autoplay loop preload="metadata">
-          <source src="./resources/goal_reaching/any2pose/robust-1.mp4" type="video/mp4">
+          <source src="./resources/goal_reaching/any2pose/robust-1_firefox.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
         <div class="video-info">
@@ -3007,7 +3003,7 @@
           <!-- <span style="font-style: italic;">(Strongly recommend turning on sound)</span> -->
         </h4>
       <video width="80%" height="auto" controls autoplay muted loop style="border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-        <source src="./resources/tracking/tracking_highlight2/tracking_highlight2-1.mp4" type="video/mp4">
+        <source src="./resources/tracking/tracking_highlight2/tracking_highlight2-1_firefox.mp4" type="video/mp4">
         Your browser does not support the video tag.
       </video>
   </div>
@@ -3032,7 +3028,7 @@
         <!-- Video item 1 - Segment 5 (Walk and Turn) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg5.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg5_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3043,7 +3039,7 @@
         <!-- Video item 2 - Segment 2 (Ball Games) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg2.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg2_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3054,7 +3050,7 @@
         <!-- Video item 3 - Segment 7 (Dancing with Fall and Recovery) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg7.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg7_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3065,7 +3061,7 @@
         <!-- Video item 4 - Segment 6 (Styled Walking with Salute) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg6.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg6_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3076,7 +3072,7 @@
         <!-- Video item 5 - Segment 3 (Boxing) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg3.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg3_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3087,7 +3083,7 @@
         <!-- Video item 6 - Segment 4 (Walking with Different Steps) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg4.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg4_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3098,7 +3094,7 @@
         <!-- Video item 7 - Segment 1 (Dancing) -->
         <div class="gallery-item">
           <video muted playsinline autoplay loop preload="metadata">
-            <source src="./resources/tracking/segment/seg1.mp4" type="video/mp4">
+            <source src="./resources/tracking/segment/seg1_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
         </video>
           <div class="video-info">
@@ -3162,7 +3158,7 @@
              </div>
              <div style="margin-top: 15px;">
                <video id="video-stand-still" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                 <source src="./resources/reward_optimization/locomotion/locomotion-2.mp4" type="video/mp4">
+                 <source src="./resources/reward_optimization/locomotion/locomotion-2_firefox.mp4" type="video/mp4">
                  Your browser does not support the video tag.
         </video>
       </div>
@@ -3175,7 +3171,7 @@
             </div>
             <div style="margin-top: 15px;">
               <video id="video-go-forward" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-1.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-1_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
         </video>
       </div>
@@ -3189,7 +3185,7 @@
             </div>
             <div style="margin-top: 15px;">
               <video id="video-strafe-left" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-3.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-3_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
         </video>
       </div>
@@ -3203,7 +3199,7 @@
             </div>
             <div style="margin-top: 15px;">
               <video id="video-go-backward" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-4.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-4_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
         </video>
       </div>
@@ -3217,7 +3213,7 @@
       </div>
             <div style="margin-top: 15px;">
               <video id="video-strafe-right" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-5.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-5_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
       </div>
@@ -3230,7 +3226,7 @@
             </div>
             <div style="margin-top: 15px;">
               <video id="video-turn-anticlockwise" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-6.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-6_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
     </div>
@@ -3243,7 +3239,7 @@
             </div>
             <div style="margin-top: 15px;">
               <video id="video-turn-clockwise" width="100%" height="auto" controls autoplay muted loop preload="auto" style="border-radius: 8px;">
-                <source src="./resources/reward_optimization/locomotion/locomotion-7.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/locomotion/locomotion-7_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3300,7 +3296,7 @@
             <div class="modal-content">
               <span class="close-btn" onclick="closeContinuousVideo()">&times;</span>
               <video id="continuous-video" width="100%" height="auto" controls muted loop preload="auto">
-                <source src="./resources/reward_optimization/arm_control/arm_control-1.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/arm_control/arm_control-1_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3319,7 +3315,7 @@
                 <div class="video-cover" onclick="playVideo(this)">
                   <div class="formula-cover">
                     <video class="video-bg" muted loop playsinline>
-                      <source src="./resources/reward_optimization/height_control/height_control-1.mp4" type="video/mp4">
+                      <source src="./resources/reward_optimization/height_control/height_control-1_firefox.mp4" type="video/mp4">
                     </video>
                     <div class="formula-text">Base Height = <span class="height-value">0.6m</span> & Go Forward</div>
         </div>
@@ -3330,7 +3326,7 @@
                   </div>
                 </div>
               <video muted playsinline preload="auto" style="display: none;">
-                <source src="./resources/reward_optimization/height_control/height_control-1.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/height_control/height_control-1_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3344,7 +3340,7 @@
               <div class="video-cover" onclick="playVideo(this)">
                   <div class="formula-cover">
                     <video class="video-bg" muted loop playsinline>
-                      <source src="./resources/reward_optimization/height_control/height_control-2.mp4" type="video/mp4">
+                      <source src="./resources/reward_optimization/height_control/height_control-2_firefox.mp4" type="video/mp4">
                     </video>
                     <div class="formula-text">Base Height = <span class="height-value">0m</span></div>
                   </div>
@@ -3355,7 +3351,7 @@
                 </div>
               </div>
               <video muted playsinline preload="auto" style="display: none;">
-                <source src="./resources/reward_optimization/height_control/height_control-2.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/height_control/height_control-2_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3369,7 +3365,7 @@
               <div class="video-cover" onclick="playVideo(this)">
                   <div class="formula-cover">
                     <video class="video-bg" muted loop playsinline>
-                      <source src="./resources/reward_optimization/height_control/height_control-3.mp4" type="video/mp4">
+                      <source src="./resources/reward_optimization/height_control/height_control-3_firefox.mp4" type="video/mp4">
                     </video>
                     <div class="formula-text">Base Height = <span class="height-value">0.25m</span> & Higher Knee</div>
                   </div>
@@ -3380,7 +3376,7 @@
                 </div>
               </div>
               <video muted playsinline preload="auto" style="display: none;">
-                <source src="./resources/reward_optimization/height_control/height_control-3.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/height_control/height_control-3_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3394,7 +3390,7 @@
               <div class="video-cover" onclick="playVideo(this)">
                   <div class="formula-cover">
                     <video class="video-bg" muted loop playsinline>
-                      <source src="./resources/reward_optimization/height_control/height_control-4.mp4" type="video/mp4">
+                      <source src="./resources/reward_optimization/height_control/height_control-4_firefox.mp4" type="video/mp4">
                     </video>
                     <div class="formula-text">Base Height = <span class="height-value">0m</span> & Higher Knee</div>
                   </div>
@@ -3405,7 +3401,7 @@
                 </div>
               </div>
               <video muted playsinline preload="auto" style="display: none;">
-                <source src="./resources/reward_optimization/height_control/height_control-4.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/height_control/height_control-4_firefox.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
             </div>
@@ -3434,7 +3430,7 @@
           </div>
           <div class="diversity-video">
             <video width="100%" height="auto" controls autoplay muted loop style="border-radius: 8px;">
-              <source src="./resources/reward_optimization/diversity/diversity-1.mp4" type="video/mp4">
+              <source src="./resources/reward_optimization/diversity/diversity-1_firefox.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
           </div>
@@ -3454,7 +3450,7 @@
            
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-18.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-18_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3463,7 +3459,7 @@
     </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-17.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-17_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3472,7 +3468,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-16.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-16_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3481,7 +3477,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-15.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-15_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3490,7 +3486,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-14.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-14_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3499,7 +3495,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-12.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-12_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3508,7 +3504,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-13.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-13_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3517,7 +3513,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-11.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-11_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3526,7 +3522,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-10.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-10_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3535,7 +3531,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-9.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-9_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3544,7 +3540,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-8.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-8_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3553,7 +3549,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-7.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-7_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3562,7 +3558,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-6.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-6_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3571,7 +3567,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-5.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-5_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3580,7 +3576,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-4.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-4_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3589,7 +3585,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-3.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-3_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3598,7 +3594,7 @@
             </div>
             <!-- <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-2.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-2_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3607,7 +3603,7 @@
             </div> -->
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-1.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-1_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3616,7 +3612,7 @@
             </div>
             <div class="gallery-item">
               <video class="gallery-video" autoplay muted loop preload="auto">
-                <source src="./resources/reward_optimization/skill_comp/skill_comp-19.mp4" type="video/mp4">
+                <source src="./resources/reward_optimization/skill_comp/skill_comp-19_firefox.mp4" type="video/mp4">
               </video>
               <div class="video-overlay">
                 <div class="play-icon">▶</div>
@@ -3640,7 +3636,7 @@
       <div class="column is-half">
         <div class="has-text-centered">
           <video width="100%" height="auto" controls autoplay muted loop style="border-radius: 8px; margin-bottom: 15px;">
-            <source src="./resources/disturbance/disturbance-1.mp4" type="video/mp4">
+            <source src="./resources/disturbance/disturbance-1_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
       </video>
           <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1em; margin-bottom: 10px;">Highlight: <strong style="color: #a65320;">Natural</strong> recovery from pulling to the ground</h4>
@@ -3650,7 +3646,7 @@
       <div class="column is-half">
         <div class="has-text-centered">
           <video width="100%" height="auto" controls autoplay muted loop style="border-radius: 8px; margin-bottom: 15px;">
-            <source src="./resources/disturbance/disturbance-2.mp4" type="video/mp4">
+            <source src="./resources/disturbance/disturbance-2_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
            <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1em; margin-bottom: 10px;">Highlight: <strong style="color: #a65320;">Emergent behavior</strong> (running) from heavy pushes</h4>
@@ -3676,7 +3672,7 @@
         <div class="has-text-centered">
           <div style="border: 3px solid #dc3545; border-radius: 8px; padding: 5px; background: rgba(220, 53, 69, 0.05);">
             <video width="100%" height="auto" controls style="border-radius: 5px; max-height: 50vh;">
-              <source src="./resources/adaptation/before_adapt.mp4" type="video/mp4">
+              <source src="./resources/adaptation/before_adapt_firefox.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
             <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-top: 8px; color: #dc3545;">Before Adaptation</h4>
@@ -3700,7 +3696,7 @@
         <div class="has-text-centered">
           <div style="border: 3px solid #28a745; border-radius: 8px; padding: 5px; background: rgba(40, 167, 69, 0.05);">
             <video width="100%" height="auto" controls style="border-radius: 5px; max-height: 50vh;">
-              <source src="./resources/adaptation/after_adapt.mp4" type="video/mp4">
+              <source src="./resources/adaptation/after_adapt_firefox.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
             <h4 style="font-family: 'Google Sans', sans-serif; font-size: 0.9em; margin-top: 8px; color: #28a745;">After Adaptation</h4>
@@ -3725,7 +3721,7 @@
       <div class="column is-half">
         <div class="has-text-centered">
           <video width="100%" height="auto" controls autoplay muted loop style="border-radius: 8px; margin-bottom: 15px;">
-            <source src="./resources/interpolation/interpolation1.mp4" type="video/mp4">
+            <source src="./resources/interpolation/interpolation1_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
       </video>
           <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1em; margin-bottom: 10px;">$z_0: \text{strafe-left}, z_1: \text{strafe-right}$</h4>
@@ -3735,7 +3731,7 @@
       <div class="column is-half">
         <div class="has-text-centered">
           <video width="100%" height="auto" controls autoplay muted loop style="border-radius: 8px; margin-bottom: 15px;">
-            <source src="./resources/interpolation/interpolation2.mp4" type="video/mp4">
+            <source src="./resources/interpolation/interpolation2_firefox.mp4" type="video/mp4">
             Your browser does not support the video tag.
           </video>
           <h4 style="font-family: 'Google Sans', sans-serif; font-size: 1em; margin-bottom: 10px;">$z_0: \text{arms-low-low}, z_1: \text{arms-low-high}$</h4>
