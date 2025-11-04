@@ -24,9 +24,11 @@
   <!-- Non-critical CSS - will be loaded after hero video (see loadKaTeXAfterHeroVideo function) -->
   
   <!-- Preload critical JavaScript -->
-  <!-- Note: Video preloading is handled by the video element's preload attribute, not link rel="preload" -->
   <link rel="preload" href="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js" as="script">
   <link rel="preload" href="./static/js/index.js" as="script">
+  
+  <!-- Preload hero video for faster loading -->
+  <link rel="preload" href="./resources/head/head_new_firefox_720p.mp4" as="video" type="video/mp4" fetchpriority="high">
   
   <style>
     /* System font stack - faster loading, no external fonts needed */
@@ -1177,79 +1179,108 @@
       }
     })();
     
+    // Start loading hero video EARLY - before DOMContentLoaded
+    // This allows the browser to start fetching the video file as soon as possible
+    (function() {
+      // Try to get video elements immediately if DOM is ready, otherwise wait
+      const initHeroVideo = () => {
+        const heroVideoMain = document.getElementById('hero-video-main');
+        const heroVideoMobile = document.getElementById('hero-video-mobile');
+        
+        function showHeroVideo(video) {
+          if (!video) return;
+          
+          // Set high priority for hero video
+          if (video.setAttribute) {
+            video.setAttribute('fetchpriority', 'high');
+          }
+          
+          // Show video as soon as we have enough data to start playing
+          const showVideo = () => {
+            video.style.opacity = '1';
+            video.play().catch(err => {
+              console.log('Video autoplay prevented:', err);
+            });
+          };
+          
+          // Mark hero video as loaded VERY EARLY - when metadata is available
+          // This allows other videos to start loading much sooner
+          const markHeroVideoLoaded = () => {
+            if (!window.heroVideoLoaded) {
+              window.heroVideoLoaded = true;
+              console.log('✅ Hero video ready! Other videos can now load.');
+              // Trigger event to notify other scripts
+              window.dispatchEvent(new CustomEvent('heroVideoLoaded'));
+            }
+          };
+          
+          // Mark as loaded when metadata is available (much earlier than loadeddata)
+          // This allows other resources to start loading immediately
+          if (video.readyState >= 1) {
+            // Metadata already available
+            markHeroVideoLoaded();
+            if (video.readyState >= 2) {
+              showVideo();
+            }
+          } else {
+            // Listen for loadedmetadata - happens very early, just after metadata loads
+            video.addEventListener('loadedmetadata', () => {
+              markHeroVideoLoaded();
+              // If we already have enough data, show immediately
+              if (video.readyState >= 2) {
+                showVideo();
+              }
+            }, { once: true });
+            
+            // Also listen for loadeddata - happens when we have enough data to start playing
+            video.addEventListener('loadeddata', () => {
+              showVideo();
+            }, { once: true });
+            
+            // Fallback: also listen for canplay
+            video.addEventListener('canplay', showVideo, { once: true });
+            
+            // Fallback: show after a delay even if events don't fire
+            setTimeout(() => {
+              if (video.readyState >= 1) {
+                markHeroVideoLoaded();
+              }
+              if (video.readyState >= 2) {
+                showVideo();
+              }
+            }, 500);
+          }
+        }
+        
+        // Priority load hero videos immediately
+        if (heroVideoMain) {
+          heroVideoMain.setAttribute('fetchpriority', 'high');
+          // Force load immediately - don't wait
+          heroVideoMain.load();
+          showHeroVideo(heroVideoMain);
+        }
+        
+        if (heroVideoMobile) {
+          heroVideoMobile.setAttribute('fetchpriority', 'high');
+          // Force load immediately - don't wait
+          heroVideoMobile.load();
+          showHeroVideo(heroVideoMobile);
+        }
+      };
+      
+      // Try to initialize immediately if DOM is ready
+      if (document.readyState === 'loading') {
+        // DOM is still loading, wait for DOMContentLoaded
+        document.addEventListener('DOMContentLoaded', initHeroVideo);
+      } else {
+        // DOM is already ready, initialize immediately
+        initHeroVideo();
+      }
+    })();
+    
     document.addEventListener('DOMContentLoaded', function() {
       // KaTeX math rendering will be initialized after hero video loads
       // (see loadKaTeXAfterHeroVideo function below)
-      
-      // Hero video fade-in when ready - PROGRESSIVE LOADING
-      const heroVideoMain = document.getElementById('hero-video-main');
-      const heroVideoMobile = document.getElementById('hero-video-mobile');
-      
-      function showHeroVideo(video) {
-        if (!video) return;
-        
-        // Set high priority for hero video
-        if (video.setAttribute) {
-          video.setAttribute('fetchpriority', 'high');
-        }
-        
-        // Show video as soon as we have enough data to start playing
-        const showVideo = () => {
-          video.style.opacity = '1';
-          video.play().catch(err => {
-            console.log('Video autoplay prevented:', err);
-          });
-        };
-        
-        // Mark hero video as loaded early - when we have enough data (loadeddata)
-        // This allows other videos to start loading sooner
-        const markHeroVideoLoaded = () => {
-          if (!window.heroVideoLoaded) {
-            window.heroVideoLoaded = true;
-            console.log('✅ Hero video ready! Other videos can now load.');
-            // Trigger event to notify other scripts
-            window.dispatchEvent(new CustomEvent('heroVideoLoaded'));
-          }
-        };
-        
-        // Mark as loaded when we have enough data to play (loadeddata event)
-        // This is earlier than canplay, allowing other videos to start loading sooner
-        if (video.readyState >= 2) {
-          // Already have enough data
-          markHeroVideoLoaded();
-          showVideo();
-        } else {
-          // Listen for loadeddata - happens when we have enough data to start playing
-          video.addEventListener('loadeddata', () => {
-            markHeroVideoLoaded();
-            showVideo();
-          }, { once: true });
-          
-          // Fallback: also listen for canplay (when it can definitely play)
-          video.addEventListener('canplay', showVideo, { once: true });
-          
-          // Fallback: show after a delay even if events don't fire
-          setTimeout(() => {
-            if (video.readyState >= 2) {
-              markHeroVideoLoaded();
-              showVideo();
-            }
-          }, 1000);
-        }
-      }
-      
-      // Priority load hero videos immediately with metadata first
-      if (heroVideoMain) {
-        heroVideoMain.setAttribute('fetchpriority', 'high');
-        heroVideoMain.load(); // Load metadata first
-        showHeroVideo(heroVideoMain);
-      }
-      
-      if (heroVideoMobile) {
-        heroVideoMobile.setAttribute('fetchpriority', 'high');
-        heroVideoMobile.load(); // Load metadata first
-        showHeroVideo(heroVideoMobile);
-      }
       
       // Restore video sources when hero video is ready
       const restoreVideoSources = () => {
