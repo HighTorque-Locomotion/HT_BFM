@@ -27,8 +27,8 @@
   <link rel="preload" href="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js" as="script">
   <link rel="preload" href="./static/js/index.js" as="script">
   
-  <!-- Preload hero video for faster loading -->
-  <link rel="preload" href="./resources/head/head_new_firefox_720p.mp4" as="video" type="video/mp4" fetchpriority="high">
+  <!-- Note: Hero video preload is handled by video element's preload="auto" attribute -->
+  <!-- Using link rel="preload" would cause duplicate requests -->
   
   <style>
     /* System font stack - faster loading, no external fonts needed */
@@ -1252,19 +1252,34 @@
           }
         }
         
-        // Priority load hero videos immediately
-        if (heroVideoMain) {
-          heroVideoMain.setAttribute('fetchpriority', 'high');
-          // Force load immediately - don't wait
-          heroVideoMain.load();
-          showHeroVideo(heroVideoMain);
-        }
+        // Priority load hero videos - only load the one that's visible
+        // This prevents loading both desktop and mobile versions simultaneously
+        const isMobile = window.innerWidth <= 768 || window.matchMedia('(max-width: 768px)').matches;
         
-        if (heroVideoMobile) {
+        if (isMobile && heroVideoMobile) {
+          // Mobile device - load mobile version
           heroVideoMobile.setAttribute('fetchpriority', 'high');
-          // Force load immediately - don't wait
           heroVideoMobile.load();
           showHeroVideo(heroVideoMobile);
+          // Prevent desktop version from loading
+          if (heroVideoMain) {
+            heroVideoMain.preload = 'none';
+            heroVideoMain.removeAttribute('src');
+            const source = heroVideoMain.querySelector('source');
+            if (source) source.removeAttribute('src');
+          }
+        } else if (heroVideoMain) {
+          // Desktop device - load desktop version
+          heroVideoMain.setAttribute('fetchpriority', 'high');
+          heroVideoMain.load();
+          showHeroVideo(heroVideoMain);
+          // Prevent mobile version from loading
+          if (heroVideoMobile) {
+            heroVideoMobile.preload = 'none';
+            heroVideoMobile.removeAttribute('src');
+            const source = heroVideoMobile.querySelector('source');
+            if (source) source.removeAttribute('src');
+          }
         }
       };
       
