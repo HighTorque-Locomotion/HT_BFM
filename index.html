@@ -1297,24 +1297,12 @@
       // KaTeX math rendering will be initialized after hero video loads
       // (see loadKaTeXAfterHeroVideo function below)
       
-      // Restore video sources when hero video is ready
+      // Restore video sources when hero video is ready - but DON'T restore immediately
+      // Only restore when videos are actually needed (when they enter viewport)
       const restoreVideoSources = () => {
-        const otherVideos = document.querySelectorAll('video:not(#hero-video-main):not(#hero-video-mobile)');
-        otherVideos.forEach(video => {
-          // Restore src if it was temporarily removed
-          if (video.hasAttribute('data-temp-src')) {
-            video.src = video.getAttribute('data-temp-src');
-            video.removeAttribute('data-temp-src');
-          }
-          const source = video.querySelector('source');
-          if (source && source.hasAttribute('data-temp-src')) {
-            source.src = source.getAttribute('data-temp-src');
-            source.removeAttribute('data-temp-src');
-          }
-          // Set appropriate preload value
-          video.preload = 'metadata';
-        });
-        console.log(`✅ Restored ${otherVideos.length} videos - ready to load after hero video`);
+        // Don't restore all video sources immediately - this causes premature loading
+        // Instead, let Intersection Observer handle restoration when videos are visible
+        console.log('✅ Hero video ready - other videos will load on demand when visible');
       };
       
       // Wait for hero video to load, then restore sources and load KaTeX
@@ -2571,10 +2559,15 @@
                 return;
               }
               
-              // Video is entering viewport
-              if (video.dataset.src && !video.src) {
-                video.src = video.dataset.src;
-                video.load();
+              // Video is entering viewport - restore src if it was blocked
+              if (video.hasAttribute('data-temp-src') && !video.src) {
+                video.src = video.getAttribute('data-temp-src');
+                video.removeAttribute('data-temp-src');
+              }
+              const source = video.querySelector('source');
+              if (source && source.hasAttribute('data-temp-src') && !source.src) {
+                source.src = source.getAttribute('data-temp-src');
+                source.removeAttribute('data-temp-src');
               }
               
               // Change preload from "none" to appropriate value
