@@ -36,10 +36,8 @@
   <link rel="stylesheet" href="./static/css/index.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
   
-  <!-- Preload hero video for faster loading -->
-  <link rel="preload" href="./resources/head/head_new_firefox_720p.mp4" as="video" type="video/mp4" fetchpriority="high">
-  
   <!-- Preload critical JavaScript -->
+  <!-- Note: Video preloading is handled by the video element's preload attribute, not link rel="preload" -->
   <link rel="preload" href="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js" as="script">
   <link rel="preload" href="./static/js/index.js" as="script">
   
@@ -1143,17 +1141,24 @@
   <!-- KaTeX for math rendering -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
-    onload="
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+  
+  <script>
     document.addEventListener('DOMContentLoaded', function() {
-      renderMathInElement(document.body, {
-        delimiters: [
-          {left: '$$', right: '$$', display: true},
-          {left: '$', right: '$', display: false},
-          {left: '\\[', right: '\\]', display: true},
-          {left: '\\(', right: '\\)', display: false}
-        ]
-      });
+      // KaTeX math rendering
+      if (typeof renderMathInElement !== 'undefined') {
+        renderMathInElement(document.body, {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false},
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false}
+          ]
+        });
+      }
+      
+      // Global flag to track hero video loading completion
+      window.heroVideoLoaded = false;
       
       // Hero video fade-in when ready - PROGRESSIVE LOADING
       const heroVideoMain = document.getElementById('hero-video-main');
@@ -1185,6 +1190,16 @@
           });
         };
         
+        // Mark hero video as loaded when it can play
+        const markHeroVideoLoaded = () => {
+          if (!window.heroVideoLoaded) {
+            window.heroVideoLoaded = true;
+            console.log('✅ Hero video fully loaded! Other videos can now load.');
+            // Trigger event to notify other scripts
+            window.dispatchEvent(new CustomEvent('heroVideoLoaded'));
+          }
+        };
+        
         // Wait for metadata first (faster)
         if (video.readyState >= 1) {
           // Metadata already available
@@ -1206,6 +1221,15 @@
             }
           }, 2000);
         }
+        
+        // Mark as loaded when video can play (at least one hero video ready)
+        if (video.readyState >= 2) {
+          markHeroVideoLoaded();
+        } else {
+          video.addEventListener('canplay', markHeroVideoLoaded, { once: true });
+          // Fallback: mark as loaded after playing starts
+          video.addEventListener('playing', markHeroVideoLoaded, { once: true });
+        }
       }
       
       // Priority load hero videos immediately with metadata first
@@ -1221,22 +1245,18 @@
         showHeroVideo(heroVideoMobile);
       }
       
-      // Delay loading other videos to prioritize hero video
-      setTimeout(() => {
-        const otherVideos = document.querySelectorAll('video:not(#hero-video-main):not(#hero-video-mobile)');
-        otherVideos.forEach(video => {
-          // Set lower priority for non-hero videos
-          if (video.preload === 'auto' && !video.closest('.hero')) {
-            // Only change if not already loading
-            if (video.readyState === 0) {
-              video.preload = 'metadata';
-            }
-          }
-        });
-        console.log(`📊 Delayed loading of ${otherVideos.length} non-hero videos to prioritize hero video`);
-      }, 3000); // Wait 3 seconds for hero video to start loading
+      // Block all other videos from loading until hero video is ready
+      const otherVideos = document.querySelectorAll('video:not(#hero-video-main):not(#hero-video-mobile)');
+      otherVideos.forEach(video => {
+        // Set preload to none to prevent any loading
+        if (video.readyState === 0) {
+          video.preload = 'none';
+          video.load(); // Apply preload="none"
+        }
+      });
+      console.log(`🚫 Blocked ${otherVideos.length} videos from loading until hero video is ready`);
     });
-    "></script>
+  </script>
     
   <script>
 
@@ -2387,14 +2407,28 @@
     
     // Video optimization functions
     function initializeVideoOptimization() {
-      // Delay initialization to prioritize hero video
-      const heroVideoMain = document.getElementById('hero-video-main');
-      const heroVideoMobile = document.getElementById('hero-video-mobile');
+      // Wait for hero video to fully load before initializing other videos
+      const waitForHeroVideo = (callback) => {
+        if (window.heroVideoLoaded) {
+          // Hero video already loaded
+          callback();
+        } else {
+          // Wait for hero video to load
+          window.addEventListener('heroVideoLoaded', callback, { once: true });
+          // Fallback: timeout after 30 seconds
+          setTimeout(() => {
+            if (!window.heroVideoLoaded) {
+              console.warn('⚠️ Hero video loading timeout, proceeding with other videos');
+              window.heroVideoLoaded = true; // Proceed anyway
+              callback();
+            }
+          }, 30000);
+        }
+      };
       
-      // Wait for hero video to start loading before initializing other videos
-      const initDelay = 5000; // Wait 5 seconds for hero video
-      
-      setTimeout(() => {
+      waitForHeroVideo(() => {
+        console.log('🎬 Hero video loaded! Starting to load other videos...');
+        
         // Set up smart Intersection Observer for optimized loading
         const videoObserver = new IntersectionObserver((entries) => {
           entries.forEach(entry => {
@@ -2406,22 +2440,38 @@
             }
             
             if (entry.isIntersecting) {
+              // Only load if hero video is loaded
+              if (!window.heroVideoLoaded) {
+                console.log('⏳ Waiting for hero video to load before loading:', video.src || video.dataset.src);
+                return;
+              }
+              
               // Video is entering viewport
               if (video.dataset.src && !video.src) {
                 video.src = video.dataset.src;
                 video.load();
               }
               
+              // Change preload from "none" to appropriate value
+              if (video.preload === 'none') {
+                if (video.closest('.gallery-item') || video.hasAttribute('controls')) {
+                  video.preload = 'metadata';
+                  video.load(); // Apply new preload setting
+                } else {
+                  video.preload = 'metadata';
+                  video.load();
+                }
+              }
+              
               // Only set auto for videos that are actually visible and needed
               if (video.closest('.gallery-item') || video.hasAttribute('controls')) {
                 // Delay loading to avoid competing with hero video
                 setTimeout(() => {
-                  if (entry.isIntersecting) { // Check again if still visible
+                  if (entry.isIntersecting && window.heroVideoLoaded) { // Check again if still visible
                     video.preload = 'auto';
+                    video.load();
                   }
                 }, 1000);
-              } else {
-                video.preload = 'metadata';
               }
               
               // Start auto-play if it's a gallery video
@@ -2596,18 +2646,31 @@
           }
           
           if (entry.isIntersecting) {
+            // Only load if hero video is loaded
+            if (!window.heroVideoLoaded) {
+              console.log('⏳ Enhanced observer: Waiting for hero video to load before loading:', video.src || video.dataset.src);
+              return;
+            }
+            
             // Add to loading queue instead of immediate loading
             if (video.dataset.src && !video.src && !videoLoadQueue.includes(video)) {
               videoLoadQueue.push(video);
               processVideoQueue();
             }
             
+            // Change preload from "none" to appropriate value
+            if (video.preload === 'none') {
+              video.preload = 'metadata';
+              video.load(); // Apply new preload setting
+            }
+            
             // Delay setting auto preload to avoid competing with hero video
             setTimeout(() => {
-              if (entry.isIntersecting) { // Check again if still visible
+              if (entry.isIntersecting && window.heroVideoLoaded) { // Check again if still visible
                 video.preload = 'auto';
+                video.load();
               }
-            }, 2000); // Wait 2 seconds after hero video starts
+            }, 1000); // Wait 1 second after hero video starts
             
             // Start auto-play if it's a gallery video (both Motion Tracking and Goal Reaching)
             if (video.closest('.gallery-item')) {
@@ -2662,8 +2725,6 @@
       document.querySelectorAll('video[data-src]').forEach(video => {
         enhancedVideoObserver.observe(video);
       });
-      
-      }, initDelay); // Close setTimeout for delayed initialization
       
       // Add error handling to all videos with retry support
       document.querySelectorAll('video').forEach(video => {
@@ -2746,6 +2807,8 @@
           this.style.opacity = '1';
         });
       });
+      
+      }); // Close waitForHeroVideo callback
     }
     
     // Retry video loading function
