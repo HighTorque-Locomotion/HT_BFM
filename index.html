@@ -1875,11 +1875,57 @@
         
         // Play button click events
         playButton.addEventListener('click', function() {
-          if (frameVideo.paused) {
-            frameVideo.play();
+          // Priority load full video when play button is clicked
+          if (frameVideo.readyState < 2) {
+            // Video not ready yet, prioritize loading
+            console.log('🚀 Priority loading frameVideo for playback...');
+            frameVideo.preload = 'auto';
+            frameVideo.setAttribute('fetchpriority', 'high');
+            
+            // Pause other videos to free up bandwidth for frameVideo
+            document.querySelectorAll('video:not(#frameVideo):not(#hero-video-main):not(#hero-video-mobile)').forEach(video => {
+              if (!video.paused) {
+                video.pause();
+              }
+              // Reduce priority of other videos
+              if (video.preload === 'auto') {
+                video.preload = 'metadata';
+              }
+            });
+            
+            // Restore src if it was blocked
+            if (frameVideo.hasAttribute('data-temp-src') && !frameVideo.src) {
+              frameVideo.src = frameVideo.getAttribute('data-temp-src');
+              frameVideo.removeAttribute('data-temp-src');
+            }
+            const frameSource = frameVideo.querySelector('source');
+            if (frameSource && frameSource.hasAttribute('data-temp-src') && !frameSource.src) {
+              frameSource.src = frameSource.getAttribute('data-temp-src');
+              frameSource.removeAttribute('data-temp-src');
+            }
+            
+            // Force load with high priority
+            frameVideo.load();
+            
+            // Wait for video to be ready before playing
+            frameVideo.addEventListener('canplay', function playWhenReady() {
+              frameVideo.removeEventListener('canplay', playWhenReady);
+              frameVideo.play().catch(err => {
+                console.log('Play failed, trying again:', err);
+                setTimeout(() => frameVideo.play(), 100);
+              });
+              playButton.className = 'play-button playing';
+              playButton.title = 'Pause';
+            }, { once: true });
+          } else if (frameVideo.paused) {
+            // Video is ready, just play
+            frameVideo.play().catch(err => {
+              console.log('Play failed:', err);
+            });
             this.className = 'play-button playing';
             this.title = 'Pause';
           } else {
+            // Video is playing, pause it
             frameVideo.pause();
             this.className = 'play-button paused';
             this.title = 'Play';
@@ -2637,18 +2683,21 @@
       waitForHeroVideo(() => {
         console.log('🎬 Hero video loaded! Starting to load other videos...');
         
-        // Restore frameVideo immediately when hero video is loaded (it's in viewport)
+        // Restore frameVideo when hero video is loaded (preload="metadata" only)
         const frameVideo = document.getElementById('frameVideo');
         if (frameVideo) {
+          // Only restore src, keep preload as metadata (will upgrade to auto when play button is clicked)
           if (frameVideo.hasAttribute('data-temp-src') && !frameVideo.src) {
             frameVideo.src = frameVideo.getAttribute('data-temp-src');
             frameVideo.removeAttribute('data-temp-src');
+            frameVideo.preload = 'metadata'; // Keep as metadata
             frameVideo.load();
           }
           const frameSource = frameVideo.querySelector('source');
           if (frameSource && frameSource.hasAttribute('data-temp-src') && !frameSource.src) {
             frameSource.src = frameSource.getAttribute('data-temp-src');
             frameSource.removeAttribute('data-temp-src');
+            frameVideo.preload = 'metadata'; // Keep as metadata
             frameVideo.load();
           }
         }
@@ -2749,23 +2798,74 @@
           if (video.id !== 'hero-video-main' && video.id !== 'hero-video-mobile') {
             videoObserver.observe(video);
             
-            // If it's frameVideo, ensure it's loaded immediately (it's in viewport)
+            // If it's frameVideo, restore src but keep preload as metadata
             if (video.id === 'frameVideo') {
               // Restore src if it was blocked
               if (video.hasAttribute('data-temp-src') && !video.src) {
                 video.src = video.getAttribute('data-temp-src');
                 video.removeAttribute('data-temp-src');
+                video.preload = 'metadata'; // Keep as metadata
                 video.load();
               }
               const source = video.querySelector('source');
               if (source && source.hasAttribute('data-temp-src') && !source.src) {
                 source.src = source.getAttribute('data-temp-src');
                 source.removeAttribute('data-temp-src');
+                video.preload = 'metadata'; // Keep as metadata
                 video.load();
               }
             }
           }
         });
+        
+        // Preload basic locomotion videos when reward-optimization section comes into view
+        const rewardOptimizationSection = document.getElementById('reward-optimization');
+        if (rewardOptimizationSection) {
+          const sectionObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+              if (entry.isIntersecting && window.heroVideoLoaded) {
+                console.log('🎯 Reward Optimization section in view - preloading basic locomotion videos...');
+                
+                // Find all locomotion videos in basic-locomotion tab
+                const basicLocomotionVideos = rewardOptimizationSection.querySelectorAll('#basic-locomotion video');
+                basicLocomotionVideos.forEach((video, index) => {
+                  // Restore src if it was blocked
+                  if (video.hasAttribute('data-temp-src') && !video.src) {
+                    video.src = video.getAttribute('data-temp-src');
+                    video.removeAttribute('data-temp-src');
+                  }
+                  const source = video.querySelector('source');
+                  if (source && source.hasAttribute('data-temp-src') && !source.src) {
+                    source.src = source.getAttribute('data-temp-src');
+                    source.removeAttribute('data-temp-src');
+                  }
+                  
+                  // Set preload to metadata first, then auto after a delay
+                  setTimeout(() => {
+                    if (video.preload === 'none') {
+                      video.preload = 'metadata';
+                      video.load();
+                    }
+                    // Upgrade to auto preload after metadata loads
+                    setTimeout(() => {
+                      if (video.readyState >= 1) {
+                        video.preload = 'auto';
+                        video.load();
+                      }
+                    }, 500);
+                  }, index * 200); // Stagger loading by 200ms per video
+                });
+                
+                // Unobserve after loading starts
+                sectionObserver.unobserve(entry.target);
+              }
+            });
+          }, {
+            rootMargin: '300px' // Start loading when section is 300px away
+          });
+          
+          sectionObserver.observe(rewardOptimizationSection);
+        }
       
       // Smart auto-play system for all gallery videos with optimized loading
       function initializeGalleryAutoPlay() {
@@ -3580,7 +3680,7 @@
 
     <!-- Main video (for frame-by-frame viewing) -->
       <div class="column has-text-centered">
-        <video id="frameVideo" width="90%" height="auto" muted playsinline style="border: 1px solid #bbb; border-radius: 10px; margin: 1.0%;">
+        <video id="frameVideo" width="90%" height="auto" muted playsinline preload="metadata" style="border: 1px solid #bbb; border-radius: 10px; margin: 1.0%;">
           <source src="./resources/goal_reaching/full/full-2_firefox_720p.mp4" type="video/mp4">
         </video>
       </div>
