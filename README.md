@@ -18,6 +18,7 @@ Code will be released in stages:
 
 - [x] Release pretrained checkpoints and sim-to-sim / sim-to-real deployment code. (Checkout `deploy` branch)
 - [x] Release minimal inference code and tutorial. (Checkout `minimal_inference` branch)
+- [ ] Release minimal training code with RTX 4090 support.
 - [ ] Release full training and evaluation pipelines.
 
 # License
