@@ -23,9 +23,185 @@ Code will be released in stages:
 - [x] **Minimal inference code + tutorial**  
   → [`minimal_inference`](https://github.com/LeCAR-Lab/BFM-Zero/tree/minimal_inference) branch
 
+- [x] **Full training and evaluation pipelines**
+
 - [ ] **Minimal training code (RTX 4090 support)**
 
-- [ ] **Full training and evaluation pipelines**
+# BFM-Zero Training
+
+Humanoidverse training for BFM-Zero with Isaac Sim or MuJoCo.
+
+## Requirements
+
+- Python 3.10
+- CUDA-capable GPU
+- Isaac Sim (Linux) or MuJoCo for simulation
+
+## Installation
+
+### 1. Install uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Or with pip: `pip install uv`
+
+### 2. Install dependencies
+
+From the `release_version` directory:
+
+```bash
+uv sync
+```
+
+## Data
+
+- **Motion data**:`lafan_29dof.pkl` is for evaluation, 10s-clipped `lafan_29dof_10s-clipped.pkl` is for training. 
+
+
+## Training
+
+### Launch
+
+```bash
+uv run python -m humanoidverse.train
+```
+
+### Main parameters
+
+Training is driven by `humanoidverse.train` (see `train_bfm_zero()` in `train.py`). Key options:
+
+| Area | Parameters |
+|------|------------|
+| **Scale** | `num_env_steps`, `online_parallel_envs`, `buffer_size`, `checkpoint_every_steps` |
+| **Paths** | `work_dir`, env’s `lafan_tail_path` (expert motion data) |
+| **Run** | `seed`, `use_wandb`, `wandb_pname` / `wandb_gname` / `wandb_ename` |
+| **Policy / optim** | `update_agent_every`, `num_agent_updates`, `num_seed_steps`; agent config (e.g. `batch_size`, `lr_actor`, `lr_critic`, `discount`) |
+| **Robot / env** | Overridden via `hydra_overrides` (e.g. `robot=...`, `robot.control.action_scale=...`, `env.config.lie_down_init=...`) |
+
+Override from code by passing a custom `TrainConfig`, or extend the CLI to accept Hydra/tyro overrides.
+
+Tips: After 50-100 M steps training, eval/emd should lower than 0.75.
+
+---
+
+## Inference
+
+After training, three scripts handle inference and export:
+
+| Script | Purpose |
+|--------|---------|
+| **`humanoidverse.tracking_inference`** | Motion tracking → extract latent \(z\), export ONNX |
+| **`humanoidverse.goal_inference`** | Goal-reaching → compute \(z\) for different goals |
+| **`humanoidverse.reward_inference`** | Reward-based tasks → compute \(z\) and evaluate performance |
+
+### Example outputs (videos)
+
+Videos from `BFM-Zero/model` after running each inference script with `--save_mp4`:
+
+**1. Tracking inference** — expert (left) vs policy (right):
+
+<video src="../BFM-Zero/model/tracking_inference/tracking.mp4" controls width="640"></video>
+
+**2. Goal inference** — goal-reaching rollout:
+
+<video src="../BFM-Zero/model/goal_inference/videos/goal.mp4" controls width="640"></video>
+
+**3. Reward inference** — example task (e.g. move-ego):
+
+<video src="../BFM-Zero/model/reward_inference/videos/move-ego-low0.6-0-0.7.mp4" controls width="640"></video>
+
+---
+
+All scripts use **tyro** for the CLI. General usage:
+
+```bash
+uv run python -m humanoidverse.tracking_inference --help
+uv run python -m humanoidverse.goal_inference --help
+uv run python -m humanoidverse.reward_inference --help
+```
+
+**Common arguments:**
+
+- `--model_folder`: Path to the trained model directory (must contain `checkpoint/` and `config.json`).
+- `--data_path` (optional): Override the default LaFan data path.
+- `--headless` (default: `True`): Run without GUI; use `--no-headless` to show the viewer.
+- `--save_mp4`: Save rendered videos.
+
+**Output:** All inference scripts export the policy to ONNX (`{model_name}.onnx`) in their respective output subdirectories under `exported/`.
+
+---
+
+### Tracking inference
+
+Runs motion tracking, exports ONNX, and optionally saves a comparison video (expert vs policy).
+
+```bash
+uv run python -m humanoidverse.tracking_inference \
+    --model_folder /path/to/model \
+    --data_path humanoidverse/data/lafan_29dof.pkl \
+    --no-headless \
+    --save_mp4
+```
+
+- `--model_folder` should point to the **outer** model directory (the one that contains `checkpoint/`).
+- You can set motion IDs and visualization length inside the script if exposed.
+
+**Outputs** (under `model_folder/tracking_inference/`):
+
+- `zs_{MOTION_ID}.pkl`: Latent \(z\) for each motion.
+- `tracking.mp4`: Expert vs policy comparison (when `--save_mp4` is set).
+
+---
+
+### Goal inference
+
+Computes \(z\) for predefined goals and optionally renders goal-reaching videos.
+
+```bash
+uv run python -m humanoidverse.goal_inference \
+    --model_folder /path/to/model \
+    --save_mp4 False
+```
+
+- Iterates over predefined goals and computes the corresponding \(z\).
+- Requires `goal_frames_lafan29dof.json` (the script searches for it in several locations).
+
+**Outputs** (under `model_folder/goal_inference/`):
+
+- `goal_reaching.pkl`: Dictionary `{goal_name -> z}`.
+- `videos/*.mp4`: Per-goal videos (if `--save_mp4 True`).
+
+---
+
+### Reward inference
+
+Runs reward-based task inference: computes \(z\) and optionally runs rollouts for evaluation.
+
+```bash
+uv run python -m humanoidverse.reward_inference \
+    --model_folder /path/to/model \
+    --save_mp4 
+```
+
+**Key arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `--num_samples` | Number of samples in the buffer per inference run. |
+| `--n_inferences` | Number of inference latents per task. |
+| `--episode_length` | Steps per rollout. |
+| `--skip_rollouts` | If `True`, only compute \(z\); do not run visualization rollouts. |
+
+**Outputs** (under `model_folder/reward_inference/`):
+
+- `reward_locomotion.pkl`: Dictionary `{task_name -> z}`.
+- `videos/*.mp4`: Per-task videos (when `--save_mp4` is set).
+
+---
+
+
 
 ## License
 
