@@ -41,7 +41,7 @@ Humanoidverse training for BFM-Zero with Isaac Sim or MuJoCo.
 
 ### 1. Clone and fetch large files (Git LFS)
 
-This repo uses [Git LFS](https://git-lfs.github.com/) for motion data and model outputs. After cloning, install LFS and pull the large files:
+This repo uses [Git LFS](https://git-lfs.github.com/) for motion data and model. After cloning, install LFS and pull the large files:
 
 ```bash
 git clone https://github.com/LeCAR-Lab/BFM-Zero.git
@@ -68,7 +68,7 @@ uv sync
 
 ## Data
 
-- **Motion data**:`lafan_29dof.pkl` is for evaluation, 10s-clipped `lafan_29dof_10s-clipped.pkl` is for training. 
+- **Motion data**: Included via Git LFS in `humanoidverse/data/` after `git lfs pull`. `lafan_29dof.pkl` is for evaluation; `lafan_29dof_10s-clipped.pkl` is for training. 
 
 
 ## Training
@@ -94,6 +94,11 @@ Training is driven by `humanoidverse.train` (see `train_bfm_zero()` in `train.py
 Override from code by passing a custom `TrainConfig`, or extend the CLI to accept Hydra/tyro overrides.
 
 Tips: After 50-100 M steps training, eval/emd should lower than 0.75.
+
+
+<div align="center">
+<img src="static/images/training_curve.png" style="height:300px;" />
+</div>
 
 ---
 
