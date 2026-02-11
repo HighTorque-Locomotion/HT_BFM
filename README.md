@@ -118,15 +118,16 @@ Videos from `BFM-Zero/model` after running each inference script with `--save_mp
 
 **1. Tracking inference** — expert (left) vs policy (right):
 
-<video src="../BFM-Zero/model/tracking_inference/tracking.mp4" controls width="640"></video>
+<img src="../BFM-Zero/model/tracking_inference/tracking.gif" controls width="640">
+
 
 **2. Goal inference** — goal-reaching rollout:
 
-<video src="../BFM-Zero/model/goal_inference/videos/goal.mp4" controls width="640"></video>
+<img src="../BFM-Zero/model/goal_inference/goal.gif" controls width="640">
 
 **3. Reward inference** — example task (e.g. move-ego):
 
-<video src="../BFM-Zero/model/reward_inference/videos/move-ego-low0.6-0-0.7.mp4" controls width="640"></video>
+<img src="../BFM-Zero/model/reward_inference/move-ego-low0.6-0-0.7.gif" controls width="640"></img>
 
 ---
 
