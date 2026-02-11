@@ -178,7 +178,8 @@ Computes \(z\) for predefined goals and optionally renders goal-reaching videos.
 ```bash
 uv run python -m humanoidverse.goal_inference \
     --model_folder /path/to/model \
-    --save_mp4 False
+    --data_path humanoidverse/data/lafan_29dof.pkl \
+    --save_mp4
 ```
 
 - Iterates over predefined goals and computes the corresponding \(z\).
