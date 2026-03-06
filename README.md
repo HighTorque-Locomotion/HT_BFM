@@ -81,6 +81,7 @@ uv sync
 ```bash
 uv run python -m humanoidverse.train
 ```
+Note: change `buffer_device` to "cuda:0" if you have larger vRAM.
 
 ### Main parameters
 
