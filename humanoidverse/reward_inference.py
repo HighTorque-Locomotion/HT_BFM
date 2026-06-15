@@ -1,6 +1,6 @@
 import os
 
-os.environ["MUJOCO_GL"] = "egl"  # Use EGL for rendering
+os.environ.setdefault("MUJOCO_GL", "egl")  # Default to EGL for offscreen rendering.
 os.environ["OMP_NUM_THREADS"] = "1"
 
 from pathlib import Path
