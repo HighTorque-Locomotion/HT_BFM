@@ -21,7 +21,7 @@ robot:
   foot_name: "ankle_roll_link"
   knee_name: "calf_link"
   has_torso: True
-  torso_name: "torso_link"
+  torso_name: "waist_yaw_link"
   isaacsim_torso_name: "waist_yaw_link"
   has_upper_body_dof: True
 
@@ -251,9 +251,10 @@ robot:
     density: 0.001
     angular_damping: 0.
     linear_damping: 0.
-    urdf_file: "piplus/${robot.asset.robot_type}/urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
+    asset_root: "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611"
+    urdf_file: "urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
     usd_file: null
-    xml_file: "piplus/${robot.asset.robot_type}/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
+    xml_file: "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
     robot_type: PiPlus_S_12L8A0G2H1W_LSE_260611
     self_collisions: 0
     default_dof_drive_mode: 3
@@ -262,7 +263,7 @@ robot:
   motion:
     motion_file: 'data/lafan_tail.pkl'
     asset:
-      assetRoot: "humanoidverse/data/robots/piplus/PiPlus_S_12L8A0G2H1W_LSE_260611/"
+      assetRoot: "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611"
       assetFileName: "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
       urdfFileName: "urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
     humanoid_type: PiPlus_S_12L8A0G2H1W_LSE_260611

@@ -9,6 +9,8 @@ from typing import Literal
 import joblib
 import numpy as np
 
+from humanoidverse.utils.asset_paths import resolve_asset_path
+
 
 RobotName = Literal["g1", "piplus_lse"]
 HUMANOIDVERSE_DIR = Path(__file__).resolve().parent
@@ -18,7 +20,7 @@ HUMANOIDVERSE_DIR = Path(__file__).resolve().parent
 class RobotSpec:
     name: RobotName
     default_data_path: Path
-    mujoco_xml_path: Path
+    mujoco_xml_path: Path | str
     dof_size: int
     hydra_robot: str
 
@@ -34,15 +36,7 @@ ROBOT_SPECS: dict[RobotName, RobotSpec] = {
     "piplus_lse": RobotSpec(
         name="piplus_lse",
         default_data_path=HUMANOIDVERSE_DIR / "data" / "piplus_lse_lafan.pkl",
-        mujoco_xml_path=(
-            HUMANOIDVERSE_DIR
-            / "data"
-            / "robots"
-            / "piplus"
-            / "PiPlus_S_12L8A0G2H1W_LSE_260611"
-            / "xml"
-            / "PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
-        ),
+        mujoco_xml_path="package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
         dof_size=23,
         hydra_robot="piplus/PiPlus_S_12L8A0G2H1W_LSE",
     ),
@@ -114,7 +108,7 @@ def _set_qpos(model, data, qpos: np.ndarray) -> None:
 def _open_model(robot_spec: RobotSpec):
     import mujoco
 
-    return mujoco.MjModel.from_xml_path(str(robot_spec.mujoco_xml_path))
+    return mujoco.MjModel.from_xml_path(str(resolve_asset_path("", robot_spec.mujoco_xml_path)))
 
 
 def _camera_name(model, requested: str | None) -> str | None:
@@ -218,8 +212,9 @@ def main(
     end = len(qpos) if max_frames is None else min(len(qpos), start + max_frames)
     qpos = qpos[start:end]
 
+    mujoco_xml_path = resolve_asset_path("", robot_spec.mujoco_xml_path)
     print(f"Loaded {data_path}")
-    print(f"Robot: {robot_spec.name} / XML: {robot_spec.mujoco_xml_path}")
+    print(f"Robot: {robot_spec.name} / XML: {mujoco_xml_path}")
     print(f"Motion {motion!r}: {key} ({num_motions} motions in file)")
     print(f"Frames: {len(qpos)} / fps: {fps} / stride: {stride}")
 

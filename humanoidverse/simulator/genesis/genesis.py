@@ -12,6 +12,7 @@ import numpy as np
 from termcolor import colored
 from rich.progress import Progress
 from humanoidverse.simulator.base_simulator.base_simulator import BaseSimulator
+from humanoidverse.utils.asset_paths import resolve_asset_path
 import copy
 
 class Genesis(BaseSimulator):
@@ -120,11 +121,11 @@ class Genesis(BaseSimulator):
 
         asset_root = self.robot_cfg.asset.asset_root
         asset_file = self.robot_cfg.asset.urdf_file
-        asset_path = os.path.join(asset_root, asset_file)
+        asset_path = resolve_asset_path(asset_root, asset_file)
 
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(
-                file=asset_path,
+                file=str(asset_path),
                 merge_fixed_links=True,
                 links_to_keep=self.robot_cfg.body_names,
                 pos=self.base_init_pos.cpu().numpy(),

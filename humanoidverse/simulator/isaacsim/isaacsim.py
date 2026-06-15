@@ -34,6 +34,7 @@ import builtins
 import inspect
 import copy
 from humanoidverse.simulator.isaacsim.isaacsim_articulation_cfg import ARTICULATION_CFG
+from humanoidverse.utils.asset_paths import resolve_asset_path
 
 from humanoidverse.simulator.isaacsim.event_cfg import EventCfg
 
@@ -235,7 +236,7 @@ class IsaacSim(BaseSimulator):
         asset_root = self.robot_config.asset.asset_root
         asset_path = self.robot_config.asset.usd_file or self.robot_config.asset.urdf_file
         # prepare to override the spawn configuration in HumanoidVerse/humanoidverse/simulator/isaacsim_articulation_cfg.py
-        asset_abs_path = os.path.abspath(os.path.join(asset_root, asset_path))
+        asset_abs_path = str(resolve_asset_path(asset_root, asset_path).resolve())
 
         assert(os.path.isfile(asset_abs_path))
 

@@ -8,7 +8,7 @@ import random
 
 from enum import Enum
 from humanoidverse.utils.motion_lib.skeleton import SkeletonTree
-from pathlib import Path
+from humanoidverse.utils.asset_paths import resolve_asset_path
 from easydict import EasyDict
 from loguru import logger
 from rich.progress import track
@@ -55,7 +55,7 @@ class MotionLibBase():
         self._device = device
         self.mesh_parsers = None
         self.has_action = False
-        skeleton_file = Path(self.m_cfg.asset.assetRoot) / self.m_cfg.asset.assetFileName
+        skeleton_file = resolve_asset_path(self.m_cfg.asset.assetRoot, self.m_cfg.asset.assetFileName)
         self.skeleton_tree = SkeletonTree.from_mjcf(skeleton_file)
         logger.info(f"Loaded skeleton from {skeleton_file}")
         logger.info(f"Loading motion data from {self.m_cfg.motion_file}...")

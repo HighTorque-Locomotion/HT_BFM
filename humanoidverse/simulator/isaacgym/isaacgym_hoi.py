@@ -12,6 +12,7 @@ from datetime import datetime
 from humanoidverse.envs.env_utils.terrain import Terrain
 from rich.progress import Progress
 from humanoidverse.simulator.base_simulator.base_simulator import BaseSimulator
+from humanoidverse.utils.asset_paths import resolve_asset_path
 from pathlib import Path
 
 
@@ -201,9 +202,9 @@ class IsaacGym(BaseSimulator):
         assert self.body_names == self.robot_config.body_names, "Body names must match the config"
 
     def _setup_robot_asset_when_env_created(self, asset_root, asset_file, asset_cfg):
-        asset_path = os.path.join(asset_root, asset_file)
-        gym_asset_root = os.path.dirname(asset_path)
-        gym_asset_file = os.path.basename(asset_path)
+        asset_path = resolve_asset_path(asset_root, asset_file)
+        gym_asset_root = str(asset_path.parent)
+        gym_asset_file = asset_path.name
 
         asset_options = gymapi.AssetOptions()
 

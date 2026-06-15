@@ -31,9 +31,9 @@ from stl import mesh
 import open3d as o3d
 
 from loguru import logger
-from pathlib import Path
 
 from rich.progress import track
+from humanoidverse.utils.asset_paths import resolve_asset_path
 
 # Configure logging
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,9 +43,9 @@ from rich.progress import track
 class Humanoid_Batch:
     def __init__(self, cfg, device = torch.device("cpu")):
         self.cfg = cfg
-        self.asset_root = Path(cfg.asset.assetRoot)
+        self.asset_root = resolve_asset_path(cfg.asset.assetRoot)
         self.asset_file = cfg.asset.assetFileName
-        self.mjcf_file = self.asset_root / self.asset_file
+        self.mjcf_file = resolve_asset_path(self.asset_root, self.asset_file)
         
         parser = XMLParser(remove_blank_text=True)
         tree = parse(BytesIO(open(self.mjcf_file, "rb").read()), parser=parser,)
