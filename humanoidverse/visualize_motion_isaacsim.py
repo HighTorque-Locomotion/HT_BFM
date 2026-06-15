@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
 import torch
 
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
 
-from humanoidverse.visualize_motion import _load_motion, _motion_to_qpos
+from humanoidverse.visualize_motion import RobotName, get_robot_spec, _load_motion, _motion_to_qpos
 
 
 def main(
-    data_path: Path = Path("humanoidverse/data/lafan_29dof.pkl"),
+    data_path: Path | None = None,
+    robot: RobotName = "g1",
     motion: int | str = 0,
     headless: bool = False,
     enable_cameras: bool = False,
@@ -24,8 +29,11 @@ def main(
 ) -> None:
     os.environ["OMNI_KIT_ACCEPT_EULA"] = "YES"
 
+    robot_spec = get_robot_spec(robot)
+    if data_path is None:
+        data_path = robot_spec.default_data_path
     key, motion_data, num_motions = _load_motion(data_path.resolve(), motion)
-    qpos = _motion_to_qpos(motion_data)
+    qpos = _motion_to_qpos(motion_data, robot_spec.dof_size)
     if max_frames is not None:
         qpos = qpos[:max_frames]
     motion_fps = int(motion_data.get("fps", 30) if fps is None else fps)
@@ -41,7 +49,7 @@ def main(
         disable_obs_noise=True,
         hydra_overrides=[
             "simulator=isaacsim",
-            "robot=g1/g1_29dof",
+            f"robot={robot_spec.hydra_robot}",
             "env.config.max_episode_length_s=10000",
             f"env.config.headless={headless}",
         ],
@@ -58,6 +66,7 @@ def main(
     target_dof = torch.zeros((1, env.num_dof, 2), dtype=torch.float32, device=env.device)
 
     print(f"Loaded {data_path}")
+    print(f"Robot: {robot_spec.name} / Hydra robot: {robot_spec.hydra_robot}")
     print(f"Motion {motion!r}: {key} ({num_motions} motions in file)")
     print(f"Frames: {len(qpos)} / fps: {motion_fps} / stride: {stride}")
 

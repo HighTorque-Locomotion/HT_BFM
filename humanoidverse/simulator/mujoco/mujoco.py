@@ -31,8 +31,6 @@ class MuJoCo(BaseSimulator):
             self.robot_cfg.asset.asset_root, 
             self.robot_cfg.asset.xml_file
         )
-        hv_root = Path(__file__).parents[2]
-        self.model_path = str(hv_root / "data/robots/g1/scene_29dof_freebase_mujoco.xml")
         self.freebase = True
 
         self.model = mujoco.MjModel.from_xml_path(self.model_path)
