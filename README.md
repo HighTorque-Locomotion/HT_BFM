@@ -61,7 +61,8 @@ run `uv`.
 From this directory (BFM-Zero):
 
 ```bash
-conda create -n HT_BFM--clone HT_lab的环境
+(暂时的conda环境创建方法，后续再规范化)
+conda create -n HT_BFM --clone HT_lab的环境
 
   conda activate HT_BFM
   cd /data/laihuiying/BFM-Zero
@@ -84,6 +85,7 @@ conda create -n HT_BFM--clone HT_lab的环境
     "tyro>=0.9.18"\
     "wandb"\
 
+ conda install -c conda-forge libglu mesalib
 
 
 #### Option B: uv
