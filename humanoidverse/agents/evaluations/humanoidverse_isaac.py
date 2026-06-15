@@ -137,6 +137,11 @@ def get_backward_observation(env, motion_id, include_last_action, velocity_multi
     ref_body_rots = motion_state["rg_rot_t"]
     ref_body_vels = motion_state["body_vel_t"] * velocity_multiplier
     ref_body_angular_vels = motion_state["body_ang_vel_t"] * velocity_multiplier
+    if env.motion_body_ids is not None:
+        ref_body_pos = ref_body_pos[:, env.motion_body_ids]
+        ref_body_rots = ref_body_rots[:, env.motion_body_ids]
+        ref_body_vels = ref_body_vels[:, env.motion_body_ids]
+        ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
     ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
     ref_dof_vel = motion_state["dof_vel"] * velocity_multiplier
 

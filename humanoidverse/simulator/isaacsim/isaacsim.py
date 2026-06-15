@@ -57,6 +57,7 @@ class IsaacSim(BaseSimulator):
         self.env_config = config
         self.terrain_config = config.terrain
         self.domain_rand_config = config.domain_rand
+        self.isaacsim_torso_name = self._resolve_isaacsim_torso_name()
         
         sim_config: SimulationCfg = SimulationCfg(dt=1./self.simulator_config.sim.fps, 
                                            render_interval=self.simulator_config.sim.render_interval, 
@@ -156,7 +157,7 @@ class IsaacSim(BaseSimulator):
                     "asset_cfg": SceneEntityCfg(
                         "robot",
                         body_names=[
-                            "torso_link",
+                            self.isaacsim_torso_name,
                         ],
                     ),
                     "distribution_params": (
@@ -232,6 +233,19 @@ class IsaacSim(BaseSimulator):
         # print the environment information
         logger.info("Completed setting up the environment...")
         
+    def _resolve_isaacsim_torso_name(self) -> str:
+        return self.robot_config.get(
+            "isaacsim_torso_name",
+            self.robot_config.get("torso_name", "pelvis"),
+        )
+
+    def _resolve_height_scanner_body_name(self) -> str:
+        motion_config = self.robot_config.get("motion", {})
+        return motion_config.get(
+            "pelvis_link",
+            self._resolve_isaacsim_torso_name(),
+        )
+
     def _setup_scene(self):
         asset_root = self.robot_config.asset.asset_root
         asset_path = self.robot_config.asset.usd_file or self.robot_config.asset.urdf_file
@@ -338,10 +352,7 @@ class IsaacSim(BaseSimulator):
             prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
         )
 
-        height_scanner_body = self.robot_config.motion.get(
-            "pelvis_link",
-            self.robot_config.get("torso_name", "pelvis"),
-        )
+        height_scanner_body = self._resolve_height_scanner_body_name()
         # Add a height scanner to the robot root body to detect the height of the terrain mesh.
         height_scanner_config = RayCasterCfg(
             prim_path=f"/World/envs/env_.*/Robot/{height_scanner_body}",
