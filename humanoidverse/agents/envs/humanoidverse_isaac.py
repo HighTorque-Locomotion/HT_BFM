@@ -56,6 +56,11 @@ def load_expert_trajectories_from_motion_lib(env, agent_cfg, device="cpu", add_h
         ref_body_rots = motion_res["rg_rot_t"]
         ref_body_vels = motion_res["body_vel_t"]
         ref_body_angular_vels = motion_res["body_ang_vel_t"]
+        if env.motion_body_ids is not None:
+            ref_body_pos = ref_body_pos[:, env.motion_body_ids]
+            ref_body_rots = ref_body_rots[:, env.motion_body_ids]
+            ref_body_vels = ref_body_vels[:, env.motion_body_ids]
+            ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
 
         # construct observation
         # TODO is this aligned with the environment observation logic?

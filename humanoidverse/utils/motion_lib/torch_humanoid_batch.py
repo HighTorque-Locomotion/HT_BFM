@@ -51,8 +51,19 @@ class Humanoid_Batch:
         tree = parse(BytesIO(open(self.mjcf_file, "rb").read()), parser=parser,)
         self.dof_axis = []
 
-        joints = sorted([j.attrib['name'] for j in tree.getroot().find("worldbody").findall('.//joint')])
-        motors = sorted([m.attrib['name'] for m in tree.getroot().find("actuator").getchildren()])
+        joint_nodes = tree.getroot().find("worldbody").findall('.//joint')
+        joints = sorted([j.attrib['name'] for j in joint_nodes])
+        actuator_root = tree.getroot().find("actuator")
+        if actuator_root is not None:
+            motors = sorted([m.attrib['name'] for m in list(actuator_root)])
+        else:
+            motors = sorted(
+                [
+                    j.attrib["name"]
+                    for j in joint_nodes
+                    if j.attrib.get("type") != "free"
+                ]
+            )
         
         assert len(motors) > 0, "No motors found in the mjcf file"
         
