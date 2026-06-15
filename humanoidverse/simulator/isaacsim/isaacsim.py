@@ -441,8 +441,8 @@ class IsaacSim(BaseSimulator):
         
     def setup_keyboard(self):
         # TODO: add back
-        from isaaclab.devices.keyboard.se2_keyboard import Se2Keyboard
-        self.keyboard_interface = Se2Keyboard()
+        from isaaclab.devices.keyboard.se2_keyboard import Se2Keyboard, Se2KeyboardCfg
+        self.keyboard_interface = Se2Keyboard(Se2KeyboardCfg(sim_device=self.sim_device))
         
     def add_keyboard_callback(self, key, callback):
         # TODO: add back
