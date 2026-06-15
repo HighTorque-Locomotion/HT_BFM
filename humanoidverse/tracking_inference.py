@@ -86,8 +86,11 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
 
     for MOTION_ID in motion_list:
         env.set_is_evaluating(MOTION_ID)
-        # we visulize the first env
-        obs, obs_dict = get_backward_observation(env, 0, use_root_height_obs=use_root_height_obs)
+        loaded_motion_ids = env._motion_lib._curr_motion_ids.detach().cpu().tolist()
+        loaded_motion_keys = env._motion_lib.curr_motion_keys
+        local_motion_id = 0
+        print(f"Requested motion id {MOTION_ID}; loaded ids {loaded_motion_ids}; loaded keys {loaded_motion_keys}")
+        obs, obs_dict = get_backward_observation(env, local_motion_id, use_root_height_obs=use_root_height_obs)
 
         expert_qpos = np.concatenate([
             obs_dict["ref_body_pos"][:,0].cpu().numpy(),
@@ -137,7 +140,7 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
 
     # Visualization length: match inference length so expert and policy videos align
     episode_len = z.shape[0]
-    episode_len = 100
+    episode_len = 500
     print(f"Saving video for tracking ({episode_len} steps)")
     if save_mp4:
         rgb_renderer = IsaacRendererWithMuJoco(render_size=256)
@@ -145,7 +148,7 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
         expert_video = rgb_renderer.from_qpos(expert_qpos[: 1 + episode_len])
         frames = [rgb_renderer.render(wrapped_env._env, 0)[0]]
 
-    print(f"Running tracking inference for {episode_len} steps")
+    print(f"Running tracking inference for motion {MOTION_ID} for {episode_len} steps")
     for i in range(episode_len):
         print(f"Step {i} of {episode_len}")
         action = model.act(observation, z[i % len(z)].repeat(num_envs, 1), mean=True)
@@ -163,7 +166,7 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
         new_frames = []
         for a, b in zip(expert_video, frames):
             new_frames.append(np.concatenate([a, b], axis=1))
-        video_path = output_dir / "tracking.mp4"
+        video_path = output_dir / f"tracking_{MOTION_ID}.mp4"
         media.write_video(str(video_path), new_frames, fps=50)
         print(f"Saved video for tracking: {video_path}")
 

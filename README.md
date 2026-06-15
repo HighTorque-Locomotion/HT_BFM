@@ -33,7 +33,7 @@ Humanoidverse training for BFM-Zero with Isaac Sim or MuJoCo.
 
 ## Requirements
 
-- Python 3.10
+- Python 3.11
 - CUDA-capable GPU
 - Isaac Sim (Linux) or MuJoCo for simulation
 
@@ -51,15 +51,48 @@ git lfs pull
 ```
 Note: If the repository exceeded its LFS budget,  you can access the data here: https://huggingface.co/LeCAR-Lab/BFM-Zero/tree/main/data
 
-### 2. Install uv
+### 2. Create the Python environment
+
+You can install the project with either Conda or uv. Conda users do not need to
+run `uv`.
+
+#### Option A: Conda
+
+From this directory (BFM-Zero):
+
+```bash
+conda create -n HT_BFM--clone HT_lab的环境
+
+  conda activate HT_BFM
+  cd /data/laihuiying/BFM-Zero
+
+  python -m pip install \
+    "easydict>=1.13" \
+    "exca==0.4.5" \
+    "humenv @ git+https://github.com/facebookresearch/humenv.git" \
+    "loguru>=0.7.3" \
+    "mediapy>=1.2.3" \
+    "ml-collections>=1.1.0" \
+    "mujoco==3.8.1" \
+    "notebook>=7.4.2" \
+    "numpy-stl>=3.2.0" \
+    "onnxruntime==1.26.0" \
+    "open3d>=0.19.0" \
+    "pot>=0.9.5" \
+    "tensordict>=0.8.3" \
+    "termcolor>=3.0.1" \
+    "tyro>=0.9.18"\
+    "wandb"\
+
+
+
+#### Option B: uv
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Or with pip: `pip install uv`
-
-### 3. Install dependencies
 
 From this directory (BFM-Zero):
 
@@ -79,8 +112,11 @@ uv sync
 ### Launch
 
 ```bash
-uv run python -m humanoidverse.train
+python -m humanoidverse.train
 ```
+If you installed with uv, prefix commands with `uv run`, for example
+`uv run python -m humanoidverse.train`.
+
 Note: change `buffer_device` to "cuda:0" if you have larger vRAM.
 
 ### Main parameters
@@ -138,9 +174,9 @@ Videos from `BFM-Zero/model` after running each inference script with `--save_mp
 All scripts use **tyro** for the CLI. General usage:
 
 ```bash
-uv run python -m humanoidverse.tracking_inference --help
-uv run python -m humanoidverse.goal_inference --help
-uv run python -m humanoidverse.reward_inference --help
+python -m humanoidverse.tracking_inference --help
+python -m humanoidverse.goal_inference --help
+python -m humanoidverse.reward_inference --help
 ```
 
 **Common arguments:**
@@ -160,7 +196,7 @@ uv run python -m humanoidverse.reward_inference --help
 Runs motion tracking, exports ONNX, and optionally saves a comparison video (expert vs policy).
 
 ```bash
-uv run python -m humanoidverse.tracking_inference \
+python -m humanoidverse.tracking_inference \
     --model_folder /path/to/model \
     --data_path humanoidverse/data/lafan_29dof.pkl \
     --no-headless \
@@ -182,7 +218,7 @@ uv run python -m humanoidverse.tracking_inference \
 Computes \(z\) for predefined goals and optionally renders goal-reaching videos.
 
 ```bash
-uv run python -m humanoidverse.goal_inference \
+python -m humanoidverse.goal_inference \
     --model_folder /path/to/model \
     --data_path humanoidverse/data/lafan_29dof.pkl \
     --save_mp4
@@ -203,7 +239,7 @@ uv run python -m humanoidverse.goal_inference \
 Runs reward-based task inference: computes \(z\) and optionally runs rollouts for evaluation.
 
 ```bash
-uv run python -m humanoidverse.reward_inference \
+python -m humanoidverse.reward_inference \
     --model_folder /path/to/model \
     --save_mp4 
 ```
@@ -261,4 +297,3 @@ Wrong arXiv id here!!
 ## Contact
 
 If you have any problems, please contact [liyitang475@gmail.com](mailto:liyitang475@gmail.com).
-
