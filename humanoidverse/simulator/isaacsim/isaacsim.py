@@ -264,6 +264,7 @@ class IsaacSim(BaseSimulator):
             spawn = sim_utils.UrdfFileCfg(
                 asset_path=asset_abs_path,
                 fix_base=bool(self.robot_config.asset.fix_base_link),
+                merge_fixed_joints=bool(self.robot_config.asset.collapse_fixed_joints),
                 replace_cylinders_with_capsules=bool(self.robot_config.asset.replace_cylinder_with_capsule),
                 activate_contact_sensors=True,
                 rigid_props=rigid_props,
@@ -336,9 +337,13 @@ class IsaacSim(BaseSimulator):
             prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
         )
 
-        # Add a height scanner to the torso to detect the height of the terrain mesh
+        height_scanner_body = self.robot_config.motion.get(
+            "pelvis_link",
+            self.robot_config.get("torso_name", "pelvis"),
+        )
+        # Add a height scanner to the robot root body to detect the height of the terrain mesh.
         height_scanner_config = RayCasterCfg(
-            prim_path="/World/envs/env_.*/Robot/pelvis",
+            prim_path=f"/World/envs/env_.*/Robot/{height_scanner_body}",
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
             attach_yaw_only=True,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
@@ -493,7 +498,8 @@ class IsaacSim(BaseSimulator):
         dof_names_list = copy.deepcopy(self.robot_config.dof_names)
 
         self.dof_ids, self.dof_names = self._robot.find_joints(dof_names_list, preserve_order=True) 
-        self.body_ids, self.body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
+        body_names_list = self.robot_config.get("isaacsim_body_names", self.robot_config.body_names)
+        self.body_ids, self.body_names = self._robot.find_bodies(body_names_list, preserve_order=True)
         
         self.contact_to_body_idx = [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names]
 
@@ -521,10 +527,10 @@ class IsaacSim(BaseSimulator):
         
         # assert if  aligns with config
         assert self.num_dof == len(self.robot_config.dof_names), "Number of DOFs must be equal to number of actions"
-        assert self.num_bodies == len(self.robot_config.body_names), "Number of bodies must be equal to number of body names"
+        assert self.num_bodies == len(body_names_list), "Number of bodies must be equal to number of body names"
         # import ipdb; ipdb.set_trace()
         assert self.dof_names == self.robot_config.dof_names, "DOF names must match the config"
-        assert self.body_names == self.robot_config.body_names, "Body names must match the config"
+        assert self.body_names == list(body_names_list), "Body names must match the config"
        
         
         # return self.num_dof, self.num_bodies, self.dof_names, self.body_names

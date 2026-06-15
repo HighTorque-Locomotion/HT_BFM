@@ -640,6 +640,10 @@ class HumanoidVerseIsaacConfig(BaseConfig):
         cfg.robot.asset.asset_root = cfg.robot.asset.asset_root.replace("humanoidverse", HUMANOIDVERSE_DIR)
         cfg.robot.motion.asset.assetRoot = cfg.robot.motion.asset.assetRoot.replace("humanoidverse", HUMANOIDVERSE_DIR)
         cfg.robot.motion.motion_file = self.lafan_tail_path
+        if "isaacsim_body_names" in cfg.robot:
+            cfg.robot.num_bodies = len(cfg.robot.isaacsim_body_names)
+        if "isaacsim_torso_name" in cfg.robot:
+            cfg.robot.torso_name = cfg.robot.isaacsim_torso_name
 
         # This sets obs/action dims etc
         pre_process_config(cfg)

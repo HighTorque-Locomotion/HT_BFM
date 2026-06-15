@@ -56,7 +56,15 @@ class LeggedRobotMotions(LeggedRobotBase):
         self.config.robot.motion.step_dt = self.dt
         self._motion_lib = MotionLibRobot(self.config.robot.motion, num_envs=self.num_envs, device=self.device)
         self._motion_lib.load_motions_for_training(max_num_seqs=self.num_envs)
-            
+        self.motion_body_ids = None
+        if "isaacsim_body_names" in self.config.robot:
+            motion_body_names = self._motion_lib.mesh_parsers.body_names
+            self.motion_body_ids = torch.tensor(
+                [motion_body_names.index(body_name) for body_name in self.simulator._body_list],
+                device=self.device,
+                dtype=torch.long,
+            )
+
         # res = self._motion_lib.get_motion_state(self.motion_ids, self.motion_times, offset=self.env_origins)
         res = self._resample_motion_time_and_ids(torch.arange(self.num_envs))
         self.motion_dt = self._motion_lib._motion_dt
@@ -197,10 +205,16 @@ class LeggedRobotMotions(LeggedRobotBase):
         # motion_res = self._get_state_from_motionlib_cache_trimesh(self.motion_ids, motion_times, offset= offset)
         motion_res = self._motion_lib.get_motion_state(self.motion_ids, motion_times, offset=offset)
 
-        self.ref_body_pos_extend = motion_res["rg_pos_t"]
-        self.ref_body_vel_extend = motion_res["body_vel_t"] # [num_envs, num_markers, 3]
-        self.ref_body_ang_vel_extend = motion_res["body_ang_vel_t"] # [num_envs, num_markers, 3]
-        self.ref_body_rot_extend = motion_res["rg_rot_t"] # [num_envs, num_markers, 4]
+        if self.motion_body_ids is not None:
+            self.ref_body_pos_extend = motion_res["rg_pos_t"][:, self.motion_body_ids]
+            self.ref_body_vel_extend = motion_res["body_vel_t"][:, self.motion_body_ids] # [num_envs, num_markers, 3]
+            self.ref_body_ang_vel_extend = motion_res["body_ang_vel_t"][:, self.motion_body_ids] # [num_envs, num_markers, 3]
+            self.ref_body_rot_extend = motion_res["rg_rot_t"][:, self.motion_body_ids] # [num_envs, num_markers, 4]
+        else:
+            self.ref_body_pos_extend = motion_res["rg_pos_t"]
+            self.ref_body_vel_extend = motion_res["body_vel_t"] # [num_envs, num_markers, 3]
+            self.ref_body_ang_vel_extend = motion_res["body_ang_vel_t"] # [num_envs, num_markers, 3]
+            self.ref_body_rot_extend = motion_res["rg_rot_t"] # [num_envs, num_markers, 4]
         
         ref_joint_pos = motion_res["dof_pos"] # [num_envs, num_dofs]
         ref_joint_vel = motion_res["dof_vel"] # [num_envs, num_dofs]
