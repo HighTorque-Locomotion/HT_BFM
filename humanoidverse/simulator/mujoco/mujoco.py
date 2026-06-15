@@ -7,6 +7,7 @@ import mujoco
 import mujoco.viewer
 
 from humanoidverse.utils.torch_utils import *
+from humanoidverse.utils.asset_paths import resolve_asset_path
 from humanoidverse.simulator.base_simulator.base_simulator import BaseSimulator
 
 # Assume BaseSimulator is defined elsewhere.
@@ -27,10 +28,10 @@ class MuJoCo(BaseSimulator):
     
     def setup(self):
         # Build the path to the MuJoCo model (MJCF/XML file)
-        self.model_path = os.path.join(
+        self.model_path = str(resolve_asset_path(
             self.robot_cfg.asset.asset_root, 
             self.robot_cfg.asset.xml_file
-        )
+        ))
         self.freebase = True
 
         self.model = mujoco.MjModel.from_xml_path(self.model_path)

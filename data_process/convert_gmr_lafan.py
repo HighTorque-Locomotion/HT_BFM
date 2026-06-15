@@ -10,14 +10,14 @@ import joblib
 import numpy as np
 from scipy.spatial.transform import Rotation as Rotation
 
+from humanoidverse.utils.asset_paths import resolve_asset_path
+
 
 DEFAULT_INPUT_DIR = Path("data_process/dataset/g1_lafan_dataset")
 DEFAULT_OUTPUT_DIR = Path("humanoidverse/data")
 DEFAULT_ROBOT_XML = Path("humanoidverse/data/robots/g1/g1_29dof.xml")
 PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_dataset")
-PIPLUS_LSE_ROBOT_XML = Path(
-    "humanoidverse/data/robots/piplus/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
-)
+PIPLUS_LSE_ROBOT_XML = "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
 
 
 def install_numpy_pickle_compat() -> None:
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         if args.input_dir == DEFAULT_INPUT_DIR:
             args.input_dir = PIPLUS_LSE_INPUT_DIR
         if args.robot_xml == DEFAULT_ROBOT_XML:
-            args.robot_xml = PIPLUS_LSE_ROBOT_XML
+            args.robot_xml = resolve_asset_path("", PIPLUS_LSE_ROBOT_XML)
         if args.name == "gmr_lafan":
             args.name = "piplus_lse_lafan"
     if args.quat_order is None:

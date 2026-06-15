@@ -5,6 +5,8 @@
 
 import os
 
+import argparse
+
 from humanoidverse.agents.evaluations.humanoidverse_isaac import (
     HumanoidVerseIsaacTrackingEvaluation,
     HumanoidVerseIsaacTrackingEvaluationConfig,
@@ -51,6 +53,10 @@ REWARD_EVAL_LOG_FILENAME = "reward_eval_log.csv"
 TRACKING_EVAL_LOG_FILENAME = "tracking_eval_log.csv"
 
 CHECKPOINT_DIR_NAME = "checkpoint"
+
+ROBOT_G1 = "g1"
+ROBOT_PIPLUS_LSE = "PiPlus_S_12L8A0G2H1W_LSE"
+SUPPORTED_ROBOTS = (ROBOT_G1, ROBOT_PIPLUS_LSE)
 
 _ENC_CONFIG_TO_EXPERT_DATA_OBS_MAPPER = {
     HumanoidVerseIsaacConfig: None,
@@ -179,7 +185,7 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
 
 
 def init_wandb(cfg: TrainConfig):
-    exp_name = "BFM-Zero"
+    exp_name = f"BFM-Zero-{args.robot}-{time.strftime('%Y%m%d_%H%M')}"
     wandb_name = exp_name
     wandb_config = cfg.model_dump()
     wandb.init(entity=cfg.wandb_ename, project=cfg.wandb_pname, group=cfg.wandb_gname, name=wandb_name, config=wandb_config, dir="./_wandb")
@@ -584,13 +590,47 @@ class Workspace:
             json.dump({"time": time}, f, indent=4)
 
 
-def train_bfm_zero():
+def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
+    if robot == ROBOT_G1:
+        return {
+            "relative_config_path": "exp/bfm_zero/bfm_zero",
+            "lafan_tail_path": "humanoidverse/data/lafan_29dof_10s-clipped.pkl",
+            "hydra_overrides": [
+                "robot=g1/g1_29dof_hard_waist",
+                "robot.control.action_scale=0.25",
+                "robot.control.action_clip_value=5.0",
+                "robot.control.normalize_action_to=5.0",
+                "env.config.lie_down_init=True",
+                "env.config.lie_down_init_prob=0.3",
+            ],
+            "work_dir_prefix": "bfmzero-isaac",
+            "wandb_group": "bfmzero-isaac",
+            "wandb_project": "bfmzero-isaac",
+        }
+    if robot == ROBOT_PIPLUS_LSE:
+        return {
+            "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
+            "lafan_tail_path": "data/piplus_lse/piplus_lse_lafan_10s-clipped.pkl",
+            "hydra_overrides": [
+                "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+                "env.config.lie_down_init=True",
+                "env.config.lie_down_init_prob=0.3",
+            ],
+            "work_dir_prefix": "bfmzero-piplus-lse-isaac",
+            "wandb_group": "bfmzero-piplus-lse-isaac",
+            "wandb_project": "bfmzero-piplus-lse-isaac",
+        }
+    raise ValueError(f"Unsupported robot '{robot}'. Choose one of: {', '.join(SUPPORTED_ROBOTS)}")
+
+
+def train_bfm_zero(robot: str = ROBOT_G1):
     from humanoidverse.agents.fb_cpr_aux.model import FBcprAuxModelArchiConfig, FBcprAuxModelConfig
     from humanoidverse.agents.fb_cpr_aux.agent import FBcprAuxAgentTrainConfig
     from humanoidverse.agents.nn_models import ForwardArchiConfig, BackwardArchiConfig, ActorArchiConfig, DiscriminatorArchiConfig, RewardNormalizerConfig
     from humanoidverse.agents.normalizers import ObsNormalizerConfig, BatchNormNormalizerConfig
     from humanoidverse.agents.nn_filters import DictInputFilterConfig
 
+    robot_settings = _get_robot_training_settings(robot)
     cfg = TrainConfig(
         name='TrainConfig',
         agent=FBcprAuxAgentConfig(
@@ -672,15 +712,15 @@ def train_bfm_zero():
             name='humanoidverse_isaac',
             device='cuda:0',
             # TODO this needs to be updated to point to a path with lafan dataset chunked into 10s clips
-            lafan_tail_path='humanoidverse/data/lafan_29dof_10s-clipped.pkl',
+            lafan_tail_path=robot_settings["lafan_tail_path"],
             enable_cameras=False,
             camera_render_save_dir='isaac_videos',
             max_episode_length_s=None,
             disable_obs_noise=False,
             disable_domain_randomization=False,
-            relative_config_path='exp/bfm_zero/bfm_zero',
+            relative_config_path=robot_settings["relative_config_path"],
             include_last_action=True,
-            hydra_overrides=['robot=g1/g1_29dof_hard_waist', 'robot.control.action_scale=0.25', 'robot.control.action_clip_value=5.0', 'robot.control.normalize_action_to=5.0', 'env.config.lie_down_init=True', 'env.config.lie_down_init_prob=0.3'],
+            hydra_overrides=robot_settings["hydra_overrides"],
             context_length=None,
             include_dr_info=False,
             included_dr_obs_names=None,
@@ -689,7 +729,7 @@ def train_bfm_zero():
             make_config_g1env_compatible=False,
             root_height_obs=True
         ),
-        work_dir=f"results/bfmzero-isaac-{time.strftime('%Y%m%d_%H%M%S')}",
+        work_dir=f"results/{robot_settings['work_dir_prefix']}-{time.strftime('%Y%m%d_%H%M%S')}",
         seed=4728,
         online_parallel_envs=512,
         log_every_updates=10240,
@@ -708,8 +748,8 @@ def train_bfm_zero():
         buffer_size=2560000,
         use_wandb=True,
         wandb_ename='82623700-dzkd',  # your wandb entity (username/team), empty = default from wandb login
-        wandb_gname='bfmzero-isaac',  # run group
-        wandb_pname='bfmzero-isaac',  # your wandb project name
+        wandb_gname=robot_settings["wandb_group"],  # run group
+        wandb_pname=robot_settings["wandb_project"],  # your wandb project name
         load_isaac_expert_data=True,
         buffer_device='cuda',
         disable_tqdm=False,
@@ -724,6 +764,14 @@ def train_bfm_zero():
 if __name__ == "__main__":
     # This is the bare minimum CLI interface to launch experiments, but ideally you should
     # launch your experiments from Python code (e.g., see under "scripts")
-    train_bfm_zero()
+    parser = argparse.ArgumentParser(description="Train BFM-Zero with a selected robot config.")
+    parser.add_argument(
+        "--robot",
+        choices=SUPPORTED_ROBOTS,
+        default=ROBOT_G1,
+        help="Robot config to train. Defaults to g1.",
+    )
+    args = parser.parse_args()
+    train_bfm_zero(robot=args.robot)
 
 # uv run --no-cache -m humanoidverse.meta_online_entry_point
