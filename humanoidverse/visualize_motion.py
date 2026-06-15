@@ -2,10 +2,58 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import joblib
 import numpy as np
+
+
+RobotName = Literal["g1", "piplus_lse"]
+HUMANOIDVERSE_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class RobotSpec:
+    name: RobotName
+    default_data_path: Path
+    mujoco_xml_path: Path
+    dof_size: int
+    hydra_robot: str
+
+
+ROBOT_SPECS: dict[RobotName, RobotSpec] = {
+    "g1": RobotSpec(
+        name="g1",
+        default_data_path=HUMANOIDVERSE_DIR / "data" / "lafan_29dof.pkl",
+        mujoco_xml_path=HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_mujoco.xml",
+        dof_size=29,
+        hydra_robot="g1/g1_29dof",
+    ),
+    "piplus_lse": RobotSpec(
+        name="piplus_lse",
+        default_data_path=HUMANOIDVERSE_DIR / "data" / "piplus_lse_lafan.pkl",
+        mujoco_xml_path=(
+            HUMANOIDVERSE_DIR
+            / "data"
+            / "robots"
+            / "piplus"
+            / "PiPlus_S_12L8A0G2H1W_LSE_260611"
+            / "xml"
+            / "PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
+        ),
+        dof_size=23,
+        hydra_robot="piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    ),
+}
+
+
+def get_robot_spec(robot: RobotName) -> RobotSpec:
+    try:
+        return ROBOT_SPECS[robot]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported robot {robot!r}. Expected one of: {sorted(ROBOT_SPECS)}") from exc
 
 
 def _load_motion(data_path: Path, motion: int | str):
@@ -27,7 +75,7 @@ def _load_motion(data_path: Path, motion: int | str):
     return key, data[key], len(keys)
 
 
-def _motion_to_qpos(motion_data: dict) -> np.ndarray:
+def _motion_to_qpos(motion_data: dict, dof_size: int) -> np.ndarray:
     required = ("root_trans_offset", "root_rot", "dof")
     missing = [key for key in required if key not in motion_data]
     if missing:
@@ -41,8 +89,8 @@ def _motion_to_qpos(motion_data: dict) -> np.ndarray:
         raise ValueError(f"root_trans_offset must have shape (T, 3), got {root_pos.shape}.")
     if root_quat_xyzw.ndim != 2 or root_quat_xyzw.shape[1] != 4:
         raise ValueError(f"root_rot must have shape (T, 4), got {root_quat_xyzw.shape}.")
-    if dof.ndim != 2 or dof.shape[1] != 29:
-        raise ValueError(f"dof must have shape (T, 29), got {dof.shape}.")
+    if dof.ndim != 2 or dof.shape[1] != dof_size:
+        raise ValueError(f"dof must have shape (T, {dof_size}), got {dof.shape}.")
     if not (root_pos.shape[0] == root_quat_xyzw.shape[0] == dof.shape[0]):
         raise ValueError(
             "root_trans_offset, root_rot, and dof must have the same frame count: "
@@ -63,11 +111,10 @@ def _set_qpos(model, data, qpos: np.ndarray) -> None:
     mujoco.mj_forward(model, data)
 
 
-def _open_model():
+def _open_model(robot_spec: RobotSpec):
     import mujoco
 
-    xml_path = Path(__file__).resolve().parent / "data" / "robots" / "g1" / "scene_29dof_freebase_mujoco.xml"
-    return mujoco.MjModel.from_xml_path(str(xml_path))
+    return mujoco.MjModel.from_xml_path(str(robot_spec.mujoco_xml_path))
 
 
 def _camera_name(model, requested: str | None) -> str | None:
@@ -81,6 +128,7 @@ def _camera_name(model, requested: str | None) -> str | None:
 
 def render_video(
     qpos: np.ndarray,
+    robot_spec: RobotSpec,
     output: Path,
     fps: int,
     width: int,
@@ -91,7 +139,7 @@ def render_video(
     import mujoco
     import mediapy as media
 
-    model = _open_model()
+    model = _open_model(robot_spec)
     data = mujoco.MjData(model)
     renderer = mujoco.Renderer(model, width=width, height=height)
     camera = _camera_name(model, camera)
@@ -102,7 +150,10 @@ def render_video(
         if idx == 0 or idx + 1 == len(sampled_qpos) or (idx + 1) % 100 == 0:
             print(f"Rendering frame {idx + 1}/{len(sampled_qpos)}")
         _set_qpos(model, data, q)
-        renderer.update_scene(data, camera=camera)
+        if camera is None:
+            renderer.update_scene(data)
+        else:
+            renderer.update_scene(data, camera=camera)
         frames.append(renderer.render())
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -110,11 +161,11 @@ def render_video(
     renderer.close()
 
 
-def play_viewer(qpos: np.ndarray, fps: int, camera: str | None, stride: int) -> None:
+def play_viewer(qpos: np.ndarray, robot_spec: RobotSpec, fps: int, camera: str | None, stride: int) -> None:
     import mujoco
     import mujoco.viewer
 
-    model = _open_model()
+    model = _open_model(robot_spec)
     data = mujoco.MjData(model)
     camera = _camera_name(model, camera)
 
@@ -135,7 +186,8 @@ def play_viewer(qpos: np.ndarray, fps: int, camera: str | None, stride: int) -> 
 
 
 def main(
-    data_path: Path = Path("humanoidverse/data/lafan_29dof.pkl"),
+    data_path: Path | None = None,
+    robot: RobotName = "g1",
     motion: int | str = 0,
     output: Path | None = None,
     viewer: bool = False,
@@ -146,14 +198,17 @@ def main(
     height: int = 480,
     camera: str | None = "track",
 ) -> None:
-    """Visualize a LaFan 29-DOF motion pkl with the G1 MuJoCo model."""
+    """Visualize a converted robot motion pkl with MuJoCo."""
 
     if not viewer:
         os.environ.setdefault("MUJOCO_GL", "egl")
 
+    robot_spec = get_robot_spec(robot)
+    if data_path is None:
+        data_path = robot_spec.default_data_path
     data_path = data_path.resolve()
     key, motion_data, num_motions = _load_motion(data_path, motion)
-    qpos = _motion_to_qpos(motion_data)
+    qpos = _motion_to_qpos(motion_data, robot_spec.dof_size)
 
     fps = int(motion_data.get("fps", 30))
     if stride < 1:
@@ -164,18 +219,19 @@ def main(
     qpos = qpos[start:end]
 
     print(f"Loaded {data_path}")
+    print(f"Robot: {robot_spec.name} / XML: {robot_spec.mujoco_xml_path}")
     print(f"Motion {motion!r}: {key} ({num_motions} motions in file)")
     print(f"Frames: {len(qpos)} / fps: {fps} / stride: {stride}")
 
     if viewer:
-        play_viewer(qpos, fps=fps, camera=camera, stride=stride)
+        play_viewer(qpos, robot_spec=robot_spec, fps=fps, camera=camera, stride=stride)
         return
 
     if output is None:
         stem = data_path.stem.replace("/", "_")
         safe_key = str(key).replace("/", "_")
-        output = Path("outputs") / "motion_videos" / f"{stem}_{safe_key}.mp4"
-    render_video(qpos, output=output, fps=fps, width=width, height=height, camera=camera, stride=stride)
+        output = Path("outputs") / "motion_videos" / f"{robot_spec.name}_{stem}_{safe_key}.mp4"
+    render_video(qpos, robot_spec=robot_spec, output=output, fps=fps, width=width, height=height, camera=camera, stride=stride)
     print(f"Saved {output}")
 
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -9,9 +11,31 @@ import numpy as np
 from scipy.spatial.transform import Rotation as Rotation
 
 
-DEFAULT_INPUT_DIR = Path("data_process/lafan_dataset")
+DEFAULT_INPUT_DIR = Path("data_process/dataset/g1_lafan_dataset")
 DEFAULT_OUTPUT_DIR = Path("humanoidverse/data")
 DEFAULT_ROBOT_XML = Path("humanoidverse/data/robots/g1/g1_29dof.xml")
+PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_dataset")
+PIPLUS_LSE_ROBOT_XML = Path(
+    "humanoidverse/data/robots/piplus/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
+)
+
+
+def install_numpy_pickle_compat() -> None:
+    try:
+        importlib.import_module("numpy._core.multiarray")
+        return
+    except ModuleNotFoundError:
+        pass
+
+    import numpy.core as np_core
+
+    sys.modules.setdefault("numpy._core", np_core)
+    for module_name in ("multiarray", "_multiarray_umath", "numeric", "fromnumeric"):
+        try:
+            module = importlib.import_module(f"numpy.core.{module_name}")
+        except ModuleNotFoundError:
+            continue
+        sys.modules.setdefault(f"numpy._core.{module_name}", module)
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,54 +49,118 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--robot-xml", type=Path, default=DEFAULT_ROBOT_XML)
     parser.add_argument("--name", default="gmr_lafan")
+    parser.add_argument(
+        "--robot",
+        choices=("g1", "piplus_lse"),
+        default="g1",
+        help="Use piplus_lse to convert ~/HT_BFM/data_process/dataset/pi_LSE_dataset with the PiPlus LSE XML.",
+    )
+    parser.add_argument(
+        "--quat-order",
+        choices=("xyzw", "wxyz"),
+        default=None,
+        help="Quaternion component order in the source files. Defaults to wxyz for piplus_lse, xyzw otherwise.",
+    )
     parser.add_argument("--clip-seconds", type=float, default=10.0)
     parser.add_argument("--overwrite", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.robot == "piplus_lse":
+        if args.input_dir == DEFAULT_INPUT_DIR:
+            args.input_dir = PIPLUS_LSE_INPUT_DIR
+        if args.robot_xml == DEFAULT_ROBOT_XML:
+            args.robot_xml = PIPLUS_LSE_ROBOT_XML
+        if args.name == "gmr_lafan":
+            args.name = "piplus_lse_lafan"
+    if args.quat_order is None:
+        args.quat_order = "wxyz" if args.robot == "piplus_lse" else "xyzw"
+    return args
 
 
-def load_dof_axes(robot_xml: Path) -> np.ndarray:
+def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray]:
     root = ET.parse(robot_xml).getroot()
-    axes = []
+    motor_joints = [
+        motor.attrib.get("joint", motor.attrib.get("name"))
+        for actuator in root.iter("actuator")
+        for motor in actuator
+    ]
+    motor_joints = [name for name in motor_joints if name is not None]
 
+    joint_axes = {}
+    joint_order = []
     for joint in root.iter("joint"):
         if joint.attrib.get("type") == "free":
             continue
         axis = joint.attrib.get("axis")
         if axis is None:
-            raise ValueError(f"Joint {joint.attrib.get('name', '<unnamed>')} has no axis in {robot_xml}.")
-        axes.append([float(value) for value in axis.split()])
+            continue
+        name = joint.attrib.get("name")
+        joint_axes[name] = [float(value) for value in axis.split()]
+        joint_order.append(name)
 
-    axes = np.asarray(axes, dtype=np.float32)
-    if axes.shape != (29, 3):
-        raise ValueError(f"Expected 29 one-DOF joint axes from {robot_xml}, got shape {axes.shape}.")
-    return axes
+    joint_names = motor_joints or joint_order
+    axes = []
+    for name in joint_names:
+        if name not in joint_axes:
+            raise ValueError(f"Actuated joint {name} has no one-DOF axis in {robot_xml}.")
+        axes.append(joint_axes[name])
+
+    if not axes:
+        raise ValueError(f"No one-DOF actuated joints found in {robot_xml}.")
+    return joint_names, np.asarray(axes, dtype=np.float32)
 
 
-def normalize_quat_xyzw(quat: np.ndarray) -> np.ndarray:
+def normalize_quat_xyzw(quat: np.ndarray, quat_order: str) -> np.ndarray:
     quat = np.asarray(quat, dtype=np.float32)
+    if quat_order == "wxyz":
+        quat = quat[..., [1, 2, 3, 0]]
+    elif quat_order != "xyzw":
+        raise ValueError(f"Unsupported quaternion order: {quat_order}.")
     norm = np.linalg.norm(quat, axis=-1, keepdims=True)
     if np.any(norm <= 0.0):
         raise ValueError("root_rot contains zero-length quaternion(s).")
     return quat / norm
 
 
-def convert_motion(raw: dict, dof_axes: np.ndarray, source: Path) -> dict:
-    required = ("fps", "root_pos", "root_rot", "dof_pos")
-    missing = [key for key in required if key not in raw]
-    if missing:
-        raise KeyError(f"{source} is missing required field(s): {missing}")
+def get_raw_field(raw: dict, *names: str, source: Path):
+    for name in names:
+        if name in raw:
+            return raw[name]
+    raise KeyError(f"{source} is missing required field. Tried aliases: {names}")
 
-    root_pos = np.asarray(raw["root_pos"], dtype=np.float32)
-    root_rot = normalize_quat_xyzw(raw["root_rot"])
-    dof = np.asarray(raw["dof_pos"], dtype=np.float32)
-    fps = int(raw["fps"])
+
+def convert_motion(
+    raw: dict,
+    joint_names: list[str],
+    dof_axes: np.ndarray,
+    source: Path,
+    quat_order: str,
+) -> dict:
+    required = (
+        ("fps", "framerate"),
+        ("root_pos", "base_pos_w"),
+        ("root_rot", "base_quat_w"),
+        ("dof_pos", "joint_pos"),
+    )
+    missing = [aliases for aliases in required if not any(alias in raw for alias in aliases)]
+    if missing:
+        raise KeyError(f"{source} is missing required field alias group(s): {missing}")
+
+    root_pos = np.asarray(get_raw_field(raw, "root_pos", "base_pos_w", source=source), dtype=np.float32)
+    root_rot = normalize_quat_xyzw(get_raw_field(raw, "root_rot", "base_quat_w", source=source), quat_order)
+    dof = np.asarray(get_raw_field(raw, "dof_pos", "joint_pos", source=source), dtype=np.float32)
+    fps = int(get_raw_field(raw, "fps", "framerate", source=source))
 
     if root_pos.ndim != 2 or root_pos.shape[1] != 3:
         raise ValueError(f"{source}: root_pos must have shape (T, 3), got {root_pos.shape}.")
     if root_rot.ndim != 2 or root_rot.shape[1] != 4:
         raise ValueError(f"{source}: root_rot must have shape (T, 4), got {root_rot.shape}.")
-    if dof.ndim != 2 or dof.shape[1] != 29:
-        raise ValueError(f"{source}: dof_pos must have shape (T, 29), got {dof.shape}.")
+    if dof.ndim != 2 or dof.shape[1] != len(joint_names):
+        raise ValueError(f"{source}: dof_pos must have shape (T, {len(joint_names)}), got {dof.shape}.")
+    if "joint_names" in raw and list(raw["joint_names"]) != joint_names:
+        raise ValueError(
+            f"{source}: joint_names do not match robot XML motor order.\n"
+            f"raw: {raw['joint_names']}\nxml: {joint_names}"
+        )
     if not (root_pos.shape[0] == root_rot.shape[0] == dof.shape[0]):
         raise ValueError(
             f"{source}: root_pos, root_rot, and dof_pos frame counts do not match: "
@@ -94,17 +182,24 @@ def convert_motion(raw: dict, dof_axes: np.ndarray, source: Path) -> dict:
         "root_rot": root_rot,
         "smpl_joints": np.zeros((root_pos.shape[0], 24, 3), dtype=np.float32),
         "fps": fps,
+        "joint_names": joint_names,
     }
 
 
-def load_dataset(input_dir: Path, dof_axes: np.ndarray) -> dict[str, dict]:
+def load_dataset(
+    input_dir: Path,
+    joint_names: list[str],
+    dof_axes: np.ndarray,
+    quat_order: str,
+) -> dict[str, dict]:
     files = sorted(input_dir.glob("*.pkl"))
     if not files:
         raise FileNotFoundError(f"No .pkl files found in {input_dir}.")
 
     dataset = {}
+    install_numpy_pickle_compat()
     for path in files:
-        dataset[path.stem] = convert_motion(joblib.load(path), dof_axes, path)
+        dataset[path.stem] = convert_motion(joblib.load(path), joint_names, dof_axes, path, quat_order)
     return dataset
 
 
@@ -144,8 +239,8 @@ def main() -> None:
     output_full = args.output_dir / f"{args.name}.pkl"
     output_clips = args.output_dir / f"{args.name}_10s-clipped.pkl"
 
-    dof_axes = load_dof_axes(args.robot_xml)
-    dataset = load_dataset(args.input_dir, dof_axes)
+    joint_names, dof_axes = load_dof_metadata(args.robot_xml)
+    dataset = load_dataset(args.input_dir, joint_names, dof_axes, args.quat_order)
     clips = make_clips(dataset, args.clip_seconds)
 
     dump_dataset(dataset, output_full, args.overwrite)

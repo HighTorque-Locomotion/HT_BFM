@@ -67,7 +67,10 @@ class Humanoid_Batch:
         self._offsets = mjcf_data['local_translation'][None, ].to(device)
         
         self._local_rotation = mjcf_data['local_rotation'][None, ].to(device)
-        self.actuated_joints_idx = np.array([self.body_names.index(k) for k, v in mjcf_data['body_to_joint'].items()])
+        motor_joint_names = set(motors)
+        self.actuated_joints_idx = np.array(
+            [self.body_names.index(k) for k, v in mjcf_data['body_to_joint'].items() if v in motor_joint_names]
+        )
         
         
         for m in motors:
