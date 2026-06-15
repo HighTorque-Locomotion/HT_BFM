@@ -211,3 +211,4 @@ results/
 data_process/dataset
 humanoidverse/data
 outputs/
+_wandb/
