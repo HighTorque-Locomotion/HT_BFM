@@ -208,3 +208,6 @@ rosbags
 models
 instinct-venv
 results/
+data_process/dataset
+humanoidverse/data
+outputs/
