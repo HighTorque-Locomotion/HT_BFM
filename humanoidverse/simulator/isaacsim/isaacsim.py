@@ -48,6 +48,23 @@ from humanoidverse.simulator.isaacsim.events import randomize_body_com
 from isaaclab.envs.ui import ViewportCameraController
 from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
 from isaaclab.sensors import TiledCamera, TiledCameraCfg, Camera, CameraCfg, FrameTransformerCfg, FrameTransformer
+from humanoidverse.simulator.isaacsim.actuators import (
+    ARMATURE_3536,
+    ARMATURE_4438,
+    ARMATURE_5031,
+    ARMATURE_5036,
+    DAMPING_3536,
+    DAMPING_4438,
+    DAMPING_5031,
+    DAMPING_5036,
+    HTMotorCfg_4438,
+    HTMotorCfg_5031,
+    HTMotorCfg_5036,
+    STIFFNESS_3536,
+    STIFFNESS_4438,
+    STIFFNESS_5031,
+    STIFFNESS_5036,
+)
 
 class IsaacSim(BaseSimulator):
     def __init__(self, config, device):
@@ -246,6 +263,173 @@ class IsaacSim(BaseSimulator):
             self._resolve_isaacsim_torso_name(),
         )
 
+    def _build_implicit_actuators(
+        self,
+        dof_names_list,
+        dof_effort_limit_list,
+        dof_vel_limit_list,
+        dof_armature_list,
+        dof_joint_friction_list,
+    ):
+        stiffness_dict = {
+            ".*" + key + ".*": value
+            for key, value in self.robot_config.control.stiffness.items()
+        }
+        damping_dict = {
+            ".*" + key + ".*": value
+            for key, value in self.robot_config.control.damping.items()
+        }
+        return {
+            "all": ImplicitActuatorCfg(
+                joint_names_expr=[dof_names_list[i] for i in range(len(dof_names_list))],
+                effort_limit_sim={
+                    dof_names_list[i]: dof_effort_limit_list[i] for i in range(len(dof_names_list))
+                },
+                velocity_limit_sim={
+                    dof_names_list[i]: dof_vel_limit_list[i] for i in range(len(dof_names_list))
+                },
+                stiffness=stiffness_dict,
+                damping=damping_dict,
+                armature={
+                    dof_names_list[i]: dof_armature_list[i] for i in range(len(dof_names_list))
+                },
+                friction={
+                    dof_names_list[i]: dof_joint_friction_list[i] for i in range(len(dof_names_list))
+                },
+            )
+        }
+
+    def _build_piplus_ht_motor_actuators(self):
+        return {
+            "legs": HTMotorCfg_5036(
+                joint_names_expr=[
+                    ".*_thigh_joint",
+                    ".*_hip_roll_joint",
+                    ".*_hip_pitch_joint",
+                    ".*_calf_joint",
+                ],
+                effort_limit_sim={
+                    ".*_thigh_joint": 20.0,
+                    ".*_hip_roll_joint": 20.0,
+                    ".*_hip_pitch_joint": 20.0,
+                    ".*_calf_joint": 20.0,
+                },
+                velocity_limit_sim={
+                    ".*_thigh_joint": 60.0,
+                    ".*_hip_roll_joint": 60.0,
+                    ".*_hip_pitch_joint": 60.0,
+                    ".*_calf_joint": 60.0,
+                },
+                stiffness={
+                    ".*_hip_pitch_joint": STIFFNESS_5036,
+                    ".*_hip_roll_joint": STIFFNESS_5036,
+                    ".*_thigh_joint": STIFFNESS_5036,
+                    ".*_calf_joint": STIFFNESS_5036,
+                },
+                damping={
+                    ".*_hip_pitch_joint": DAMPING_5036,
+                    ".*_hip_roll_joint": DAMPING_5036,
+                    ".*_thigh_joint": DAMPING_5036,
+                    ".*_calf_joint": DAMPING_5036,
+                },
+                armature={
+                    ".*_hip_pitch_joint": ARMATURE_5036,
+                    ".*_hip_roll_joint": ARMATURE_5036,
+                    ".*_thigh_joint": ARMATURE_5036,
+                    ".*_calf_joint": ARMATURE_5036,
+                },
+                min_delay=0,
+                max_delay=3,
+            ),
+            "feet": HTMotorCfg_5036(
+                joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
+                effort_limit_sim=20.0,
+                velocity_limit_sim=60.0,
+                stiffness=STIFFNESS_5036,
+                damping=DAMPING_5036,
+                armature=ARMATURE_5036,
+                min_delay=0,
+                max_delay=3,
+            ),
+            "waist_yaw": HTMotorCfg_5031(
+                joint_names_expr=["waist_yaw_joint"],
+                effort_limit_sim=20.0,
+                velocity_limit_sim=60.0,
+                stiffness=STIFFNESS_5031,
+                damping=DAMPING_5031,
+                armature=ARMATURE_5031,
+                min_delay=0,
+                max_delay=3,
+            ),
+            "head": ImplicitActuatorCfg(
+                joint_names_expr=[".*head_yaw_joint", ".*head_pitch_joint"],
+                effort_limit_sim=3.0,
+                velocity_limit_sim=60.0,
+                stiffness=STIFFNESS_3536,
+                damping=DAMPING_3536,
+                armature=ARMATURE_3536,
+            ),
+            "arms": HTMotorCfg_4438(
+                joint_names_expr=[
+                    ".*_shoulder_pitch_joint",
+                    ".*_shoulder_roll_joint",
+                    ".*_upper_arm_joint",
+                    ".*_elbow_joint",
+                ],
+                effort_limit_sim={
+                    ".*_shoulder_pitch_joint": 20.0,
+                    ".*_shoulder_roll_joint": 20.0,
+                    ".*_upper_arm_joint": 20.0,
+                    ".*_elbow_joint": 20.0,
+                },
+                velocity_limit_sim={
+                    ".*_shoulder_pitch_joint": 60.0,
+                    ".*_shoulder_roll_joint": 60.0,
+                    ".*_upper_arm_joint": 60.0,
+                    ".*_elbow_joint": 60.0,
+                },
+                stiffness={
+                    ".*_shoulder_pitch_joint": STIFFNESS_4438,
+                    ".*_shoulder_roll_joint": STIFFNESS_4438,
+                    ".*_upper_arm_joint": STIFFNESS_4438,
+                    ".*_elbow_joint": STIFFNESS_4438,
+                },
+                damping={
+                    ".*_shoulder_pitch_joint": DAMPING_4438,
+                    ".*_shoulder_roll_joint": DAMPING_4438,
+                    ".*_upper_arm_joint": DAMPING_4438,
+                    ".*_elbow_joint": DAMPING_4438,
+                },
+                armature={
+                    ".*_shoulder_pitch_joint": ARMATURE_4438,
+                    ".*_shoulder_roll_joint": ARMATURE_4438,
+                    ".*_upper_arm_joint": ARMATURE_4438,
+                    ".*_elbow_joint": ARMATURE_4438,
+                },
+                min_delay=0,
+                max_delay=3,
+            ),
+        }
+
+    def _build_actuators(
+        self,
+        dof_names_list,
+        dof_effort_limit_list,
+        dof_vel_limit_list,
+        dof_armature_list,
+        dof_joint_friction_list,
+    ):
+        if self.robot_config.control.get("use_ht_motor", False):
+            print("Using HTMotorCfg")
+            return self._build_piplus_ht_motor_actuators()
+        return self._build_implicit_actuators(
+            dof_names_list,
+            dof_effort_limit_list,
+            dof_vel_limit_list,
+            dof_armature_list,
+            dof_joint_friction_list,
+        )
+
     def _setup_scene(self):
         asset_root = self.robot_config.asset.asset_root
         asset_path = self.robot_config.asset.usd_file or self.robot_config.asset.urdf_file
@@ -323,27 +507,12 @@ class IsaacSim(BaseSimulator):
                     print(f"key: {key}, kp: {stiffness_dict[key]}, kd: {damping_dict[key]}")
                     
                     
-        stiffness_dict = {".*" + key + ".*": value for key, value in stiffness_dict.items()}
-        damping_dict = {".*" + key + ".*": value for key, value in damping_dict.items()}
-        actuators = dict()
-        actuators["all"] = ImplicitActuatorCfg(
-            joint_names_expr=[dof_names_list[i] for i in range(len(dof_names_list))],
-            effort_limit_sim={
-                dof_names_list[i]: dof_effort_limit_list[i] for i in range(len(dof_names_list))
-            },
-            velocity_limit_sim={
-                dof_names_list[i]: dof_vel_limit_list[i] for i in range(len(dof_names_list))
-            },
-            # stiffness=0,
-            # damping=0,
-            stiffness=stiffness_dict,
-            damping=damping_dict,
-            armature={
-                dof_names_list[i]: dof_armature_list[i] for i in range(len(dof_names_list))
-            },
-            friction={
-                dof_names_list[i]: dof_joint_friction_list[i] for i in range(len(dof_names_list))
-            }
+        actuators = self._build_actuators(
+            dof_names_list,
+            dof_effort_limit_list,
+            dof_vel_limit_list,
+            dof_armature_list,
+            dof_joint_friction_list,
         )
  
         robot_articulation_config: ArticulationCfg = ARTICULATION_CFG.replace(prim_path="/World/envs/env_.*/Robot", spawn=spawn, init_state=init_state, actuators=actuators)
