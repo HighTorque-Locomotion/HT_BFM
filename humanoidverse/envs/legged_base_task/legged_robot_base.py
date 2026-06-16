@@ -42,6 +42,8 @@ class LeggedRobotBase(BaseTask):
         self.imu_body_name = self.config.robot.imu_body_name
         if getattr(self.simulator, "imu_body", None) is None:
             raise RuntimeError(f"Expected IsaacLab IMU sensor 'imu_body' on {self.imu_body_name}.")
+        else:
+            print(f"IMU body name: {self.imu_body_name}")
         from isaaclab.managers import SceneEntityCfg
         import isaaclab.envs.mdp as isaaclab_mdp
 

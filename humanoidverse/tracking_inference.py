@@ -36,6 +36,10 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
         config = json.load(f)
 
     use_root_height_obs = config["env"].get("root_height_obs", False)
+    resolved_config_path = model_folder / "config.yaml"
+    if resolved_config_path.exists():
+        config["env"]["resolved_config_path"] = str(resolved_config_path.resolve())
+        print(f"Loading inference YAML config from {resolved_config_path.resolve()}")
 
     if data_path is not None:
         config["env"]["lafan_tail_path"] = str(Path(data_path).resolve())
@@ -140,7 +144,7 @@ def main(model_folder: Path, data_path: Path | None = None, headless: bool = Tru
 
     # Visualization length: match inference length so expert and policy videos align
     episode_len = z.shape[0]
-    episode_len = 500
+    episode_len = 1500
     print(f"Saving video for tracking ({episode_len} steps)")
     if save_mp4:
         rgb_renderer = IsaacRendererWithMuJoco(render_size=256)
