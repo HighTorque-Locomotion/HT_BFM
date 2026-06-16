@@ -184,7 +184,7 @@ def main(
     robot: RobotName = "g1",
     motion: int | str = 0,
     output: Path | None = None,
-    viewer: bool = False,
+    viewer: bool = True,
     start: int = 0,
     max_frames: int | None = 500,
     stride: int = 1,

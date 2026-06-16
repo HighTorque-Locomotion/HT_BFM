@@ -6,6 +6,14 @@ import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+HT_URDF_REPO = REPO_ROOT.parent / "ht_urdf"
+if HT_URDF_REPO.exists() and str(HT_URDF_REPO) not in sys.path:
+    sys.path.insert(0, str(HT_URDF_REPO))
+
 import joblib
 import numpy as np
 from scipy.spatial.transform import Rotation as Rotation
@@ -16,7 +24,7 @@ from humanoidverse.utils.asset_paths import resolve_asset_path
 DEFAULT_INPUT_DIR = Path("data_process/dataset/g1_lafan_dataset")
 DEFAULT_OUTPUT_DIR = Path("humanoidverse/data")
 DEFAULT_ROBOT_XML = Path("humanoidverse/data/robots/g1/g1_29dof.xml")
-PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_dataset")
+PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset")
 PIPLUS_LSE_ROBOT_XML = "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
 
 
