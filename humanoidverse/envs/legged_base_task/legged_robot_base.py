@@ -22,8 +22,6 @@ from datetime import datetime, timedelta
 import imageio
 from loguru import logger
 import copy
-import isaaclab.envs.mdp as isaaclab_mdp
-from isaaclab.managers import SceneEntityCfg
 
 class LeggedRobotBase(BaseTask):
     def __init__(self, config, device):
@@ -44,6 +42,10 @@ class LeggedRobotBase(BaseTask):
         self.imu_body_name = self.config.robot.imu_body_name
         if getattr(self.simulator, "imu_body", None) is None:
             raise RuntimeError(f"Expected IsaacLab IMU sensor 'imu_body' on {self.imu_body_name}.")
+        from isaaclab.managers import SceneEntityCfg
+        import isaaclab.envs.mdp as isaaclab_mdp
+
+        self.isaaclab_mdp = isaaclab_mdp
         self.imu_asset_cfg = SceneEntityCfg(name="imu_body")
         self._last_imu_sensor_refresh_step = None
         self.imu_quat = torch.zeros_like(self.base_quat)
@@ -376,11 +378,11 @@ class LeggedRobotBase(BaseTask):
 
     def _get_isaaclab_imu_ang_vel(self):
         self._refresh_isaaclab_imu_sensor()
-        return isaaclab_mdp.imu_ang_vel(self.simulator, asset_cfg=self.imu_asset_cfg)
+        return self.isaaclab_mdp.imu_ang_vel(self.simulator, asset_cfg=self.imu_asset_cfg)
 
     def _get_isaaclab_imu_projected_gravity(self):
         self._refresh_isaaclab_imu_sensor()
-        return isaaclab_mdp.imu_projected_gravity(self.simulator, asset_cfg=self.imu_asset_cfg)
+        return self.isaaclab_mdp.imu_projected_gravity(self.simulator, asset_cfg=self.imu_asset_cfg)
 
     def _pre_compute_observations_callback(self):
         # prepare quantities
