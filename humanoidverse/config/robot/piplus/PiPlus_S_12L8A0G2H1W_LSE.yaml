@@ -23,6 +23,7 @@ robot:
   has_torso: True
   torso_name: "waist_yaw_link"
   isaacsim_torso_name: "waist_yaw_link"
+  imu_body_name: "waist_yaw_link"
   has_upper_body_dof: True
 
   dof_names: [

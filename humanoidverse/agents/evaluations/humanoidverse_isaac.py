@@ -224,12 +224,24 @@ def get_backward_observation(env, motion_id, include_last_action, velocity_multi
         )
     max_local_self_obs = torch.cat([v for v in obs_dict.values()], dim=-1)
 
+    imu_body_idx = 0
+    imu_body_name = env.config.robot.get("imu_body_name", None)
+    if imu_body_name is not None:
+        if env.motion_body_ids is not None:
+            imu_body_idx = env.simulator._body_list.index(imu_body_name)
+        else:
+            imu_body_idx = env._motion_lib.mesh_parsers.body_names.index(imu_body_name)
+    imu_quat = ref_body_rots[:, imu_body_idx]
+    ref_ang_vel = ref_body_angular_vels[:, imu_body_idx]
+    projected_gravity = quat_rotate_inverse(
+        imu_quat,
+        env.gravity_vec[0:1].repeat(max_local_self_obs.shape[0], 1),
+        w_last=True,
+    )
+
     if env.config.obs.use_obs_filter:
-        base_quat = ref_body_rots[:, 0]  # root orientation
         # ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
         # ref_dof_vel = motion_state["dof_vel"]
-        ref_ang_vel = ref_body_angular_vels[:, 0]
-        projected_gravity = quat_rotate_inverse(base_quat, env.gravity_vec[0:1].repeat(max_local_self_obs.shape[0], 1), w_last=True)
         bogus_actions = ref_dof_pos
 
         bogus_history_actor = torch.cat([bogus_actions, ref_ang_vel, ref_dof_pos, ref_dof_vel, projected_gravity], dim=-1).repeat(1, 4)
@@ -258,8 +270,6 @@ def get_backward_observation(env, motion_id, include_last_action, velocity_multi
         ref_dict = {
             "max_local_self_obs": max_local_self_obs,
         }
-
-    projected_gravity = quat_rotate_inverse(base_quat, env.gravity_vec[0:1].repeat(max_local_self_obs.shape[0], 1), w_last=True)
 
     # TODO ensure this is correct
     g1env_state = torch.cat(

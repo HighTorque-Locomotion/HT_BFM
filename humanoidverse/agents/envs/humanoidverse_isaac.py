@@ -75,11 +75,18 @@ def load_expert_trajectories_from_motion_lib(env, agent_cfg, device="cpu", add_h
         max_local_self_obs = torch.cat([v for v in obs_dict.values()], dim=-1)
 
         # Aligned with the logic below to create proprio state
-        base_quat = ref_body_rots[:, 0]
+        imu_body_idx = 0
+        imu_body_name = env.config.robot.get("imu_body_name", None)
+        if imu_body_name is not None:
+            if env.motion_body_ids is not None:
+                imu_body_idx = env.simulator._body_list.index(imu_body_name)
+            else:
+                imu_body_idx = env._motion_lib.mesh_parsers.body_names.index(imu_body_name)
+        imu_quat = ref_body_rots[:, imu_body_idx]
         ref_dof_pos = motion_res["dof_pos"] - env.default_dof_pos[0]
         ref_dof_vel = motion_res["dof_vel"]
-        ref_ang_vel = ref_body_angular_vels[:, 0]
-        projected_gravity = quat_rotate_inverse(base_quat, env.gravity_vec[0:1].repeat(max_local_self_obs.shape[0], 1), w_last=True)
+        ref_ang_vel = ref_body_angular_vels[:, imu_body_idx]
+        projected_gravity = quat_rotate_inverse(imu_quat, env.gravity_vec[0:1].repeat(max_local_self_obs.shape[0], 1), w_last=True)
         # NOTE we multiply by zero to align with mujoco data
         bogus_actions = ref_dof_pos * 0  # bogus actions
 
