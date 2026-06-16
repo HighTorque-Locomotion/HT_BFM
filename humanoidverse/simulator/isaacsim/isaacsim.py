@@ -14,9 +14,9 @@ from isaaclab.scene import InteractiveScene
 from isaaclab.utils.timer import Timer
 
 from isaaclab.assets import Articulation
-from isaaclab.sensors import ContactSensor, RayCaster
+from isaaclab.sensors import ContactSensor, Imu, RayCaster
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
-from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
+from isaaclab.sensors import ContactSensorCfg, ImuCfg, RayCasterCfg, patterns
 from isaaclab.assets import ArticulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG
@@ -521,6 +521,14 @@ class IsaacSim(BaseSimulator):
             prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
         )
 
+        imu_body_name = self.robot_config.get("imu_body_name", None)
+        imu_body_config = None
+        if imu_body_name is not None:
+            imu_body_config = ImuCfg(
+                prim_path=f"/World/envs/env_.*/Robot/{imu_body_name}",
+                offset=ImuCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+            )
+
         height_scanner_body = self._resolve_height_scanner_body_name()
         # Add a height scanner to the robot root body to detect the height of the terrain mesh.
         height_scanner_config = RayCasterCfg(
@@ -607,6 +615,10 @@ class IsaacSim(BaseSimulator):
         self.scene.articulations["robot"] = self._robot
         self.contact_sensor = ContactSensor(contact_sensor_config)
         self.scene.sensors["contact_sensor"] = self.contact_sensor
+        self.imu_body = None
+        if imu_body_config is not None:
+            self.imu_body = Imu(imu_body_config)
+            self.scene.sensors["imu_body"] = self.imu_body
         self._height_scanner = RayCaster(height_scanner_config)
         self.scene.sensors["height_scanner"] = self._height_scanner
 
