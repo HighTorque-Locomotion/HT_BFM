@@ -598,6 +598,10 @@ class HumanoidVerseIsaacConfig(BaseConfig):
 
     # Relative path inside the humanoidverse/config directory
     relative_config_path: str = HYDRA_CONFIG_REL_PATH
+    # Optional fully composed Hydra config saved with a trained model.
+    # This is only used when inference scripts set it explicitly; training and
+    # resumed training leave it as None and keep composing from relative_config_path.
+    resolved_config_path: str | None = None
 
     include_last_action: bool = True
     hydra_overrides: tp.List[str] = pydantic.Field(default_factory=list)
@@ -630,13 +634,18 @@ class HumanoidVerseIsaacConfig(BaseConfig):
                 )
             return _humanoidverse_env_singleton, {}
 
-        # Use config from humanoidverse to create the environment
-        # however, we need to make sure we use isaacsim instead of isaacgym
-        # --> create new file with that single line changed
+        # Use the fully composed config saved with the model when available.
+        # Otherwise fall back to composing from the repo Hydra config directory.
         hydra_overrides = self.hydra_overrides.copy()
 
-        with hydra.initialize_config_dir(config_dir=HYDRA_CONFIG_DIR):
-            cfg = hydra.compose(config_name=self.relative_config_path, overrides=hydra_overrides or [])
+        if self.resolved_config_path is not None:
+            cfg = OmegaConf.load(self.resolved_config_path)
+            value_overrides = [override for override in hydra_overrides if "." in override.split("=", 1)[0]]
+            if value_overrides:
+                cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(value_overrides))
+        else:
+            with hydra.initialize_config_dir(config_dir=HYDRA_CONFIG_DIR):
+                cfg = hydra.compose(config_name=self.relative_config_path, overrides=hydra_overrides or [])
         unresolved_conf = OmegaConf.to_container(cfg, resolve=False)
 
         # Add custom resolvers used in the configs
