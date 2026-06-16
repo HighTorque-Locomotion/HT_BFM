@@ -66,7 +66,7 @@ conda create -n HT_BFM --clone HT_lab的环境
 
   conda activate HT_BFM
   cd /data/laihuiying/BFM-Zero
-
+  # for 5090
   python -m pip install \
     "easydict>=1.13" \
     "exca==0.4.5" \
@@ -84,7 +84,26 @@ conda create -n HT_BFM --clone HT_lab的环境
     "termcolor>=3.0.1" \
     "tyro>=0.9.18"\
     "wandb"\
-
+# for 4090
+python -m pip install \
+  "numpy==1.26.0" \
+  "packaging==23.0" \
+  "easydict>=1.13" \
+  "exca==0.4.5" \
+  "humenv @ git+https://github.com/facebookresearch/humenv.git" \
+  "loguru>=0.7.3" \
+  "mediapy>=1.2.3" \
+  "ml-collections>=1.1.0" \
+  "mujoco==3.8.1" \
+  "notebook>=7.4.2" \
+  "numpy-stl>=3.2.0" \
+  "onnxruntime==1.26.0" \
+  "open3d>=0.19.0" \
+  "pot>=0.9.5" \
+  "tensordict>=0.8.3" \
+  "termcolor>=3.0.1" \
+  "tyro>=0.9.18" \
+  "wandb"
  conda install -c conda-forge libglu mesalib
 
 
