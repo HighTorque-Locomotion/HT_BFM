@@ -57,10 +57,18 @@ class LeggedRobotMotions(LeggedRobotBase):
         self._motion_lib = MotionLibRobot(self.config.robot.motion, num_envs=self.num_envs, device=self.device)
         self._motion_lib.load_motions_for_training(max_num_seqs=self.num_envs)
         self.motion_body_ids = None
+        self.motion_body_names = None
+        self.sim_obs_body_ids = None
         if "isaacsim_body_names" in self.config.robot:
             motion_body_names = self._motion_lib.mesh_parsers.body_names
+            self.motion_body_names = list(self.config.robot.isaacsim_body_names)
             self.motion_body_ids = torch.tensor(
-                [motion_body_names.index(body_name) for body_name in self.simulator._body_list],
+                [motion_body_names.index(body_name) for body_name in self.motion_body_names],
+                device=self.device,
+                dtype=torch.long,
+            )
+            self.sim_obs_body_ids = torch.tensor(
+                [self.simulator._body_list.index(body_name) for body_name in self.motion_body_names],
                 device=self.device,
                 dtype=torch.long,
             )
@@ -72,12 +80,13 @@ class LeggedRobotMotions(LeggedRobotBase):
         self.num_motions = self._motion_lib._num_unique_motions
 
     def _init_tracking_config(self):
+        body_list = self.motion_body_names if self.motion_body_names is not None else self.simulator._body_list
         if "motion_tracking_link" in self.config.robot.motion:
-            self.motion_tracking_id = [self.simulator._body_list.index(link) for link in self.config.robot.motion.motion_tracking_link]
+            self.motion_tracking_id = [body_list.index(link) for link in self.config.robot.motion.motion_tracking_link]
         if "lower_body_link" in self.config.robot.motion:
-            self.lower_body_id = [self.simulator._body_list.index(link) for link in self.config.robot.motion.lower_body_link]
+            self.lower_body_id = [body_list.index(link) for link in self.config.robot.motion.lower_body_link]
         if "upper_body_link" in self.config.robot.motion:
-            self.upper_body_id = [self.simulator._body_list.index(link) for link in self.config.robot.motion.upper_body_link]
+            self.upper_body_id = [body_list.index(link) for link in self.config.robot.motion.upper_body_link]
         if self.config.resample_motion_when_training:
             self.resample_time_interval = np.ceil(self.config.resample_time_interval_s / self.dt)
         
@@ -99,10 +108,11 @@ class LeggedRobotMotions(LeggedRobotBase):
         else:
             self.num_extend_bodies = 0
             
-        self.ref_body_pos_extend = torch.zeros(self.num_envs, self.num_bodies + self.num_extend_bodies, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        self.dif_global_body_pos = torch.zeros(self.num_envs, self.num_bodies + self.num_extend_bodies, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        num_obs_bodies = len(self.motion_body_names) if self.motion_body_names is not None else self.num_bodies
+        self.ref_body_pos_extend = torch.zeros(self.num_envs, num_obs_bodies + self.num_extend_bodies, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        self.dif_global_body_pos = torch.zeros(self.num_envs, num_obs_bodies + self.num_extend_bodies, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.marker_coords = torch.zeros(self.num_envs, 
-                                        self.num_bodies + self.num_extend_bodies, 
+                                        num_obs_bodies + self.num_extend_bodies,
                                         3, 
                                         dtype=torch.float, 
                                         device=self.device, 
@@ -219,40 +229,50 @@ class LeggedRobotMotions(LeggedRobotBase):
         ref_joint_pos = motion_res["dof_pos"] # [num_envs, num_dofs]
         ref_joint_vel = motion_res["dof_vel"] # [num_envs, num_dofs]
         
-        env_batch_size = self.simulator._rigid_body_pos.shape[0]
-        num_rigid_bodies = self.simulator._rigid_body_pos.shape[1]
+        sim_rigid_body_pos = self.simulator._rigid_body_pos
+        sim_rigid_body_rot = self.simulator._rigid_body_rot
+        sim_rigid_body_vel = self.simulator._rigid_body_vel
+        sim_rigid_body_ang_vel = self.simulator._rigid_body_ang_vel
         
         ################### EXTEND Rigid body POS #####################
         if self.num_extend_bodies > 0:
             rotated_pos_in_parent = my_quat_rotate(
-                self.simulator._rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
+                sim_rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
                 self.extend_body_pos_in_parent.reshape(-1, 3)
             )
             extend_curr_pos = my_quat_rotate(
                 self.extend_body_rot_in_parent_xyzw.reshape(-1, 4),
                 rotated_pos_in_parent
-            ).view(self.num_envs, -1, 3) + self.simulator._rigid_body_pos[:, self.extend_body_parent_ids]
-            self._rigid_body_pos_extend = torch.cat([self.simulator._rigid_body_pos, extend_curr_pos], dim=1)
+            ).view(self.num_envs, -1, 3) + sim_rigid_body_pos[:, self.extend_body_parent_ids]
+            self._rigid_body_pos_extend = torch.cat([sim_rigid_body_pos, extend_curr_pos], dim=1)
 
             ################### EXTEND Rigid body Rotation #####################
-            extend_curr_rot = quat_mul(self.simulator._rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
+            extend_curr_rot = quat_mul(sim_rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
                                         self.extend_body_rot_in_parent_xyzw.reshape(-1, 4),
                                         w_last=True).view(self.num_envs, -1, 4)
-            self._rigid_body_rot_extend = torch.cat([self.simulator._rigid_body_rot, extend_curr_rot], dim=1)
+            self._rigid_body_rot_extend = torch.cat([sim_rigid_body_rot, extend_curr_rot], dim=1)
             
             ################### EXTEND Rigid Body Angular Velocity #####################
-            self._rigid_body_ang_vel_extend = torch.cat([self.simulator._rigid_body_ang_vel, self.simulator._rigid_body_ang_vel[:, self.extend_body_parent_ids]], dim=1)
+            self._rigid_body_ang_vel_extend = torch.cat([sim_rigid_body_ang_vel, sim_rigid_body_ang_vel[:, self.extend_body_parent_ids]], dim=1)
         
             ################### EXTEND Rigid Body Linear Velocity #####################
-            self._rigid_body_ang_vel_global = self.simulator._rigid_body_ang_vel[:, self.extend_body_parent_ids]
+            self._rigid_body_ang_vel_global = sim_rigid_body_ang_vel[:, self.extend_body_parent_ids]
             angular_velocity_contribution = torch.cross(self._rigid_body_ang_vel_global, self.extend_body_pos_in_parent.view(self.num_envs, -1, 3), dim=2)
-            extend_curr_vel = self.simulator._rigid_body_vel[:, self.extend_body_parent_ids] + angular_velocity_contribution.view(self.num_envs, -1, 3)
-            self._rigid_body_vel_extend = torch.cat([self.simulator._rigid_body_vel, extend_curr_vel], dim=1)
+            extend_curr_vel = sim_rigid_body_vel[:, self.extend_body_parent_ids] + angular_velocity_contribution.view(self.num_envs, -1, 3)
+            self._rigid_body_vel_extend = torch.cat([sim_rigid_body_vel, extend_curr_vel], dim=1)
         else:
-            self._rigid_body_vel_extend = self.simulator._rigid_body_vel
-            self._rigid_body_ang_vel_extend = self.simulator._rigid_body_ang_vel
-            self._rigid_body_pos_extend = self.simulator._rigid_body_pos
-            self._rigid_body_rot_extend = self.simulator._rigid_body_rot
+            if self.sim_obs_body_ids is not None:
+                sim_rigid_body_pos = sim_rigid_body_pos[:, self.sim_obs_body_ids]
+                sim_rigid_body_rot = sim_rigid_body_rot[:, self.sim_obs_body_ids]
+                sim_rigid_body_vel = sim_rigid_body_vel[:, self.sim_obs_body_ids]
+                sim_rigid_body_ang_vel = sim_rigid_body_ang_vel[:, self.sim_obs_body_ids]
+            self._rigid_body_vel_extend = sim_rigid_body_vel
+            self._rigid_body_ang_vel_extend = sim_rigid_body_ang_vel
+            self._rigid_body_pos_extend = sim_rigid_body_pos
+            self._rigid_body_rot_extend = sim_rigid_body_rot
+
+        env_batch_size = self._rigid_body_pos_extend.shape[0]
+        num_rigid_bodies = self._rigid_body_pos_extend.shape[1]
 
         #### Heading quantatives ####
         heading_inv_rot = calc_heading_quat_inv(self.simulator.robot_root_states[:, 3:7].clone(), w_last=True)

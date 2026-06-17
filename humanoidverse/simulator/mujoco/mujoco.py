@@ -36,6 +36,7 @@ class MuJoCo(BaseSimulator):
 
         self.model = mujoco.MjModel.from_xml_path(self.model_path)
         self.data = mujoco.MjData(self.model)
+        self.dof_ctrl_ids = self._build_dof_ctrl_ids()
         self.sim_substeps = self.simulator_config.sim.substeps
         self.sim_dt = 1 / self.simulator_config.sim.fps  # MuJoCo timestep from the model options.
 
@@ -57,6 +58,37 @@ class MuJoCo(BaseSimulator):
 
         self.episodic_domain_randomization(None)
 
+    def _build_dof_ctrl_ids(self):
+        joint_name_to_ctrl_ids = {}
+        for actuator_id in range(self.model.nu):
+            joint_id = int(self.model.actuator_trnid[actuator_id, 0])
+            if joint_id < 0:
+                continue
+            joint_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if joint_name is not None:
+                joint_name_to_ctrl_ids.setdefault(joint_name, []).append(actuator_id)
+
+        ctrl_ids = []
+        missing = []
+        duplicates = {}
+        for dof_name in self.robot_cfg.dof_names:
+            actuator_ids = joint_name_to_ctrl_ids.get(str(dof_name), [])
+            if not actuator_ids:
+                missing.append(str(dof_name))
+            elif len(actuator_ids) > 1:
+                duplicates[str(dof_name)] = actuator_ids
+            else:
+                ctrl_ids.append(actuator_ids[0])
+
+        if missing or duplicates:
+            details = []
+            if missing:
+                details.append(f"missing actuators for DOFs: {missing}")
+            if duplicates:
+                details.append(f"multiple actuators for DOFs: {duplicates}")
+            raise ValueError("Invalid MuJoCo actuator mapping; " + "; ".join(details))
+
+        return np.asarray(ctrl_ids, dtype=np.int32)
 
     def episodic_domain_randomization(self, env_ids):
         # First reset to defaults
@@ -230,10 +262,10 @@ class MuJoCo(BaseSimulator):
         # Convert torch tensor to numpy if needed.
         if isinstance(torques, torch.Tensor):
             torques = torques.cpu().numpy()
-        if self.freebase:
-            self.data.ctrl[6:] = torques
-        else:   
-            self.data.ctrl[:] = torques
+        torques = np.asarray(torques).reshape(-1)
+        if torques.shape[0] != self.num_dof:
+            raise ValueError(f"Expected {self.num_dof} torques, got {torques.shape[0]}.")
+        self.data.ctrl[self.dof_ctrl_ids] = torques
         # mujoco.mj_step(self.model, self.data)
     
     def set_actor_root_state_tensor(self, set_env_ids, root_states):
@@ -292,7 +324,7 @@ class MuJoCo(BaseSimulator):
         dof_props["velocity"] = torch.tensor([model.dof_damping[6:][i] for i in range(self.num_dof)])
 
         # Torque limits (from actuator control range)
-        dof_props["effort"] = torch.tensor([model.actuator_ctrlrange[6:][i, 1] for i in range(self.num_dof)])
+        dof_props["effort"] = torch.tensor([model.actuator_ctrlrange[self.dof_ctrl_ids[i], 1] for i in range(self.num_dof)])
 
         return dof_props
 
