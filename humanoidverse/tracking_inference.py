@@ -131,8 +131,14 @@ def main(
     _append_or_replace_hydra_override(hydra_overrides, "env.config.max_episode_length_s=10000")
     _append_or_replace_hydra_override(hydra_overrides, f"env.config.headless={headless}")
     _append_or_replace_hydra_override(hydra_overrides, f"simulator={simulator}")
-    if simulator == "mujoco" and robot in (None, "g1"):
-        _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
+    if simulator == "mujoco":
+        if robot in (None, "g1"):
+            _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
+        elif robot in ("PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"):
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
+            )
     config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
     config["env"]["disable_obs_noise"] = disable_obs_noise

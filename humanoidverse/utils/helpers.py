@@ -204,7 +204,9 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
         imu_body_idx = 0
         imu_body_name = env.config.robot.get("imu_body_name", None)
         if imu_body_name is not None:
-            motion_body_names = env._motion_lib.mesh_parsers.body_names
+            motion_body_names = getattr(env, "motion_body_names", None)
+            if motion_body_names is None:
+                motion_body_names = env._motion_lib.mesh_parsers.body_names
             imu_body_idx = motion_body_names.index(imu_body_name)
 
         imu_quat = ref_body_rots[:, imu_body_idx]
