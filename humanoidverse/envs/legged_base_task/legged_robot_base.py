@@ -40,15 +40,22 @@ class LeggedRobotBase(BaseTask):
 
         self.base_quat = self.simulator.base_quat
         self.imu_body_name = self.config.robot.imu_body_name
-        if getattr(self.simulator, "imu_body", None) is None:
-            raise RuntimeError(f"Expected IsaacLab IMU sensor 'imu_body' on {self.imu_body_name}.")
-        else:
+        self.use_isaaclab_imu = getattr(self.simulator, "imu_body", None) is not None
+        self.imu_body_index = None
+        self.isaaclab_mdp = None
+        self.imu_asset_cfg = None
+        if self.use_isaaclab_imu:
             print(f"IMU body name: {self.imu_body_name}")
-        from isaaclab.managers import SceneEntityCfg
-        import isaaclab.envs.mdp as isaaclab_mdp
+            from isaaclab.managers import SceneEntityCfg
+            import isaaclab.envs.mdp as isaaclab_mdp
 
-        self.isaaclab_mdp = isaaclab_mdp
-        self.imu_asset_cfg = SceneEntityCfg(name="imu_body")
+            self.isaaclab_mdp = isaaclab_mdp
+            self.imu_asset_cfg = SceneEntityCfg(name="imu_body")
+        else:
+            if self.imu_body_name is None:
+                raise RuntimeError("Expected robot.imu_body_name when IsaacLab IMU sensor is unavailable.")
+            self.imu_body_index = self.simulator.find_rigid_body_indice(self.imu_body_name)
+            print(f"IMU body name: {self.imu_body_name}; using simulator rigid body state")
         self._last_imu_sensor_refresh_step = None
         self.imu_quat = torch.zeros_like(self.base_quat)
         self.imu_quat[:] = self._get_imu_quat()
@@ -72,13 +79,13 @@ class LeggedRobotBase(BaseTask):
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
         self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.simulator.robot_root_states[:, 7:10], w_last=True)
-        self.base_ang_vel = self._get_isaaclab_imu_ang_vel().clone()
+        self.base_ang_vel = self._get_imu_ang_vel().clone()
         
         self.target_robot_root_states = torch.zeros(self.num_envs, 13, dtype=torch.float, device=self.device, requires_grad=False)
         self.target_robot_dof_state = torch.zeros(self.num_envs, self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False)
         
         
-        self.projected_gravity = self._get_isaaclab_imu_projected_gravity().clone()
+        self.projected_gravity = self._get_imu_projected_gravity().clone()
         self.push_robot_recovery_counter = torch.zeros(self.num_envs, dtype=torch.int, device=self.device, requires_grad=False)
         # joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
@@ -364,10 +371,14 @@ class LeggedRobotBase(BaseTask):
         pass
 
     def _get_imu_quat(self):
+        if not self.use_isaaclab_imu:
+            return self.simulator._rigid_body_rot[:, self.imu_body_index]
         self._refresh_isaaclab_imu_sensor()
         return self.simulator.imu_body.data.quat_w[:, [1, 2, 3, 0]]
 
     def _refresh_isaaclab_imu_sensor(self, force=False):
+        if not self.use_isaaclab_imu:
+            return
         if not self.simulator.imu_body.is_initialized:
             raise RuntimeError("IsaacLab IMU sensor 'imu_body' is not initialized.")
 
@@ -378,11 +389,19 @@ class LeggedRobotBase(BaseTask):
         self.simulator.imu_body.update(self.sim_dt, force_recompute=True)
         self._last_imu_sensor_refresh_step = sim_step
 
-    def _get_isaaclab_imu_ang_vel(self):
+    def _get_imu_ang_vel(self):
+        if not self.use_isaaclab_imu:
+            return quat_rotate_inverse(
+                self.imu_quat,
+                self.simulator._rigid_body_ang_vel[:, self.imu_body_index],
+                w_last=True,
+            )
         self._refresh_isaaclab_imu_sensor()
         return self.isaaclab_mdp.imu_ang_vel(self.simulator, asset_cfg=self.imu_asset_cfg)
 
-    def _get_isaaclab_imu_projected_gravity(self):
+    def _get_imu_projected_gravity(self):
+        if not self.use_isaaclab_imu:
+            return quat_rotate_inverse(self.imu_quat, self.gravity_vec, w_last=True)
         self._refresh_isaaclab_imu_sensor()
         return self.isaaclab_mdp.imu_projected_gravity(self.simulator, asset_cfg=self.imu_asset_cfg)
 
@@ -394,9 +413,9 @@ class LeggedRobotBase(BaseTask):
         self.rpy[:] = get_euler_xyz_in_tensor(self.base_quat[:])
         self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.simulator.robot_root_states[:, 7:10], w_last=True)
         # print("self.base_lin_vel", self.base_lin_vel)
-        self.base_ang_vel[:] = self._get_isaaclab_imu_ang_vel()
+        self.base_ang_vel[:] = self._get_imu_ang_vel()
         # print("self.base_ang_vel", self.base_ang_vel)
-        self.projected_gravity[:] = self._get_isaaclab_imu_projected_gravity()
+        self.projected_gravity[:] = self._get_imu_projected_gravity()
 
     def _update_tasks_callback(self):
         if self.config.domain_rand.push_robots and not self.is_evaluating: # don't push robots when evaluating

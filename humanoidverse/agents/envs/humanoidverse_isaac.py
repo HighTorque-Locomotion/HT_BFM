@@ -36,6 +36,34 @@ HYDRA_CONFIG_DIR = os.path.join(HUMANOIDVERSE_DIR, "config")
 HYDRA_CONFIG_REL_PATH = os.path.join("exp", "bfm_zero", "bfm_zero")
 
 
+def _split_hydra_overrides(overrides: tp.List[str]) -> tuple[tp.List[str], tp.List[str]]:
+    group_overrides = []
+    value_overrides = []
+    for override in overrides:
+        key = override.split("=", 1)[0].lstrip("+~")
+        if "." in key:
+            value_overrides.append(override)
+        else:
+            group_overrides.append(override)
+    return group_overrides, value_overrides
+
+
+def _apply_group_override_to_resolved_config(cfg, override: str) -> bool:
+    group_key, group_value = override.split("=", 1)
+    group_key = group_key.lstrip("+~").split("@", 1)[0]
+    config_path = os.path.join(HYDRA_CONFIG_DIR, group_key, f"{group_value}.yaml")
+    if not os.path.exists(config_path):
+        return False
+
+    group_cfg = OmegaConf.load(config_path)
+    if "defaults" in group_cfg:
+        return False
+    if group_key in group_cfg:
+        cfg[group_key] = group_cfg[group_key]
+        return True
+    return False
+
+
 def load_expert_trajectories_from_motion_lib(env, agent_cfg, device="cpu", add_history_noaction: bool = False):
     """
     Load expert trajectories from motion library.
@@ -533,6 +561,8 @@ class HumanoidVerseVectorEnv(VectorEnv):
                 self.history_handler.add("action", action)
 
     def render(self):
+        if hasattr(self.base_env.simulator, "render_frame"):
+            return self.base_env.simulator.render_frame()
         return self.base_env.simulator.render()
 
 
@@ -640,7 +670,17 @@ class HumanoidVerseIsaacConfig(BaseConfig):
 
         if self.resolved_config_path is not None:
             cfg = OmegaConf.load(self.resolved_config_path)
-            value_overrides = [override for override in hydra_overrides if "." in override.split("=", 1)[0]]
+            group_overrides, value_overrides = _split_hydra_overrides(hydra_overrides)
+            unresolved_group_overrides = [
+                override for override in group_overrides if not _apply_group_override_to_resolved_config(cfg, override)
+            ]
+            if unresolved_group_overrides:
+                with hydra.initialize_config_dir(config_dir=HYDRA_CONFIG_DIR):
+                    override_cfg = hydra.compose(config_name=self.relative_config_path, overrides=unresolved_group_overrides)
+                for override in unresolved_group_overrides:
+                    group_key = override.split("=", 1)[0].lstrip("+~").split("@", 1)[0]
+                    if group_key in override_cfg:
+                        cfg[group_key] = override_cfg[group_key]
             if value_overrides:
                 cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(value_overrides))
         else:
