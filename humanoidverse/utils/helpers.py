@@ -5,6 +5,7 @@ from torch import nn
 import numpy as np
 import random
 
+from collections.abc import Sequence
 from typing import Any, List, Dict
 from termcolor import colored
 from loguru import logger
@@ -170,6 +171,12 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
     ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
     ref_dof_vel = motion_state["dof_vel"] * velocity_multiplier
 
+    if getattr(env, "motion_body_ids", None) is not None:
+        ref_body_pos = ref_body_pos[:, env.motion_body_ids]
+        ref_body_rots = ref_body_rots[:, env.motion_body_ids]
+        ref_body_vels = ref_body_vels[:, env.motion_body_ids]
+        ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
+
     # construct observation
     if env.use_contact_in_obs_max:
         contact_binary = env.foot_contact_detect(ref_body_pos, ref_body_vels)
@@ -243,45 +250,85 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
         return max_local_self_obs, ref_dict
 
 
-def export_meta_policy_as_onnx(inference_model, path, exported_policy_name, example_obs_dict, z_dim, history: bool = False, use_29dof: bool = True):
+def _get_space_dim(space) -> int:
+    if not hasattr(space, "shape") or len(space.shape) != 1:
+        raise ValueError(f"Expected a 1D observation space, got {space}")
+    return int(space.shape[0])
+
+
+def _infer_actor_obs_layout(inference_model, history: bool) -> list[tuple[str, int]]:
+    obs_space = getattr(inference_model, "obs_space", None)
+    input_filter = getattr(inference_model.cfg.archi.actor, "input_filter", None)
+    input_keys = getattr(input_filter, "key", None)
+
+    if input_keys is None or not hasattr(obs_space, "spaces"):
+        raise ValueError(
+            "Cannot infer ONNX actor observation layout from model. "
+            "Expected model.obs_space from checkpoint/model/init_kwargs.json and actor.input_filter.key, "
+            "or pass obs_layout explicitly."
+        )
+
+    if isinstance(input_keys, str):
+        input_keys = [input_keys]
+    elif isinstance(input_keys, Sequence):
+        input_keys = list(input_keys)
+    else:
+        raise TypeError(f"Unsupported actor input_filter.key type: {type(input_keys)}")
+
+    layout = []
+    for key in input_keys:
+        if key == "history_actor" and not history:
+            continue
+        if key not in obs_space.spaces:
+            raise KeyError(f"Actor input key {key!r} not found in obs_space keys {list(obs_space.spaces.keys())}")
+        layout.append((key, _get_space_dim(obs_space.spaces[key])))
+    return layout
+
+
+def export_meta_policy_as_onnx(
+    inference_model,
+    path,
+    exported_policy_name,
+    example_obs_dict,
+    z_dim,
+    history: bool = False,
+    obs_layout: list[tuple[str, int]] | None = None,
+):
     os.makedirs(path, exist_ok=True)
     path = os.path.join(path, exported_policy_name)
     inference_model = inference_model.eval()
     actor = copy.deepcopy(inference_model).to("cpu")
+    actor_obs_layout = obs_layout or _infer_actor_obs_layout(inference_model, history=history)
 
     class PPOWrapper(nn.Module):
-        def __init__(self, actor, history):
+        def __init__(self, actor, actor_obs_layout):
             """
             model: The original PyTorch model.
             input_keys: List of input names as keys for the input dictionary.
             """
             super(PPOWrapper, self).__init__()
             self.actor = actor
-            self.history = history
+            self.actor_obs_layout = actor_obs_layout
 
         def forward(self, actor_obs):
             """
             Dynamically creates a dictionary from the input keys and args.
             """
             actor_obs, ctx = actor_obs[:, :-z_dim], actor_obs[:, -z_dim:]
-            if use_29dof:
-                state_end = 64
-                action_end = state_end+29
-            else:
-                state_end = 52
-                action_end = state_end+23
-            state = actor_obs[:, :state_end]
-            last_action = actor_obs[:, state_end:(action_end)]
-            actor_dict = {
-                "state": state,
-                "last_action": last_action
-            }
-            if self.history:
-                actor_dict["history_actor"] = actor_obs[:, (action_end):]
+            actor_dict = {}
+            start = 0
+            for key, dim in self.actor_obs_layout:
+                if dim is None:
+                    actor_dict[key] = actor_obs[:, start:]
+                    start = actor_obs.shape[-1]
+                else:
+                    end = start + dim
+                    actor_dict[key] = actor_obs[:, start:end]
+                    start = end
 
             return self.actor.act(actor_dict, ctx)
 
-    wrapper = PPOWrapper(actor, history=history)
+    wrapper = PPOWrapper(actor, actor_obs_layout=actor_obs_layout)
     example_input_list = example_obs_dict["actor_obs"]
     torch.onnx.export(
         wrapper,
