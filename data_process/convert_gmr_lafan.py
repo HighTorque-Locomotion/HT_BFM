@@ -24,7 +24,7 @@ from humanoidverse.utils.asset_paths import resolve_asset_path
 DEFAULT_INPUT_DIR = Path("data_process/dataset/g1_lafan_dataset")
 DEFAULT_OUTPUT_DIR = Path("humanoidverse/data")
 DEFAULT_ROBOT_XML = Path("humanoidverse/data/robots/g1/g1_29dof.xml")
-PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset")
+PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset_20260617")
 PIPLUS_LSE_ROBOT_XML = "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
 
 
