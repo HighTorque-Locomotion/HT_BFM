@@ -53,6 +53,11 @@ def _append_or_replace_hydra_override(overrides: list[str], override: str) -> No
     overrides.append(override)
 
 
+def _is_hydra_group_override(override: str) -> bool:
+    key = override.split("=", 1)[0].lstrip("+~").split("@", 1)[0]
+    return "." not in key
+
+
 def main(
     model_folder: Path,
     data_path: Path | None = None,
@@ -65,10 +70,13 @@ def main(
     motion_list: list[int] = [25],
     robot: str | None = None,
     episode_len: int | None = None,
+    no_training_config: bool = False,
 ):
     # motion_list: motion ids to evaluate (default [25])
     
     model_folder = _resolve_path(model_folder)
+    env_device = "cuda:0" if device == "cuda" else device
+    simulator = simulator.lower()
 
     model = load_model_from_checkpoint_dir(model_folder / "checkpoint", device=device)
     model.to(device)
@@ -80,9 +88,14 @@ def main(
 
     use_root_height_obs = config["env"].get("root_height_obs", False)
     resolved_config_path = model_folder / "config.yaml"
-    if resolved_config_path.exists():
+    using_training_config = False
+    if not no_training_config and resolved_config_path.exists():
         config["env"]["resolved_config_path"] = str(resolved_config_path.resolve())
+        using_training_config = True
         print(f"Loading inference YAML config from {resolved_config_path.resolve()}")
+    elif no_training_config:
+        config["env"].pop("resolved_config_path", None)
+        print("Skipping training YAML config; using inference config.json and hydra overrides")
 
     if data_path is not None:
         resolved_data_path = _resolve_path(data_path)
@@ -95,6 +108,20 @@ def main(
             config["env"]["lafan_tail_path"] = str(default_path)
         else:
             config["env"]["lafan_tail_path"] = "data/lafan_29dof.pkl"
+    if using_training_config:
+        saved_hydra_overrides = config["env"].get("hydra_overrides", [])
+        stale_group_overrides = [
+            override for override in saved_hydra_overrides if _is_hydra_group_override(override)
+        ]
+        config["env"]["hydra_overrides"] = [
+            override for override in saved_hydra_overrides if not _is_hydra_group_override(override)
+        ]
+        if stale_group_overrides:
+            print(
+                "Ignoring saved Hydra group overrides because config.yaml is already fully resolved: "
+                f"{stale_group_overrides}"
+            )
+
     hydra_overrides = config["env"].setdefault("hydra_overrides", [])
     if robot is not None:
         if robot not in ROBOT_CONFIG_OVERRIDES:
@@ -104,9 +131,15 @@ def main(
     _append_or_replace_hydra_override(hydra_overrides, "env.config.max_episode_length_s=10000")
     _append_or_replace_hydra_override(hydra_overrides, f"env.config.headless={headless}")
     _append_or_replace_hydra_override(hydra_overrides, f"simulator={simulator}")
-    config["env"]["device"] = device
+    if simulator == "mujoco" and robot in (None, "g1"):
+        _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
+    config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
     config["env"]["disable_obs_noise"] = disable_obs_noise
+    print(f"Inference resolved_config_path: {config['env'].get('resolved_config_path')}")
+    print(f"Inference hydra_overrides: {hydra_overrides}")
+    print(f"Inference model device: {device}")
+    print(f"Inference env device: {env_device}")
 
     # Outputs under model_folder/tracking_inference (sibling of exported/)
     output_dir = model_folder / "exported"
@@ -193,6 +226,7 @@ def main(
         qpos, qvel = wrapped_env._get_qpos_qvel(to_numpy=True)
         assert np.allclose(wrapped_env._env.simulator.dof_pos.clone().cpu(), expert_qpos[0, 7:])
         joint_pos = [wrapped_env._env.simulator.dof_state[..., 0].clone().cpu().numpy()]
+        episode_len=500
         current_episode_len = episode_len if episode_len is not None else z.shape[0]
         if current_episode_len > z.shape[0]:
             print(f"Requested {current_episode_len} steps; cycling {z.shape[0]} inferred latent steps")

@@ -210,7 +210,7 @@ class MuJoCo(BaseSimulator):
         self.data.qpos[0:3] = base_init_state[0:3].cpu()
         self.data.qpos[3:7] = base_init_state[3:7][..., [3, 0, 1, 2]].cpu()
         self.data.qvel[0:6] = base_init_state[7:13].cpu()
-        # mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
         self._body_list = self.body_names
         # dof_props_asset = self.get_dof_properties(self.model)
         # dof_props = self._process_dof_props(dof_props_asset, 0)
@@ -246,7 +246,7 @@ class MuJoCo(BaseSimulator):
         self.data.qvel[0:3] = root_states[0, 7:10]
         self.data.qvel[3:6] = root_states[0, 10:13]
         # print(root_states.shape)
-        # mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
     
     def set_dof_state_tensor(self, set_env_ids, dof_states):
         # Update joint positions and velocities.
@@ -254,7 +254,7 @@ class MuJoCo(BaseSimulator):
             dof_states = dof_states.cpu().numpy()
         self.data.qpos[7:] = dof_states[0, :, 0]
         self.data.qvel[6:] = dof_states[0, :, 1]
-        # mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
     
     def apply_rigid_body_force_at_pos_tensor(self, force_tensor, force, pos):
         # In MuJoCo, external forces are applied via xfrc_applied.
@@ -407,6 +407,13 @@ class MuJoCo(BaseSimulator):
         Args:
             sync_frame_time (bool): Whether to synchronize the frame time.
         """
+        if self.viewer is not None:
+            self.viewer.sync()
+            return None
+        return self.render_frame()
+
+    def render_frame(self):
+        """Render an RGB frame with MuJoCo's offscreen renderer."""
         if self.renderer is None:
             self.renderer = mujoco.Renderer(
                 self.model,
@@ -418,11 +425,6 @@ class MuJoCo(BaseSimulator):
             camera="track"
         )
         return self.renderer.render()
-        if self.viewer is None:
-            raise RuntimeError("Viewer is not initialized. Call 'setup_viewer' first.")
-        return
-        # mujoco.mj_step(self.model, self.data)
-        # self.viewer.sync()
 
     @property
     def dof_state(self):
