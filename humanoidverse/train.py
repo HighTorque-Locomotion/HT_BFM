@@ -610,9 +610,12 @@ def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
     if robot == ROBOT_PIPLUS_LSE:
         return {
             "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
-            "lafan_tail_path": "humanoidverse/data/piplus_lse/piplus_lse_lafan_10s-clipped.pkl",
+            "lafan_tail_path": "humanoidverse/data/pi_LSE_lafan_dataset_20260617/piplus_lse_lafan_10s-clipped.pkl",
             "hydra_overrides": [
                 "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+                "robot.control.action_scale=0.25",
+                "robot.control.action_clip_value=5.0",
+                "robot.control.normalize_action_to=5.0",
                 "env.config.lie_down_init=True",
                 "env.config.lie_down_init_prob=0.3",
             ],
