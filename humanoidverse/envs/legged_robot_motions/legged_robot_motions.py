@@ -58,10 +58,24 @@ class LeggedRobotMotions(LeggedRobotBase):
         self._motion_lib.load_motions_for_training(max_num_seqs=self.num_envs)
         self.motion_body_ids = None
         self.motion_body_names = None
+        self.motion_extend_body_ids = None
         self.sim_obs_body_ids = None
         if "isaacsim_body_names" in self.config.robot:
             motion_body_names = self._motion_lib.mesh_parsers.body_names
             self.motion_body_names = list(self.config.robot.isaacsim_body_names)
+            if "extend_config" in self.config.robot.motion:
+                motion_body_names_extend = self._motion_lib.mesh_parsers.body_names_augment
+                self.motion_extend_body_ids = torch.tensor(
+                    [
+                        motion_body_names_extend.index(extend_config["joint_name"])
+                        for extend_config in self.config.robot.motion.extend_config
+                    ],
+                    device=self.device,
+                    dtype=torch.long,
+                )
+                self.motion_body_names_extend = self.motion_body_names + [
+                    extend_config["joint_name"] for extend_config in self.config.robot.motion.extend_config
+                ]
             self.motion_body_ids = torch.tensor(
                 [motion_body_names.index(body_name) for body_name in self.motion_body_names],
                 device=self.device,
@@ -220,6 +234,23 @@ class LeggedRobotMotions(LeggedRobotBase):
             self.ref_body_vel_extend = motion_res["body_vel_t"][:, self.motion_body_ids] # [num_envs, num_markers, 3]
             self.ref_body_ang_vel_extend = motion_res["body_ang_vel_t"][:, self.motion_body_ids] # [num_envs, num_markers, 3]
             self.ref_body_rot_extend = motion_res["rg_rot_t"][:, self.motion_body_ids] # [num_envs, num_markers, 4]
+            if self.motion_extend_body_ids is not None:
+                self.ref_body_pos_extend = torch.cat(
+                    [self.ref_body_pos_extend, motion_res["rg_pos_t"][:, self.motion_extend_body_ids]],
+                    dim=1,
+                )
+                self.ref_body_vel_extend = torch.cat(
+                    [self.ref_body_vel_extend, motion_res["body_vel_t"][:, self.motion_extend_body_ids]],
+                    dim=1,
+                )
+                self.ref_body_ang_vel_extend = torch.cat(
+                    [self.ref_body_ang_vel_extend, motion_res["body_ang_vel_t"][:, self.motion_extend_body_ids]],
+                    dim=1,
+                )
+                self.ref_body_rot_extend = torch.cat(
+                    [self.ref_body_rot_extend, motion_res["rg_rot_t"][:, self.motion_extend_body_ids]],
+                    dim=1,
+                )
         else:
             self.ref_body_pos_extend = motion_res["rg_pos_t"]
             self.ref_body_vel_extend = motion_res["body_vel_t"] # [num_envs, num_markers, 3]
@@ -236,6 +267,11 @@ class LeggedRobotMotions(LeggedRobotBase):
         
         ################### EXTEND Rigid body POS #####################
         if self.num_extend_bodies > 0:
+            if self.sim_obs_body_ids is not None:
+                sim_rigid_body_pos = sim_rigid_body_pos[:, self.sim_obs_body_ids]
+                sim_rigid_body_rot = sim_rigid_body_rot[:, self.sim_obs_body_ids]
+                sim_rigid_body_vel = sim_rigid_body_vel[:, self.sim_obs_body_ids]
+                sim_rigid_body_ang_vel = sim_rigid_body_ang_vel[:, self.sim_obs_body_ids]
             rotated_pos_in_parent = my_quat_rotate(
                 sim_rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
                 self.extend_body_pos_in_parent.reshape(-1, 3)
@@ -276,10 +312,10 @@ class LeggedRobotMotions(LeggedRobotBase):
 
         #### Heading quantatives ####
         heading_inv_rot = calc_heading_quat_inv(self.simulator.robot_root_states[:, 3:7].clone(), w_last=True)
-        heading_inv_rot_expand = heading_inv_rot.unsqueeze(1).expand(-1, num_rigid_bodies+self.num_extend_bodies, -1).reshape(-1, 4)
+        heading_inv_rot_expand = heading_inv_rot.unsqueeze(1).expand(-1, num_rigid_bodies, -1).reshape(-1, 4)
 
         heading_rot = calc_heading_quat(self.simulator.robot_root_states[:, 3:7].clone(), w_last=True)
-        heading_rot_expand = heading_rot.unsqueeze(1).expand(-1, num_rigid_bodies+self.num_extend_bodies, -1).reshape(-1, 4)
+        heading_rot_expand = heading_rot.unsqueeze(1).expand(-1, num_rigid_bodies, -1).reshape(-1, 4)
         
         
         if self.config.get("local_ref_motion", False):

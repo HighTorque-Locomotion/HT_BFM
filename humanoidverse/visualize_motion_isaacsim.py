@@ -90,6 +90,9 @@ def _get_reference_marker_positions(env, motion_index: int, num_frames: int, fps
     marker_pos = motion_res["rg_pos_t"]
     if env.motion_body_ids is not None:
         marker_pos = marker_pos[:, env.motion_body_ids]
+        motion_extend_body_ids = getattr(env, "motion_extend_body_ids", None)
+        if motion_extend_body_ids is not None:
+            marker_pos = torch.cat([marker_pos, motion_res["rg_pos_t"][:, motion_extend_body_ids]], dim=1)
     return marker_pos
 
 
@@ -98,7 +101,9 @@ def _make_marker_indices(env, num_markers: int) -> torch.Tensor | None:
     if num_marker_types <= 1:
         return None
     marker_body_to_index = getattr(env.simulator, "vis_sphere_marker_body_to_index", {})
-    motion_body_names = getattr(env, "motion_body_names", None)
+    motion_body_names = getattr(env, "motion_body_names_extend", None)
+    if motion_body_names is None:
+        motion_body_names = getattr(env, "motion_body_names", None)
     if marker_body_to_index and motion_body_names is not None:
         return torch.tensor(
             [marker_body_to_index.get(body_name, body_id % num_marker_types) for body_id, body_name in enumerate(motion_body_names)],
@@ -153,7 +158,7 @@ def main(
     wrapped_env, _ = env_cfg.build(num_envs=1)
     env = wrapped_env._env
     marker_pos = _get_reference_marker_positions(env, motion_index, len(qpos), source_fps, motion_data)
-    marker_scales = torch.ones_like(marker_pos[0]) * 0.5
+    marker_scales = torch.ones_like(marker_pos[0])
     marker_indices = _make_marker_indices(env, marker_pos.shape[1])
     root_pos = torch.tensor(qpos[:, :3], dtype=torch.float32)
     root_quat = torch.tensor(qpos[:, 3:7], dtype=torch.float32)

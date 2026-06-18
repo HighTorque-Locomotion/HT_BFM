@@ -317,8 +317,20 @@ robot:
     ]
     right_foot_name: 'r_ankle_roll_link'
     left_foot_name: 'l_ankle_roll_link'
-    nums_extend_bodies: 0
-    extend_config: []
+    nums_extend_bodies: 3
+    extend_config:
+      - joint_name: "r_hand_link"
+        parent_name: "r_elbow_link"
+        pos: [0.0, 0.0, -0.129]
+        rot: [1.0, 0.0, 0.0, 0.0] # w x y z
+      - joint_name: "l_hand_link"
+        parent_name: "l_elbow_link"
+        pos: [0.0, 0.0, -0.129]
+        rot: [1.0, 0.0, 0.0, 0.0] # w x y z
+      - joint_name: "head_link"
+        parent_name: "head_pitch_link"
+        pos: [0.01, 0.0, 0.06]
+        rot: [1.0, 0.0, 0.0, 0.0] # w x y z
     motion_tracking_link: ['head_pitch_link']
     lower_body_link: [
       'base_link', 'l_hip_pitch_link', 'l_hip_roll_link', 'l_thigh_link', 'l_calf_link',
