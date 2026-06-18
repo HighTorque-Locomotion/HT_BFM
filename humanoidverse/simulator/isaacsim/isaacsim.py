@@ -643,6 +643,7 @@ class IsaacSim(BaseSimulator):
         light_config1.func("/World/DomeLight", light_config1, translation=(1, 0, 10))
         
         self.vis_sphere_marker_names = ["sphere"]
+        self.vis_sphere_marker_body_to_index = {}
         sphere_markers = {
             "sphere": sim_utils.SphereCfg(
                 radius=0.05,
@@ -654,6 +655,7 @@ class IsaacSim(BaseSimulator):
         if customize_marker_colors and marker_colors:
             sphere_markers = {}
             self.vis_sphere_marker_names = []
+            marker_body_names = list(self.robot_config.get("body_names", []))
             for color_id, color in enumerate(marker_colors):
                 marker_name = f"sphere_{color_id}"
                 sphere_markers[marker_name] = sim_utils.SphereCfg(
@@ -661,6 +663,8 @@ class IsaacSim(BaseSimulator):
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(color)),
                 )
                 self.vis_sphere_marker_names.append(marker_name)
+                if color_id < len(marker_body_names):
+                    self.vis_sphere_marker_body_to_index[marker_body_names[color_id]] = color_id
 
         self.vis_spheres = VisualizationMarkers(VisualizationMarkersCfg( prim_path="/Visuals/goal_marker",
             markers=sphere_markers))
@@ -910,7 +914,18 @@ class IsaacSim(BaseSimulator):
         
     def draw_spheres_batch(self, pos, rot = None, scales = None, marker_indices = None):
         if marker_indices is None and len(self.vis_sphere_marker_names) > 1:
-            marker_indices = torch.arange(pos.shape[0], device=pos.device) % len(self.vis_sphere_marker_names)
+            marker_body_to_index = getattr(self, "vis_sphere_marker_body_to_index", {})
+            if marker_body_to_index and pos.shape[0] == len(self.body_names):
+                marker_indices = torch.tensor(
+                    [
+                        marker_body_to_index.get(body_name, body_id % len(self.vis_sphere_marker_names))
+                        for body_id, body_name in enumerate(self.body_names)
+                    ],
+                    dtype=torch.long,
+                    device=pos.device,
+                )
+            else:
+                marker_indices = torch.arange(pos.shape[0], device=pos.device) % len(self.vis_sphere_marker_names)
         self.vis_spheres.visualize(pos, rot, scales, marker_indices)
 
     def draw_line(self, start_point, end_point, color, env_id):

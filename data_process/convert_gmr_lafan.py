@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray]:
+def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray, list[str], dict[str, str]]:
     root = ET.parse(robot_xml).getroot()
     motor_joints = [
         motor.attrib.get("joint", motor.attrib.get("name"))
@@ -114,7 +114,50 @@ def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray]:
 
     if not axes:
         raise ValueError(f"No one-DOF actuated joints found in {robot_xml}.")
-    return joint_names, np.asarray(axes, dtype=np.float32)
+
+    body_names = []
+    body_to_joint = {}
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError(f"{robot_xml}: missing MJCF worldbody.")
+
+    def add_body(body: ET.Element) -> None:
+        body_name = body.attrib.get("name")
+        if body_name is None:
+            return
+        body_names.append(body_name)
+        for joint in body.findall("joint"):
+            joint_name = joint.attrib.get("name")
+            if joint_name in joint_names:
+                body_to_joint[body_name] = joint_name
+        for child in body.findall("body"):
+            add_body(child)
+
+    for body in worldbody.findall("body"):
+        add_body(body)
+
+    return joint_names, np.asarray(axes, dtype=np.float32), body_names, body_to_joint
+
+
+def make_body_aligned_pose_aa(
+    root_axis_angle: np.ndarray,
+    dof: np.ndarray,
+    joint_names: list[str],
+    dof_axes: np.ndarray,
+    body_names: list[str],
+    body_to_joint: dict[str, str],
+) -> np.ndarray:
+    joint_pose = {
+        joint_name: dof_axes[joint_id][None, :] * dof[:, joint_id, None]
+        for joint_id, joint_name in enumerate(joint_names)
+    }
+    pose_aa = np.zeros((dof.shape[0], len(body_names), 3), dtype=np.float32)
+    pose_aa[:, 0, :] = root_axis_angle
+    for body_id, body_name in enumerate(body_names[1:], start=1):
+        joint_name = body_to_joint.get(body_name)
+        if joint_name is not None:
+            pose_aa[:, body_id, :] = joint_pose[joint_name]
+    return pose_aa
 
 
 def normalize_quat_xyzw(quat: np.ndarray, quat_order: str) -> np.ndarray:
@@ -140,6 +183,8 @@ def convert_motion(
     raw: dict,
     joint_names: list[str],
     dof_axes: np.ndarray,
+    body_names: list[str],
+    body_to_joint: dict[str, str],
     source: Path,
     quat_order: str,
 ) -> dict:
@@ -178,10 +223,7 @@ def convert_motion(
         raise ValueError(f"{source}: fps must be positive, got {fps}.")
 
     root_axis_angle = Rotation.from_quat(root_rot).as_rotvec().astype(np.float32)
-    pose_aa = np.concatenate(
-        [root_axis_angle[:, None, :], dof_axes[None, :, :] * dof[:, :, None]],
-        axis=1,
-    ).astype(np.float32)
+    pose_aa = make_body_aligned_pose_aa(root_axis_angle, dof, joint_names, dof_axes, body_names, body_to_joint)
 
     return {
         "root_trans_offset": root_pos,
@@ -198,6 +240,8 @@ def load_dataset(
     input_dir: Path,
     joint_names: list[str],
     dof_axes: np.ndarray,
+    body_names: list[str],
+    body_to_joint: dict[str, str],
     quat_order: str,
 ) -> dict[str, dict]:
     files = sorted(input_dir.glob("*.pkl"))
@@ -207,7 +251,15 @@ def load_dataset(
     dataset = {}
     install_numpy_pickle_compat()
     for path in files:
-        dataset[path.stem] = convert_motion(joblib.load(path), joint_names, dof_axes, path, quat_order)
+        dataset[path.stem] = convert_motion(
+            joblib.load(path),
+            joint_names,
+            dof_axes,
+            body_names,
+            body_to_joint,
+            path,
+            quat_order,
+        )
     return dataset
 
 
@@ -247,8 +299,8 @@ def main() -> None:
     output_full = args.output_dir / f"{args.name}.pkl"
     output_clips = args.output_dir / f"{args.name}_10s-clipped.pkl"
 
-    joint_names, dof_axes = load_dof_metadata(args.robot_xml)
-    dataset = load_dataset(args.input_dir, joint_names, dof_axes, args.quat_order)
+    joint_names, dof_axes, body_names, body_to_joint = load_dof_metadata(args.robot_xml)
+    dataset = load_dataset(args.input_dir, joint_names, dof_axes, body_names, body_to_joint, args.quat_order)
     clips = make_clips(dataset, args.clip_seconds)
 
     dump_dataset(dataset, output_full, args.overwrite)
