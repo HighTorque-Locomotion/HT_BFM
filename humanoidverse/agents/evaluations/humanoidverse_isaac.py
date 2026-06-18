@@ -20,6 +20,7 @@ from tqdm import tqdm
 from ..buffers.trajectory import TrajectoryDictBufferMultiDim
 from ..envs.humanoidverse_isaac import HumanoidVerseIsaacConfig, HumanoidVerseVectorEnv, IsaacRendererWithMuJoco
 from .base import BaseEvalConfig, extract_model
+from humanoidverse.utils.helpers import select_motion_body_data
 
 def get_next(field: str, data: Any):
     if "next" in data and field in data["next"]:
@@ -133,15 +134,11 @@ def get_backward_observation(env, motion_id, include_last_action, velocity_multi
     # get blend motion state
     motion_state = env._motion_lib.get_motion_state(motion_id, motion_times)
 
-    ref_body_pos = motion_state["rg_pos_t"]
-    ref_body_rots = motion_state["rg_rot_t"]
-    ref_body_vels = motion_state["body_vel_t"] * velocity_multiplier
-    ref_body_angular_vels = motion_state["body_ang_vel_t"] * velocity_multiplier
-    if env.motion_body_ids is not None:
-        ref_body_pos = ref_body_pos[:, env.motion_body_ids]
-        ref_body_rots = ref_body_rots[:, env.motion_body_ids]
-        ref_body_vels = ref_body_vels[:, env.motion_body_ids]
-        ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
+    ref_body_pos, ref_body_rots, ref_body_vels, ref_body_angular_vels = select_motion_body_data(
+        env,
+        motion_state,
+        velocity_multiplier=velocity_multiplier,
+    )
     ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
     ref_dof_vel = motion_state["dof_vel"] * velocity_multiplier
 
@@ -227,8 +224,11 @@ def get_backward_observation(env, motion_id, include_last_action, velocity_multi
     imu_body_idx = 0
     imu_body_name = env.config.robot.get("imu_body_name", None)
     if imu_body_name is not None:
-        if env.motion_body_ids is not None:
-            imu_body_idx = env.simulator._body_list.index(imu_body_name)
+        motion_body_names = getattr(env, "motion_body_names_extend", None)
+        if motion_body_names is None:
+            motion_body_names = getattr(env, "motion_body_names", None)
+        if motion_body_names is not None:
+            imu_body_idx = motion_body_names.index(imu_body_name)
         else:
             imu_body_idx = env._motion_lib.mesh_parsers.body_names.index(imu_body_name)
     imu_quat = ref_body_rots[:, imu_body_idx]

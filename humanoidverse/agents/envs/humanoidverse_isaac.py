@@ -15,7 +15,7 @@ import pydantic
 from gymnasium import Env
 from gymnasium.vector import VectorEnv
 from humanoidverse.envs.legged_robot_motions.legged_robot_motions import LeggedRobotMotions, compute_humanoid_observations_max
-from humanoidverse.utils.helpers import pre_process_config
+from humanoidverse.utils.helpers import pre_process_config, select_motion_body_data
 from humanoidverse.utils.torch_utils import quat_rotate_inverse
 from omegaconf import OmegaConf
 from torch.utils._pytree import tree_map
@@ -80,15 +80,7 @@ def load_expert_trajectories_from_motion_lib(env, agent_cfg, device="cpu", add_h
         motion_res = env._motion_lib.get_motion_state(motion_id, motion_times)
         file_names.append(env._motion_lib._motion_data_keys[i])
         # import ipdb; ipdb.set_trace()
-        ref_body_pos = motion_res["rg_pos_t"]
-        ref_body_rots = motion_res["rg_rot_t"]
-        ref_body_vels = motion_res["body_vel_t"]
-        ref_body_angular_vels = motion_res["body_ang_vel_t"]
-        if env.motion_body_ids is not None:
-            ref_body_pos = ref_body_pos[:, env.motion_body_ids]
-            ref_body_rots = ref_body_rots[:, env.motion_body_ids]
-            ref_body_vels = ref_body_vels[:, env.motion_body_ids]
-            ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
+        ref_body_pos, ref_body_rots, ref_body_vels, ref_body_angular_vels = select_motion_body_data(env, motion_res)
 
         # construct observation
         # TODO is this aligned with the environment observation logic?
@@ -106,8 +98,11 @@ def load_expert_trajectories_from_motion_lib(env, agent_cfg, device="cpu", add_h
         imu_body_idx = 0
         imu_body_name = env.config.robot.get("imu_body_name", None)
         if imu_body_name is not None:
-            if env.motion_body_ids is not None:
-                imu_body_idx = env.simulator._body_list.index(imu_body_name)
+            motion_body_names = getattr(env, "motion_body_names_extend", None)
+            if motion_body_names is None:
+                motion_body_names = getattr(env, "motion_body_names", None)
+            if motion_body_names is not None:
+                imu_body_idx = motion_body_names.index(imu_body_name)
             else:
                 imu_body_idx = env._motion_lib.mesh_parsers.body_names.index(imu_body_name)
         imu_quat = ref_body_rots[:, imu_body_idx]
