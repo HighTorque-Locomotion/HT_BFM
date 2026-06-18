@@ -5,6 +5,7 @@ import sys
 import time
 from pathlib import Path
 
+import joblib
 import torch
 
 if __package__ is None or __package__ == "":
@@ -13,6 +14,32 @@ if __package__ is None or __package__ == "":
 from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
 
 from humanoidverse.visualize_motion import RobotName, get_robot_spec, _load_motion, _motion_to_qpos
+
+
+def _resolve_motion_index(data_path: Path, motion: int | str, motion_key: str) -> int:
+    if isinstance(motion, int):
+        return motion
+
+    data = joblib.load(data_path)
+    return list(data.keys()).index(motion_key)
+
+
+def _get_reference_marker_positions(env, motion_index: int, num_frames: int, fps: int) -> torch.Tensor:
+    env.set_is_evaluating(motion_index)
+    motion_times = torch.arange(num_frames, dtype=torch.float32, device=env.device) / fps
+    motion_ids = torch.zeros(num_frames, dtype=torch.long, device=env.device)
+    motion_res = env._motion_lib.get_motion_state(motion_ids, motion_times)
+    marker_pos = motion_res["rg_pos_t"]
+    if env.motion_body_ids is not None:
+        marker_pos = marker_pos[:, env.motion_body_ids]
+    return marker_pos
+
+
+def _make_marker_indices(env, num_markers: int) -> torch.Tensor | None:
+    num_marker_types = len(getattr(env.simulator, "vis_sphere_marker_names", ["sphere"]))
+    if num_marker_types <= 1:
+        return None
+    return torch.arange(num_markers, dtype=torch.long, device=env.device) % num_marker_types
 
 
 def main(
@@ -32,11 +59,14 @@ def main(
     robot_spec = get_robot_spec(robot)
     if data_path is None:
         data_path = robot_spec.default_data_path
-    key, motion_data, num_motions = _load_motion(data_path.resolve(), motion)
+    data_path = data_path.resolve()
+    key, motion_data, num_motions = _load_motion(data_path, motion)
+    motion_index = _resolve_motion_index(data_path, motion, key)
     qpos = _motion_to_qpos(motion_data, robot_spec.dof_size)
     if max_frames is not None:
         qpos = qpos[:max_frames]
-    motion_fps = int(motion_data.get("fps", 30) if fps is None else fps)
+    source_fps = int(motion_data.get("fps", 30))
+    playback_fps = source_fps if fps is None else int(fps)
 
     env_cfg = HumanoidVerseIsaacConfig(
         lafan_tail_path=str(data_path.resolve()),
@@ -56,6 +86,9 @@ def main(
     )
     wrapped_env, _ = env_cfg.build(num_envs=1)
     env = wrapped_env._env
+    marker_pos = _get_reference_marker_positions(env, motion_index, len(qpos), source_fps)
+    marker_scales = torch.ones_like(marker_pos[0]) * 0.5
+    marker_indices = _make_marker_indices(env, marker_pos.shape[1])
     root_pos = torch.tensor(qpos[:, :3], dtype=torch.float32)
     root_quat = torch.tensor(qpos[:, 3:7], dtype=torch.float32)
     root_vel = torch.zeros((qpos.shape[0], 6), dtype=torch.float32)
@@ -68,10 +101,10 @@ def main(
     print(f"Loaded {data_path}")
     print(f"Robot: {robot_spec.name} / Hydra robot: {robot_spec.hydra_robot}")
     print(f"Motion {motion!r}: {key} ({num_motions} motions in file)")
-    print(f"Frames: {len(qpos)} / fps: {motion_fps} / stride: {stride}")
+    print(f"Frames: {len(qpos)} / fps: {playback_fps} / stride: {stride}")
 
     env_ids = torch.zeros(1, dtype=torch.long, device=env.device)
-    frame_dt = stride / motion_fps
+    frame_dt = stride / playback_fps
 
     for i, frame in enumerate(range(0, len(qpos), stride)):
         start_time = time.time()
@@ -83,6 +116,7 @@ def main(
 
         env.simulator.set_actor_root_state_tensor(env_ids, target_root)
         env.simulator.set_dof_state_tensor(env_ids, target_dof)
+        env.simulator.draw_spheres_batch(marker_pos[frame], scales=marker_scales, marker_indices=marker_indices)
         env.simulator.scene.write_data_to_sim()
         env.simulator.sim.render()
         env.simulator.scene.update(dt=env.sim_dt)
