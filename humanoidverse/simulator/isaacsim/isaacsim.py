@@ -642,12 +642,28 @@ class IsaacSim(BaseSimulator):
         )
         light_config1.func("/World/DomeLight", light_config1, translation=(1, 0, 10))
         
-        self.vis_spheres = VisualizationMarkers(VisualizationMarkersCfg( prim_path="/Visuals/goal_marker",
-            markers={
-                "sphere": sim_utils.SphereCfg(
+        self.vis_sphere_marker_names = ["sphere"]
+        sphere_markers = {
+            "sphere": sim_utils.SphereCfg(
                 radius=0.05,
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),),
-            }))
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),
+            ),
+        }
+        marker_colors = self.robot_config.motion.get("visualization", {}).get("marker_joint_colors", [])
+        customize_marker_colors = self.robot_config.motion.get("visualization", {}).get("customize_color", False)
+        if customize_marker_colors and marker_colors:
+            sphere_markers = {}
+            self.vis_sphere_marker_names = []
+            for color_id, color in enumerate(marker_colors):
+                marker_name = f"sphere_{color_id}"
+                sphere_markers[marker_name] = sim_utils.SphereCfg(
+                    radius=0.05,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(color)),
+                )
+                self.vis_sphere_marker_names.append(marker_name)
+
+        self.vis_spheres = VisualizationMarkers(VisualizationMarkersCfg( prim_path="/Visuals/goal_marker",
+            markers=sphere_markers))
         if self.config.simulator.get('enable_cameras', False):
             self.setup_rendering_cameras()
         
@@ -892,8 +908,10 @@ class IsaacSim(BaseSimulator):
         sizes = [20]
         self.draw.draw_points(point_list, color_list, sizes)
         
-    def draw_spheres_batch(self, pos, rot = None, scales = None):
-        self.vis_spheres.visualize(pos, rot, scales)
+    def draw_spheres_batch(self, pos, rot = None, scales = None, marker_indices = None):
+        if marker_indices is None and len(self.vis_sphere_marker_names) > 1:
+            marker_indices = torch.arange(pos.shape[0], device=pos.device) % len(self.vis_sphere_marker_names)
+        self.vis_spheres.visualize(pos, rot, scales, marker_indices)
 
     def draw_line(self, start_point, end_point, color, env_id):
         # import ipdb; ipdb.set_trace()

@@ -232,7 +232,7 @@ def main(
         qpos, qvel = wrapped_env._get_qpos_qvel(to_numpy=True)
         assert np.allclose(wrapped_env._env.simulator.dof_pos.clone().cpu(), expert_qpos[0, 7:])
         joint_pos = [wrapped_env._env.simulator.dof_state[..., 0].clone().cpu().numpy()]
-        episode_len=500
+        # episode_len=500
         current_episode_len = episode_len if episode_len is not None else z.shape[0]
         if current_episode_len > z.shape[0]:
             print(f"Requested {current_episode_len} steps; cycling {z.shape[0]} inferred latent steps")
