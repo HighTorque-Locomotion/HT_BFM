@@ -235,12 +235,12 @@ robot:
       upper_arm: 2.0
       elbow: 2.0
     action_scale: 0.25
-    action_clip_value: 5.0
+    action_clip_value: 32
     action_rescale: True
     clip_torques: True
     normalize_action: True
     normalize_action_from: 1.0
-    normalize_action_to: 5.0
+    normalize_action_to: 32
 
   asset:
     collapse_fixed_joints: True
