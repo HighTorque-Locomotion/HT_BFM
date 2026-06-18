@@ -610,9 +610,12 @@ def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
     if robot == ROBOT_PIPLUS_LSE:
         return {
             "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
-            "lafan_tail_path": "humanoidverse/data/piplus_lse/piplus_lse_lafan_10s-clipped.pkl",
+            "lafan_tail_path": "humanoidverse/data/pi_LSE_lafan_dataset_20260617_v3/piplus_lse_lafan_10s-clipped.pkl",
             "hydra_overrides": [
                 "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+                "robot.control.action_scale=0.25",
+                "robot.control.action_clip_value=5.0",
+                "robot.control.normalize_action_to=5.0",
                 "env.config.lie_down_init=True",
                 "env.config.lie_down_init_prob=0.3",
             ],
@@ -731,13 +734,13 @@ def train_bfm_zero(robot: str = ROBOT_G1):
         ),
         work_dir=f"results/{robot_settings['work_dir_prefix']}-{time.strftime('%Y%m%d_%H%M%S')}",
         seed=4728,
-        online_parallel_envs=512,
-        log_every_updates=10240,
+        online_parallel_envs=1024,
+        log_every_updates=102400,
         num_env_steps=384000000,
-        update_agent_every=512,
+        update_agent_every=1024,
         num_seed_steps=10240,
         num_agent_updates=16,
-        checkpoint_every_steps=9600000,
+        checkpoint_every_steps=10000,
         checkpoint_buffer=True,
         prioritization=True,
         prioritization_min_val=0.5,
@@ -745,7 +748,7 @@ def train_bfm_zero(robot: str = ROBOT_G1):
         prioritization_scale=2.0,
         prioritization_mode='exp',
         use_trajectory_buffer=True,
-        buffer_size=2560000,
+        buffer_size=5120000,
         use_wandb=True,
         wandb_ename='82623700-dzkd',  # your wandb entity (username/team), empty = default from wandb login
         wandb_gname=robot_settings["wandb_group"],  # run group
@@ -753,7 +756,7 @@ def train_bfm_zero(robot: str = ROBOT_G1):
         load_isaac_expert_data=True,
         buffer_device='cuda',
         disable_tqdm=False,
-        evaluations=[HumanoidVerseIsaacTrackingEvaluationConfig(name='HumanoidVerseIsaacTrackingEvaluationConfig', generate_videos=False, videos_dir='videos', video_name_prefix='unknown_agent', name_in_logs='humanoidverse_tracking_eval', env=None, num_envs=512, n_episodes_per_motion=1)],
+        evaluations=[HumanoidVerseIsaacTrackingEvaluationConfig(name='HumanoidVerseIsaacTrackingEvaluationConfig', generate_videos=False, videos_dir='videos', video_name_prefix='unknown_agent', name_in_logs='humanoidverse_tracking_eval', env=None, num_envs=1024, n_episodes_per_motion=1)],
         eval_every_steps=9600000,
         tags={},
     )

@@ -11,6 +11,34 @@ from termcolor import colored
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+def select_motion_body_data(env, motion_state: dict[str, torch.Tensor], velocity_multiplier: float = 1.0):
+    ref_body_pos = motion_state["rg_pos_t"]
+    ref_body_rots = motion_state["rg_rot_t"]
+    ref_body_vels = motion_state["body_vel_t"] * velocity_multiplier
+    ref_body_angular_vels = motion_state["body_ang_vel_t"] * velocity_multiplier
+
+    motion_body_ids = getattr(env, "motion_body_ids", None)
+    if motion_body_ids is not None:
+        ref_body_pos = ref_body_pos[:, motion_body_ids]
+        ref_body_rots = ref_body_rots[:, motion_body_ids]
+        ref_body_vels = ref_body_vels[:, motion_body_ids]
+        ref_body_angular_vels = ref_body_angular_vels[:, motion_body_ids]
+
+        motion_extend_body_ids = getattr(env, "motion_extend_body_ids", None)
+        if motion_extend_body_ids is not None:
+            ref_body_pos = torch.cat([ref_body_pos, motion_state["rg_pos_t"][:, motion_extend_body_ids]], dim=1)
+            ref_body_rots = torch.cat([ref_body_rots, motion_state["rg_rot_t"][:, motion_extend_body_ids]], dim=1)
+            ref_body_vels = torch.cat(
+                [ref_body_vels, motion_state["body_vel_t"][:, motion_extend_body_ids] * velocity_multiplier],
+                dim=1,
+            )
+            ref_body_angular_vels = torch.cat(
+                [ref_body_angular_vels, motion_state["body_ang_vel_t"][:, motion_extend_body_ids] * velocity_multiplier],
+                dim=1,
+            )
+
+    return ref_body_pos, ref_body_rots, ref_body_vels, ref_body_angular_vels
+
 def class_to_dict(obj) -> dict:
     if not  hasattr(obj,"__dict__"):
         return obj
@@ -164,18 +192,14 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
     # get blend motion state
     motion_state = env._motion_lib.get_motion_state(motion_id, motion_times)
 
-    ref_body_pos = motion_state["rg_pos_t"]
-    ref_body_rots = motion_state["rg_rot_t"]
-    ref_body_vels = motion_state["body_vel_t"] * velocity_multiplier
-    ref_body_angular_vels = motion_state["body_ang_vel_t"] * velocity_multiplier
     ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
     ref_dof_vel = motion_state["dof_vel"] * velocity_multiplier
 
-    if getattr(env, "motion_body_ids", None) is not None:
-        ref_body_pos = ref_body_pos[:, env.motion_body_ids]
-        ref_body_rots = ref_body_rots[:, env.motion_body_ids]
-        ref_body_vels = ref_body_vels[:, env.motion_body_ids]
-        ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
+    ref_body_pos, ref_body_rots, ref_body_vels, ref_body_angular_vels = select_motion_body_data(
+        env,
+        motion_state,
+        velocity_multiplier=velocity_multiplier,
+    )
 
     # construct observation
     if env.use_contact_in_obs_max:
@@ -204,7 +228,9 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
         imu_body_idx = 0
         imu_body_name = env.config.robot.get("imu_body_name", None)
         if imu_body_name is not None:
-            motion_body_names = getattr(env, "motion_body_names", None)
+            motion_body_names = getattr(env, "motion_body_names_extend", None)
+            if motion_body_names is None:
+                motion_body_names = getattr(env, "motion_body_names", None)
             if motion_body_names is None:
                 motion_body_names = env._motion_lib.mesh_parsers.body_names
             imu_body_idx = motion_body_names.index(imu_body_name)
