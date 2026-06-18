@@ -235,13 +235,11 @@ class Humanoid_Batch:
             return_dict.global_velocity = rigidbody_linear_velocity
             
             
-            if len(self.cfg.extend_config) > 0:
-                return_dict.dof_pos = pose.sum(dim = -1)[..., 1:self.num_bodies] # you can sum it up since unitree's each joint has 1 dof. Last two are for hands. doesn't really matter. 
+            dof_pos_all = pose.sum(dim = -1)
+            if len(self.actuated_joints_idx) > 0:
+                return_dict.dof_pos = dof_pos_all[..., self.actuated_joints_idx]
             else:
-                if not len(self.actuated_joints_idx) == len(self.body_names):
-                    return_dict.dof_pos = pose.sum(dim = -1)[..., self.actuated_joints_idx]
-                else:
-                    return_dict.dof_pos = pose.sum(dim = -1)[..., 1:]
+                return_dict.dof_pos = dof_pos_all[..., 1:]
             
             dof_vel = ((return_dict.dof_pos[:, 1:] - return_dict.dof_pos[:, :-1] )/dt)
             return_dict.dof_vels = torch.cat([dof_vel, dof_vel[:, -2:-1]], dim = 1)
