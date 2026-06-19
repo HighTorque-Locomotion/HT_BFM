@@ -106,15 +106,27 @@ class LeggedRobotMotions(LeggedRobotBase):
         
     def _init_motion_extend(self):
         if "extend_config" in self.config.robot.motion and len(self.config.robot.motion.extend_config) > 0:
-            extend_parent_ids, extend_pos, extend_rot = [], [], []
+            extend_parent_ids, extend_parent_obs_ids, extend_pos, extend_rot = [], [], [], []
             for extend_config in self.config.robot.motion.extend_config:
-                extend_parent_ids.append(self.simulator._body_list.index(extend_config["parent_name"]))
+                parent_name = extend_config["parent_name"]
+                extend_parent_ids.append(self.simulator._body_list.index(parent_name))
+                if self.motion_body_names is not None:
+                    if parent_name not in self.motion_body_names:
+                        raise ValueError(
+                            f"Extended body parent {parent_name!r} must be present in "
+                            "robot.isaacsim_body_names when simulator observation bodies are filtered."
+                        )
+                    extend_parent_obs_ids.append(self.motion_body_names.index(parent_name))
                 # extend_parent_ids.append(self.simulator.find_rigid_body_indice(extend_config["parent_name"]))
                 extend_pos.append(extend_config["pos"])
                 extend_rot.append(extend_config["rot"])
                 self.simulator._body_list.append(extend_config["joint_name"])
 
             self.extend_body_parent_ids = torch.tensor(extend_parent_ids, device=self.device, dtype=torch.long)
+            if self.motion_body_names is not None:
+                self.extend_body_parent_obs_ids = torch.tensor(extend_parent_obs_ids, device=self.device, dtype=torch.long)
+            else:
+                self.extend_body_parent_obs_ids = self.extend_body_parent_ids
             self.extend_body_pos_in_parent = torch.tensor(extend_pos).repeat(self.num_envs, 1, 1).to(self.device)
             self.extend_body_rot_in_parent_wxyz = torch.tensor(extend_rot).repeat(self.num_envs, 1, 1).to(self.device)
             self.extend_body_rot_in_parent_xyzw = self.extend_body_rot_in_parent_wxyz[:, :, [1, 2, 3, 0]]
@@ -267,34 +279,36 @@ class LeggedRobotMotions(LeggedRobotBase):
         
         ################### EXTEND Rigid body POS #####################
         if self.num_extend_bodies > 0:
+            extend_body_parent_ids = self.extend_body_parent_ids
             if self.sim_obs_body_ids is not None:
                 sim_rigid_body_pos = sim_rigid_body_pos[:, self.sim_obs_body_ids]
                 sim_rigid_body_rot = sim_rigid_body_rot[:, self.sim_obs_body_ids]
                 sim_rigid_body_vel = sim_rigid_body_vel[:, self.sim_obs_body_ids]
                 sim_rigid_body_ang_vel = sim_rigid_body_ang_vel[:, self.sim_obs_body_ids]
+                extend_body_parent_ids = self.extend_body_parent_obs_ids
             rotated_pos_in_parent = my_quat_rotate(
-                sim_rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
+                sim_rigid_body_rot[:, extend_body_parent_ids].reshape(-1, 4),
                 self.extend_body_pos_in_parent.reshape(-1, 3)
             )
             extend_curr_pos = my_quat_rotate(
                 self.extend_body_rot_in_parent_xyzw.reshape(-1, 4),
                 rotated_pos_in_parent
-            ).view(self.num_envs, -1, 3) + sim_rigid_body_pos[:, self.extend_body_parent_ids]
+            ).view(self.num_envs, -1, 3) + sim_rigid_body_pos[:, extend_body_parent_ids]
             self._rigid_body_pos_extend = torch.cat([sim_rigid_body_pos, extend_curr_pos], dim=1)
 
             ################### EXTEND Rigid body Rotation #####################
-            extend_curr_rot = quat_mul(sim_rigid_body_rot[:, self.extend_body_parent_ids].reshape(-1, 4),
+            extend_curr_rot = quat_mul(sim_rigid_body_rot[:, extend_body_parent_ids].reshape(-1, 4),
                                         self.extend_body_rot_in_parent_xyzw.reshape(-1, 4),
                                         w_last=True).view(self.num_envs, -1, 4)
             self._rigid_body_rot_extend = torch.cat([sim_rigid_body_rot, extend_curr_rot], dim=1)
             
             ################### EXTEND Rigid Body Angular Velocity #####################
-            self._rigid_body_ang_vel_extend = torch.cat([sim_rigid_body_ang_vel, sim_rigid_body_ang_vel[:, self.extend_body_parent_ids]], dim=1)
+            self._rigid_body_ang_vel_extend = torch.cat([sim_rigid_body_ang_vel, sim_rigid_body_ang_vel[:, extend_body_parent_ids]], dim=1)
         
             ################### EXTEND Rigid Body Linear Velocity #####################
-            self._rigid_body_ang_vel_global = sim_rigid_body_ang_vel[:, self.extend_body_parent_ids]
+            self._rigid_body_ang_vel_global = sim_rigid_body_ang_vel[:, extend_body_parent_ids]
             angular_velocity_contribution = torch.cross(self._rigid_body_ang_vel_global, self.extend_body_pos_in_parent.view(self.num_envs, -1, 3), dim=2)
-            extend_curr_vel = sim_rigid_body_vel[:, self.extend_body_parent_ids] + angular_velocity_contribution.view(self.num_envs, -1, 3)
+            extend_curr_vel = sim_rigid_body_vel[:, extend_body_parent_ids] + angular_velocity_contribution.view(self.num_envs, -1, 3)
             self._rigid_body_vel_extend = torch.cat([sim_rigid_body_vel, extend_curr_vel], dim=1)
         else:
             if self.sim_obs_body_ids is not None:
