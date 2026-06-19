@@ -152,7 +152,7 @@ robot:
   ]
 
   terminate_after_contacts_on: ["waist_yaw_link", "head", "shoulder", "hip"]
-  penalize_contacts_on: ["base_link", "waist_yaw_link",'torso_link', "head", "shoulder", "hip"]
+  penalize_contacts_on: ["base_link", "head", "shoulder", "arm", "hip","thigh","calf", "ankle_pitch"]
   init_state:
     pos: [0.0, 0.0, 0.38]
     rot: [0.0, 0.0, 0.0, 1.0]
