@@ -27,6 +27,20 @@ ROBOT_CONFIG_OVERRIDES = {
     "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
     "piplus_lse": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
 }
+PIPLUS_ROBOTS = {"PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"}
+G1_RENDER_XML = HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_mujoco.xml"
+PIPLUS_RENDER_XML = Path(
+    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
+    "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
+)
+
+
+def _render_xml_for_robot(robot: str | None, qpos_dim: int) -> Path:
+    if robot in PIPLUS_ROBOTS or qpos_dim == 30:
+        return PIPLUS_RENDER_XML
+    if robot in (None, "g1") and qpos_dim == 36:
+        return G1_RENDER_XML
+    raise ValueError(f"No MP4 renderer configured for robot={robot!r} with {qpos_dim}-D qpos.")
 
 
 def _resolve_path(path: Path) -> Path:
@@ -232,13 +246,17 @@ def main(
         qpos, qvel = wrapped_env._get_qpos_qvel(to_numpy=True)
         assert np.allclose(wrapped_env._env.simulator.dof_pos.clone().cpu(), expert_qpos[0, 7:])
         joint_pos = [wrapped_env._env.simulator.dof_state[..., 0].clone().cpu().numpy()]
-        # episode_len=500
+        episode_len=2000
         current_episode_len = episode_len if episode_len is not None else z.shape[0]
         if current_episode_len > z.shape[0]:
             print(f"Requested {current_episode_len} steps; cycling {z.shape[0]} inferred latent steps")
         print(f"Saving video for tracking ({current_episode_len} steps)")
         if save_mp4:
-            rgb_renderer = IsaacRendererWithMuJoco(render_size=256)
+            render_xml = _render_xml_for_robot(robot, expert_qpos.shape[-1])
+            if not render_xml.exists():
+                raise FileNotFoundError(f"MuJoCo render XML not found: {render_xml}")
+            print(f"Rendering MP4 with MuJoCo XML: {render_xml}")
+            rgb_renderer = IsaacRendererWithMuJoco(render_size=256, xml_path=render_xml)
             # Only render 1 + episode_len frames (same as frames list), not the full motion
             expert_video = rgb_renderer.from_qpos(expert_qpos[: 1 + current_episode_len])
             frames = [rgb_renderer.render(wrapped_env._env, 0)[0]]
@@ -264,6 +282,7 @@ def main(
             video_path = output_dir / f"tracking_{MOTION_ID}.mp4"
             media.write_video(str(video_path), new_frames, fps=50)
             print(f"Saved video for tracking: {video_path}")
+            rgb_renderer.close()
 
 
 if __name__ == "__main__":
