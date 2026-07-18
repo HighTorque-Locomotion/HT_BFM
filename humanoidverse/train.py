@@ -56,7 +56,21 @@ CHECKPOINT_DIR_NAME = "checkpoint"
 
 ROBOT_G1 = "g1"
 ROBOT_PIPLUS_LSE = "PiPlus_S_12L8A0G2H1W_LSE"
-SUPPORTED_ROBOTS = (ROBOT_G1, ROBOT_PIPLUS_LSE)
+ROBOT_PIPLUS_LSE_40V = "PiPlus_S_12L8A0G2H1W_LSE_40V"
+ROBOT_PIPLUS_H0W = "PiPlus_S_12L8A0G2H0W"
+ROBOT_H1_260402 = "Hi_P_12L10A0G2H1W_260402"
+SUPPORTED_ROBOTS = (ROBOT_G1, ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_LSE_40V, ROBOT_PIPLUS_H0W, ROBOT_H1_260402)
+
+
+def _scalarize_log_value(value):
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return None
+        return value.detach().float().mean().item()
+    array = np.asarray(value)
+    if array.size == 0 or not np.issubdtype(array.dtype, np.number):
+        return None
+    return float(array.astype(np.float64).mean())
 
 _ENC_CONFIG_TO_EXPERT_DATA_OBS_MAPPER = {
     HumanoidVerseIsaacConfig: None,
@@ -84,6 +98,7 @@ class TrainConfig(BaseConfig):
     env: HumanoidVerseIsaacConfig = pydantic.Field(discriminator="name")
 
     work_dir: str = pydantic.Field(default_factory=lambda: get_local_workdir("g1mujoco_train"))
+    resume_from: str | None = None
 
     seed: int = 0
     online_parallel_envs: int = 50
@@ -98,6 +113,7 @@ class TrainConfig(BaseConfig):
     # Note: this is in env steps (multiples of online_parallel_envs)
     checkpoint_every_steps: int = 5_000_000
     checkpoint_buffer: bool = True
+    resume_replay_buffer: bool = True
     prioritization: bool = False
     prioritization_min_val: float = 0.5
     prioritization_max_val: float = 5
@@ -169,19 +185,32 @@ class TrainConfig(BaseConfig):
         return Workspace(self)
 
 
+def _resolve_checkpoint_dir(path: str | Path) -> Path:
+    path = Path(path).expanduser()
+    if (path / CHECKPOINT_DIR_NAME).exists():
+        path = path / CHECKPOINT_DIR_NAME
+    if not path.exists():
+        raise FileNotFoundError(f"Resume checkpoint directory {path} does not exist.")
+    if not (path / "train_status.json").exists():
+        raise FileNotFoundError(f"Resume checkpoint directory {path} is missing train_status.json.")
+    return path
+
+
 def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_build_kwargs: dict[str, tp.Any]):
-    checkpoint_dir = work_dir / CHECKPOINT_DIR_NAME
+    checkpoint_dir = _resolve_checkpoint_dir(cfg.resume_from) if cfg.resume_from else work_dir / CHECKPOINT_DIR_NAME
     checkpoint_time = 0
     if checkpoint_dir.exists():
         with (checkpoint_dir / "train_status.json").open("r") as f:
             train_status = json.load(f)
         checkpoint_time = train_status["time"]
 
-        print(f"Loading the agent at time {checkpoint_time}")
+        print(f"Loading the agent at time {checkpoint_time} from {checkpoint_dir}")
         agent = cfg.agent.object_class.load(checkpoint_dir, device=cfg.agent.model.device)
+        resume_checkpoint_dir = checkpoint_dir
     else:
         agent = cfg.agent.build(**agent_build_kwargs)
-    return agent, cfg, checkpoint_time
+        resume_checkpoint_dir = None
+    return agent, cfg, checkpoint_time, resume_checkpoint_dir
 
 
 def init_wandb(cfg: TrainConfig):
@@ -228,7 +257,7 @@ class Workspace:
 
         set_seed_everywhere(self.cfg.seed)
 
-        self.agent, self.cfg, self._checkpoint_time = create_agent_or_load_checkpoint(
+        self.agent, self.cfg, self._checkpoint_time, self.resume_checkpoint_dir = create_agent_or_load_checkpoint(
             self.work_dir, self.cfg, agent_build_kwargs=dict(obs_space=self.obs_space, action_dim=self.action_dim)
         )
         self.agent._model.train()
@@ -289,42 +318,39 @@ class Workspace:
 
         print("Allocating buffers")
         replay_buffer = {}
-        checkpoint_dir = self.work_dir / CHECKPOINT_DIR_NAME
-        if (checkpoint_dir / "buffers/train").exists():
-            print("Loading checkpointed buffer")
-            if self.cfg.use_trajectory_buffer:
-                replay_buffer["train"] = TrajectoryDictBufferMultiDim.load(checkpoint_dir / "buffers/train", device=self.cfg.buffer_device)
-            else:
-                replay_buffer["train"] = DictBuffer.load(checkpoint_dir / "buffers/train", device=self.cfg.buffer_device)
-            print(f"Loaded buffer of size {len(replay_buffer['train'])}")
-        else:
-            if self.cfg.use_trajectory_buffer:
-                output_key_t = ["observation", "action", "z", "terminated", "truncated", "step_count", "reward"]
-                # TODO this interface should be more elegant (how to inform buffer what keys are coming in / need to be sampled?)
-                if isinstance(self.cfg.agent, (FBcprAuxAgentConfig)):
-                    output_key_t.append("aux_rewards")
-
-                replay_buffer["train"] = TrajectoryDictBufferMultiDim(
-                    capacity=self.cfg.buffer_size // self.cfg.online_parallel_envs,  # make sure to divide by num_envs
-                    device=self.cfg.buffer_device,
-                    n_dim=2,
-                    end_key="truncated",
-                    output_key_t=output_key_t,  # TODO(team): fix this. in principle we could avoid to sample qpos, qvel for training but we need them for reward evaluation
-                    output_key_tp1=["observation", "terminated"],
+        checkpoint_dir = self.resume_checkpoint_dir or (self.work_dir / CHECKPOINT_DIR_NAME)
+        if self.cfg.resume_replay_buffer and (checkpoint_dir / "buffers/train").exists():
+            buffer_dir = checkpoint_dir / "buffers/train"
+            print(f"Loading checkpointed buffer from {buffer_dir}")
+            try:
+                if self.cfg.use_trajectory_buffer:
+                    replay_buffer["train"] = TrajectoryDictBufferMultiDim.load(buffer_dir, device=self.cfg.buffer_device)
+                else:
+                    replay_buffer["train"] = DictBuffer.load(buffer_dir, device=self.cfg.buffer_device)
+                print(f"Loaded buffer of size {len(replay_buffer['train'])}")
+            except OSError as exc:
+                warnings.warn(
+                    f"Could not load checkpointed replay buffer from {buffer_dir}: {exc}. "
+                    "Continuing with an empty replay buffer.",
+                    RuntimeWarning,
                 )
-            else:
-                replay_buffer["train"] = DictBuffer(capacity=self.cfg.buffer_size, device=self.cfg.buffer_device)
+                replay_buffer["train"] = self._create_train_replay_buffer()
+        else:
+            if not self.cfg.resume_replay_buffer and (checkpoint_dir / "buffers/train").exists():
+                print("Skipping checkpointed replay buffer restore because resume_replay_buffer=False")
+            replay_buffer["train"] = self._create_train_replay_buffer()
         if self.training_with_expert_data:
             replay_buffer["expert_slicer"] = expert_buffer
 
         print("Starting training")
-        progb = tqdm(total=self.cfg.num_env_steps, disable=self.cfg.disable_tqdm)
+        progb = tqdm(total=self.cfg.num_env_steps, initial=self._checkpoint_time, disable=self.cfg.disable_tqdm)
         td, info = train_env.reset()
         # see https://farama.org/Vector-Autoreset-Mode
         terminated = np.zeros(self.cfg.online_parallel_envs, dtype=bool)
         truncated = np.zeros(self.cfg.online_parallel_envs, dtype=bool)
         done = np.zeros(self.cfg.online_parallel_envs, dtype=bool)
         total_metrics, context = None, None
+        env_log_sums, num_env_log_updates = {}, 0
         start_time = time.time()
         fps_start_time = time.time()
         checkpoint_time_checker = EveryNStepsChecker(self._checkpoint_time, self.cfg.checkpoint_every_steps)
@@ -427,6 +453,13 @@ class Workspace:
                     if not isinstance(self.cfg.env, HumanoidVerseIsaacConfig):
                         action = action.cpu().detach().numpy()
             new_td, new_reward, new_terminated, new_truncated, new_info = train_env.step(action)
+            if "to_log" in new_info:
+                num_env_log_updates += 1
+                for key, value in new_info["to_log"].items():
+                    scalar = _scalarize_log_value(value)
+                    if scalar is None:
+                        continue
+                    env_log_sums[key] = env_log_sums.get(key, 0.0) + scalar
 
             # we check if at the next iteration we will evaluate
             next_t = t + self.cfg.online_parallel_envs
@@ -515,6 +548,10 @@ class Workspace:
                 for k in sorted(list(total_metrics.keys())):
                     tmp = total_metrics[k] / num_metrics_updates
                     m_dict[k] = np.round(tmp.mean().item(), 6)
+                if num_env_log_updates > 0:
+                    for k in sorted(env_log_sums.keys()):
+                        m_dict[f"env/{k}"] = np.round(env_log_sums[k] / num_env_log_updates, 6)
+                    env_log_sums, num_env_log_updates = {}, 0
                 m_dict["duration [minutes]"] = (time.time() - start_time) / 60
                 m_dict["FPS"] = (1 if t == 0 else self.cfg.log_every_updates) / (time.time() - fps_start_time)
                 if self.cfg.use_wandb:
@@ -589,6 +626,23 @@ class Workspace:
         with (self.work_dir / CHECKPOINT_DIR_NAME / "train_status.json").open("w+") as f:
             json.dump({"time": time}, f, indent=4)
 
+    def _create_train_replay_buffer(self):
+        if self.cfg.use_trajectory_buffer:
+            output_key_t = ["observation", "action", "z", "terminated", "truncated", "step_count", "reward"]
+            # TODO this interface should be more elegant (how to inform buffer what keys are coming in / need to be sampled?)
+            if isinstance(self.cfg.agent, (FBcprAuxAgentConfig)):
+                output_key_t.append("aux_rewards")
+
+            return TrajectoryDictBufferMultiDim(
+                capacity=self.cfg.buffer_size // self.cfg.online_parallel_envs,  # make sure to divide by num_envs
+                device=self.cfg.buffer_device,
+                n_dim=2,
+                end_key="truncated",
+                output_key_t=output_key_t,  # TODO(team): fix this. in principle we could avoid to sample qpos, qvel for training but we need them for reward evaluation
+                output_key_tp1=["observation", "terminated"],
+            )
+        return DictBuffer(capacity=self.cfg.buffer_size, device=self.cfg.buffer_device)
+
 
 def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
     if robot == ROBOT_G1:
@@ -610,7 +664,7 @@ def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
     if robot == ROBOT_PIPLUS_LSE:
         return {
             "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
-            "lafan_tail_path": "humanoidverse/data/pi_LSE_lafan_dataset_20260617_v3/piplus_lse_lafan_10s-clipped.pkl",
+            "lafan_tail_path": "humanoidverse/data/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped.pkl",
             "hydra_overrides": [
                 "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
                 "env.config.lie_down_init=True",
@@ -620,10 +674,49 @@ def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
             "wandb_group": "bfmzero-piplus-lse-isaac",
             "wandb_project": "bfmzero-piplus-lse-isaac",
         }
+    if robot == ROBOT_PIPLUS_LSE_40V:
+        return {
+            "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
+            "lafan_tail_path": "humanoidverse/data/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped.pkl",
+            "hydra_overrides": [
+                "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE_40V",
+                "env.config.lie_down_init=True",
+                "env.config.lie_down_init_prob=0.3",
+            ],
+            "work_dir_prefix": "bfmzero-piplus-lse-40v-isaac",
+            "wandb_group": "bfmzero-piplus-lse-40v-isaac",
+            "wandb_project": "bfmzero-piplus-lse-40v-isaac",
+        }
+    if robot == ROBOT_PIPLUS_H0W:
+        return {
+            "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
+            "lafan_tail_path": "humanoidverse/data/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/piplus_h0w_lafan_10s-clipped.pkl",
+            "hydra_overrides": [
+                "robot=piplus/PiPlus_S_12L8A0G2H0W",
+                "env.config.lie_down_init=True",
+                "env.config.lie_down_init_prob=0.3",
+            ],
+            "work_dir_prefix": "bfmzero-piplus-h0w-isaac",
+            "wandb_group": "bfmzero-piplus-h0w-isaac",
+            "wandb_project": "bfmzero-piplus-h0w-isaac",
+        }
+    if robot == ROBOT_H1_260402:
+        return {
+            "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus",
+            "lafan_tail_path": "humanoidverse/data/Hi_P_12L10A0G2H1W_260402_lafandataset_260714/h1_lafan_10s-clipped.pkl",
+            "hydra_overrides": [
+                "robot=Hi/Hi_P_12L10A0G2H1W_260402",
+                "env.config.lie_down_init=True",
+                "env.config.lie_down_init_prob=0.3",
+            ],
+            "work_dir_prefix": "bfmzero-h1-260402-isaac",
+            "wandb_group": "bfmzero-h1-260402-isaac",
+            "wandb_project": "bfmzero-h1-260402-isaac",
+        }
     raise ValueError(f"Unsupported robot '{robot}'. Choose one of: {', '.join(SUPPORTED_ROBOTS)}")
 
 
-def train_bfm_zero(robot: str = ROBOT_G1):
+def train_bfm_zero(robot: str = ROBOT_G1, resume_from: str | None = None, resume_replay_buffer: bool = True):
     from humanoidverse.agents.fb_cpr_aux.model import FBcprAuxModelArchiConfig, FBcprAuxModelConfig
     from humanoidverse.agents.fb_cpr_aux.agent import FBcprAuxAgentTrainConfig
     from humanoidverse.agents.nn_models import ForwardArchiConfig, BackwardArchiConfig, ActorArchiConfig, DiscriminatorArchiConfig, RewardNormalizerConfig
@@ -631,6 +724,18 @@ def train_bfm_zero(robot: str = ROBOT_G1):
     from humanoidverse.agents.nn_filters import DictInputFilterConfig
 
     robot_settings = _get_robot_training_settings(robot)
+    aux_rewards = ['penalty_torques', 'penalty_action_rate', 'limits_dof_pos', 'limits_torque', 'penalty_undesired_contact', 'penalty_feet_ori', 'penalty_ankle_roll', 'penalty_slippage']
+    aux_rewards_scaling = {'penalty_action_rate': -0.001, 'penalty_feet_ori': -0.4, 'penalty_ankle_roll': -4.0, 'limits_dof_pos': -10.0, 'penalty_slippage': -20.0, 'penalty_undesired_contact': -1.0, 'penalty_torques': 0.0, 'limits_torque': 0.0}
+    if robot in (ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_LSE_40V, ROBOT_PIPLUS_H0W, ROBOT_H1_260402):
+        aux_rewards_scaling['penalty_undesired_contact'] = -20.0
+    if robot == ROBOT_PIPLUS_LSE:
+        aux_rewards_scaling['penalty_slippage'] = -100.0
+    # if robot in (ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_H0W):
+    #     aux_rewards.append('feet_slide')
+    #     aux_rewards_scaling['feet_slide'] = -20.0
+    #     aux_rewards.append('penalty_stumble')
+    #     aux_rewards_scaling['penalty_stumble'] = -1.0
+
     cfg = TrainConfig(
         name='TrainConfig',
         agent=FBcprAuxAgentConfig(
@@ -701,8 +806,8 @@ def train_bfm_zero(robot: str = ROBOT_G1):
                 reg_coeff_aux=0.02,
                 aux_critic_pessimism_penalty=0.5
             ),
-            aux_rewards=['penalty_torques', 'penalty_action_rate', 'limits_dof_pos', 'limits_torque', 'penalty_undesired_contact', 'penalty_feet_ori', 'penalty_ankle_roll', 'penalty_slippage'],
-            aux_rewards_scaling={'penalty_action_rate': -0.1, 'penalty_feet_ori': -0.4, 'penalty_ankle_roll': -4.0, 'limits_dof_pos': -10.0, 'penalty_slippage': -2.0, 'penalty_undesired_contact': -1.0, 'penalty_torques': 0.0, 'limits_torque': 0.0},
+            aux_rewards=aux_rewards,
+            aux_rewards_scaling=aux_rewards_scaling,
             cudagraphs=False,
             compile=True
         ),
@@ -730,6 +835,7 @@ def train_bfm_zero(robot: str = ROBOT_G1):
             root_height_obs=True
         ),
         work_dir=f"results/{robot_settings['work_dir_prefix']}-{time.strftime('%Y%m%d_%H%M%S')}",
+        resume_from=resume_from,
         seed=4728,
         online_parallel_envs=1024,
         log_every_updates=102400,
@@ -739,6 +845,7 @@ def train_bfm_zero(robot: str = ROBOT_G1):
         num_agent_updates=16,
         checkpoint_every_steps=296960,
         checkpoint_buffer=True,
+        resume_replay_buffer=resume_replay_buffer,
         prioritization=True,
         prioritization_min_val=0.5,
         prioritization_max_val=2.0,
@@ -771,7 +878,21 @@ if __name__ == "__main__":
         default=ROBOT_G1,
         help="Robot config to train. Defaults to g1.",
     )
+    parser.add_argument(
+        "--resume_from",
+        default=None,
+        help="Result directory or checkpoint directory to resume from while keeping a new work_dir for this run.",
+    )
+    parser.add_argument(
+        "--no_resume_replay_buffer",
+        action="store_true",
+        help="Resume model weights and train status, but start with an empty online replay buffer.",
+    )
     args = parser.parse_args()
-    train_bfm_zero(robot=args.robot)
+    train_bfm_zero(
+        robot=args.robot,
+        resume_from=args.resume_from,
+        resume_replay_buffer=not args.no_resume_replay_buffer,
+    )
 
 # uv run --no-cache -m humanoidverse.meta_online_entry_point

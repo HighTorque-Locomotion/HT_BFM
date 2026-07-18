@@ -12,7 +12,7 @@ import numpy as np
 from humanoidverse.utils.asset_paths import resolve_asset_path
 
 
-RobotName = Literal["g1", "piplus_lse"]
+RobotName = Literal["g1", "piplus_lse", "piplus_h0w", "h1_260402", "Hi_P_12L10A0G2H1W_260402"]
 HUMANOIDVERSE_DIR = Path(__file__).resolve().parent
 
 
@@ -39,6 +39,27 @@ ROBOT_SPECS: dict[RobotName, RobotSpec] = {
         mujoco_xml_path="package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
         dof_size=23,
         hydra_robot="piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    ),
+    "piplus_h0w": RobotSpec(
+        name="piplus_h0w",
+        default_data_path=HUMANOIDVERSE_DIR / "data" / "piplus_h0w_lafan.pkl",
+        mujoco_xml_path="/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml",
+        dof_size=22,
+        hydra_robot="piplus/PiPlus_S_12L8A0G2H0W",
+    ),
+    "h1_260402": RobotSpec(
+        name="h1_260402",
+        default_data_path=HUMANOIDVERSE_DIR / "data" / "Hi_P_12L10A0G2H1W_260402_lafandataset_260714" / "h1_lafan.pkl",
+        mujoco_xml_path="package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml",
+        dof_size=25,
+        hydra_robot="Hi/Hi_P_12L10A0G2H1W_260402",
+    ),
+    "Hi_P_12L10A0G2H1W_260402": RobotSpec(
+        name="h1_260402",
+        default_data_path=HUMANOIDVERSE_DIR / "data" / "Hi_P_12L10A0G2H1W_260402_lafandataset_260714" / "h1_lafan.pkl",
+        mujoco_xml_path="package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml",
+        dof_size=25,
+        hydra_robot="Hi/Hi_P_12L10A0G2H1W_260402",
     ),
 }
 

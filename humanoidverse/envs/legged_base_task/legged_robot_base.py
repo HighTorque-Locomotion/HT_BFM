@@ -886,6 +886,19 @@ class LeggedRobotBase(BaseTask):
         foot_vel = self.simulator._rigid_body_vel[:, self.feet_indices]
         return torch.sum(torch.norm(foot_vel, dim=-1) * (torch.norm(self.simulator.contact_forces[:, self.feet_indices, :], dim=-1) > 1.), dim=1)
 
+    def _reward_penalty_stumble(self):
+        foot_forces = self.simulator.contact_forces[:, self.feet_indices, :]
+        stumble = torch.any(
+            torch.norm(foot_forces[:, :, :2], dim=2) > 5 * torch.abs(foot_forces[:, :, 2]),
+            dim=1,
+        )
+        return stumble.float()
+
+    def _reward_feet_slide(self):
+        foot_vel = self.simulator._rigid_body_vel[:, self.feet_indices]
+        contact = torch.norm(self.simulator.contact_forces[:, self.feet_indices, :], dim=-1) > 1.0
+        return torch.sum(torch.norm(foot_vel[:, :, :2], dim=-1) * contact, dim=1)
+
     def _reward_feet_max_height_for_this_air(self):
         # Reward long steps
         # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes

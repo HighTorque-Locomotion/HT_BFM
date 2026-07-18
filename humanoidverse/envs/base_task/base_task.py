@@ -200,6 +200,8 @@ class BaseTask(gym.Env):
         termination_contact_names = []
         for name in self.config.robot.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in self.body_names if name in s])
+        self.penalized_contact_names = penalized_contact_names
+        self.termination_contact_names = termination_contact_names
 
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):

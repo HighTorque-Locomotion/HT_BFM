@@ -243,6 +243,9 @@ class IsaacRendererWithMuJoco:
         if xml_path is None:
             xml_path = os.path.join(HUMANOIDVERSE_DIR, "data", "robots", "g1", "scene_29dof_freebase_mujoco.xml")
 
+        from humanoidverse.utils.asset_paths import resolve_asset_path
+
+        xml_path = resolve_asset_path("", xml_path)
         self.mujoco = mujoco
         self.model = mujoco.MjModel.from_xml_path(str(xml_path))
         self.data = mujoco.MjData(self.model)

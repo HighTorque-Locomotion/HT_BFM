@@ -284,33 +284,99 @@ def _get_space_dim(space) -> int:
     return int(space.shape[0])
 
 
-def _infer_actor_obs_layout(inference_model, history: bool) -> list[tuple[str, int]]:
-    obs_space = getattr(inference_model, "obs_space", None)
-    input_filter = getattr(inference_model.cfg.archi.actor, "input_filter", None)
+def _filter_keys(input_filter) -> list[str] | None:
     input_keys = getattr(input_filter, "key", None)
+    if input_keys is None:
+        return None
+    if isinstance(input_keys, str):
+        return [input_keys]
+    if isinstance(input_keys, Sequence):
+        return list(input_keys)
+    raise TypeError(f"Unsupported input_filter.key type: {type(input_keys)}")
 
-    if input_keys is None or not hasattr(obs_space, "spaces"):
+
+def _infer_obs_layout_from_filter(
+    inference_model,
+    input_filter,
+    *,
+    filter_name: str,
+    skip_keys: set[str] | None = None,
+) -> list[tuple[str | None, int]]:
+    obs_space = getattr(inference_model, "obs_space", None)
+    input_keys = _filter_keys(input_filter)
+    skip_keys = skip_keys or set()
+
+    if input_keys is None:
+        if hasattr(obs_space, "spaces") and len(obs_space.spaces) == 1:
+            key = next(iter(obs_space.spaces.keys()))
+            return [(key, _get_space_dim(obs_space.spaces[key]))]
+
+        output_space = getattr(getattr(inference_model, f"_{filter_name}", None), "input_filter", None)
+        output_space = getattr(output_space, "output_space", obs_space)
+        if output_space is None:
+            raise ValueError(f"Cannot infer ONNX {filter_name} observation layout from model.")
+        return [(None, _get_space_dim(output_space))]
+
+    if not hasattr(obs_space, "spaces"):
         raise ValueError(
-            "Cannot infer ONNX actor observation layout from model. "
-            "Expected model.obs_space from checkpoint/model/init_kwargs.json and actor.input_filter.key, "
+            f"Cannot infer ONNX {filter_name} observation layout from model. "
+            f"Expected model.obs_space from checkpoint/model/init_kwargs.json and {filter_name}.input_filter.key, "
             "or pass obs_layout explicitly."
         )
 
-    if isinstance(input_keys, str):
-        input_keys = [input_keys]
-    elif isinstance(input_keys, Sequence):
-        input_keys = list(input_keys)
-    else:
-        raise TypeError(f"Unsupported actor input_filter.key type: {type(input_keys)}")
-
     layout = []
     for key in input_keys:
-        if key == "history_actor" and not history:
+        if key in skip_keys:
             continue
         if key not in obs_space.spaces:
-            raise KeyError(f"Actor input key {key!r} not found in obs_space keys {list(obs_space.spaces.keys())}")
+            raise KeyError(f"{filter_name} input key {key!r} not found in obs_space keys {list(obs_space.spaces.keys())}")
         layout.append((key, _get_space_dim(obs_space.spaces[key])))
     return layout
+
+
+def _infer_actor_obs_layout(inference_model, history: bool) -> list[tuple[str | None, int]]:
+    input_filter = getattr(inference_model.cfg.archi.actor, "input_filter", None)
+    skip_keys = set() if history else {"history_actor"}
+    return _infer_obs_layout_from_filter(inference_model, input_filter, filter_name="actor", skip_keys=skip_keys)
+
+
+def _infer_backward_obs_layout(inference_model) -> list[tuple[str | None, int]]:
+    input_filter = getattr(inference_model.cfg.archi.b, "input_filter", None)
+    layout = _infer_obs_layout_from_filter(inference_model, input_filter, filter_name="backward_map")
+
+    obs_space = getattr(inference_model, "obs_space", None)
+    normalizer_cfg = getattr(getattr(inference_model, "cfg", None), "obs_normalizer", None)
+    normalizers = getattr(normalizer_cfg, "normalizers", None)
+    allow_mismatching = getattr(normalizer_cfg, "allow_mismatching_keys", False)
+    if (
+        layout
+        and layout[0][0] is not None
+        and hasattr(obs_space, "spaces")
+        and isinstance(normalizers, dict)
+        and not allow_mismatching
+    ):
+        known_keys = {key for key, _ in layout}
+        for key in normalizers.keys():
+            if key not in known_keys:
+                if key not in obs_space.spaces:
+                    raise KeyError(f"Normalizer key {key!r} not found in obs_space keys {list(obs_space.spaces.keys())}")
+                layout.append((key, _get_space_dim(obs_space.spaces[key])))
+    return layout
+
+
+def _split_flat_obs(flat_obs: torch.Tensor, obs_layout: list[tuple[str | None, int]]):
+    if len(obs_layout) == 1 and obs_layout[0][0] is None:
+        return flat_obs
+
+    obs = {}
+    start = 0
+    for key, dim in obs_layout:
+        if key is None:
+            raise ValueError("Tensor obs layout cannot be mixed with keyed obs layout.")
+        end = start + dim
+        obs[key] = flat_obs[:, start:end]
+        start = end
+    return obs
 
 
 def export_meta_policy_as_onnx(
@@ -343,18 +409,8 @@ def export_meta_policy_as_onnx(
             Dynamically creates a dictionary from the input keys and args.
             """
             actor_obs, ctx = actor_obs[:, :-z_dim], actor_obs[:, -z_dim:]
-            actor_dict = {}
-            start = 0
-            for key, dim in self.actor_obs_layout:
-                if dim is None:
-                    actor_dict[key] = actor_obs[:, start:]
-                    start = actor_obs.shape[-1]
-                else:
-                    end = start + dim
-                    actor_dict[key] = actor_obs[:, start:end]
-                    start = end
-
-            return self.actor.act(actor_dict, ctx)
+            actor_input = _split_flat_obs(actor_obs, self.actor_obs_layout)
+            return self.actor.act(actor_input, ctx)
 
     wrapper = PPOWrapper(actor, actor_obs_layout=actor_obs_layout)
     example_input_list = example_obs_dict["actor_obs"]
@@ -367,3 +423,51 @@ def export_meta_policy_as_onnx(
         output_names=["action"],  # Name the output
         opset_version=13,  # Specify the opset version, if needed
     )
+    return path
+
+
+def export_z_encoder_as_onnx(
+    inference_model,
+    path,
+    exported_encoder_name,
+    example_obs_dict: dict[str, torch.Tensor] | None = None,
+    obs_layout: list[tuple[str | None, int]] | None = None,
+    project_z: bool = True,
+):
+    os.makedirs(path, exist_ok=True)
+    path = os.path.join(path, exported_encoder_name)
+    inference_model = inference_model.eval()
+    encoder = copy.deepcopy(inference_model).to("cpu")
+    encoder_obs_layout = obs_layout or _infer_backward_obs_layout(inference_model)
+
+    class ZEncoderWrapper(nn.Module):
+        def __init__(self, encoder, encoder_obs_layout, project_z: bool):
+            super().__init__()
+            self.encoder = encoder
+            self.encoder_obs_layout = encoder_obs_layout
+            self.project_z = project_z
+
+        def forward(self, encoder_obs):
+            obs = _split_flat_obs(encoder_obs, self.encoder_obs_layout)
+            z = self.encoder.backward_map(obs)
+            if self.project_z:
+                z = self.encoder.project_z(z)
+            return z.float()
+
+    wrapper = ZEncoderWrapper(encoder, encoder_obs_layout=encoder_obs_layout, project_z=project_z)
+    if example_obs_dict is not None and "encoder_obs" in example_obs_dict:
+        example_input = example_obs_dict["encoder_obs"]
+    else:
+        example_dim = sum(dim for _, dim in encoder_obs_layout)
+        example_input = torch.randn(1, example_dim)
+
+    torch.onnx.export(
+        wrapper,
+        example_input,
+        path,
+        verbose=False,
+        input_names=["encoder_obs"],
+        output_names=["z"],
+        opset_version=13,
+    )
+    return path

@@ -33,6 +33,7 @@ from humanoidverse.simulator.isaacsim.isaaclab_viewpoint_camera_controller impor
 import builtins
 import inspect
 import copy
+from dataclasses import MISSING
 from humanoidverse.simulator.isaacsim.isaacsim_articulation_cfg import ARTICULATION_CFG
 from humanoidverse.utils.asset_paths import resolve_asset_path
 
@@ -53,17 +54,24 @@ from humanoidverse.simulator.isaacsim.actuators import (
     ARMATURE_4438,
     ARMATURE_5031,
     ARMATURE_5036,
+    ARMATURE_6036,
     DAMPING_3536,
     DAMPING_4438,
     DAMPING_5031,
     DAMPING_5036,
+    DAMPING_6036,
     HTMotorCfg_4438,
     HTMotorCfg_5031,
     HTMotorCfg_5036,
+    HTMotorCfg_6036,
+    HTMotor40VCfg_3536,
+    HTMotor40VCfg_4438,
+    HTMotor40VCfg_5036,
     STIFFNESS_3536,
     STIFFNESS_4438,
     STIFFNESS_5031,
     STIFFNESS_5036,
+    STIFFNESS_6036,
 )
 
 class IsaacSim(BaseSimulator):
@@ -141,9 +149,13 @@ class IsaacSim(BaseSimulator):
                 func=mdp.randomize_rigid_body_mass,
                 mode="startup",
                 params={
-                    "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        body_names=self.robot_config.get("randomize_link_body_names", ".*"),
+                    ),
                     "mass_distribution_params": tuple(self.domain_rand_config["link_mass_range"]),
                     "operation": "scale",
+                    "distribution": "uniform",
                 },
             )
             self.event_types.add("startup")
@@ -157,8 +169,9 @@ class IsaacSim(BaseSimulator):
                     "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
                     "static_friction_range": self.domain_rand_config["friction_range"],
                     "dynamic_friction_range": self.domain_rand_config["friction_range"],
-                    "restitution_range": (0.0, 0.0),
-                    "num_buckets": 1024,
+                    "restitution_range": self.domain_rand_config.get("restitution_range", (0.0, 0.0)),
+                    "num_buckets": self.domain_rand_config.get("friction_num_buckets", 1024),
+                    "make_consistent": self.domain_rand_config.get("friction_make_consistent", False),
                 },
             )
             
@@ -196,8 +209,8 @@ class IsaacSim(BaseSimulator):
                                                  self.domain_rand_config["max_push_vel_xy"]),
                                            "y": (-self.domain_rand_config["max_push_vel_xy"], 
                                                  self.domain_rand_config["max_push_vel_xy"]),
-                                        #    "z": (-self.domain_rand_config["max_push_vel_xy"],  # ZL: We don't push in the z direction yet. 
-                                                #  self.domain_rand_config["max_push_vel_xy"]),
+                                           "z": (-self.domain_rand_config.get("max_push_vel_z", 0.0),
+                                                 self.domain_rand_config.get("max_push_vel_z", 0.0)),
                                            "roll": (-self.domain_rand_config["max_push_ang_vel"], 
                                                  self.domain_rand_config["max_push_ang_vel"]),
                                            "pitch": (-self.domain_rand_config["max_push_ang_vel"], 
@@ -300,8 +313,61 @@ class IsaacSim(BaseSimulator):
         }
 
     def _build_piplus_ht_motor_actuators(self):
-        return {
-            "legs": HTMotorCfg_5036(
+        def motor_cfg_value(motor_cfg_cls, field_name):
+            config_fields = getattr(motor_cfg_cls, "__dataclass_fields__", {})
+            if field_name in config_fields:
+                default = config_fields[field_name].default
+                if default is not MISSING:
+                    return default
+            if hasattr(motor_cfg_cls, field_name):
+                return getattr(motor_cfg_cls, field_name)
+            return getattr(motor_cfg_cls(), field_name)
+
+        def motor_constants(motor_cfg_name, fallback_model):
+            model_constants = {
+                "3536": (STIFFNESS_3536, DAMPING_3536, ARMATURE_3536),
+                "4438": (STIFFNESS_4438, DAMPING_4438, ARMATURE_4438),
+                "5031": (STIFFNESS_5031, DAMPING_5031, ARMATURE_5031),
+                "5036": (STIFFNESS_5036, DAMPING_5036, ARMATURE_5036),
+                "6036": (STIFFNESS_6036, DAMPING_6036, ARMATURE_6036),
+            }
+            for model_name in ("6036", "5036", "5031", "4438", "3536"):
+                if motor_cfg_name.endswith(model_name):
+                    return model_constants[model_name]
+            return model_constants[fallback_model]
+
+        motor_actuators = self.robot_config.control.get("motor_actuators", {})
+        use_motor_limits = bool(motor_actuators)
+        legs_motor_cfg = globals()[motor_actuators.get("legs", "HTMotorCfg_5036")]
+        feet_motor_cfg = globals()[motor_actuators.get("feet", "HTMotorCfg_5036")]
+        arms_motor_cfg = globals()[motor_actuators.get("arms", "HTMotorCfg_4438")]
+        wrists_motor_cfg_name = motor_actuators.get("wrists")
+        wrists_motor_cfg = globals()[wrists_motor_cfg_name] if wrists_motor_cfg_name else None
+        head_motor_cfg_name = motor_actuators.get("head")
+        head_motor_cfg = globals()[head_motor_cfg_name] if head_motor_cfg_name else ImplicitActuatorCfg
+        head_motor_delay = {"min_delay": 0, "max_delay": 3} if head_motor_cfg_name else {}
+        waist_yaw_motor_cfg_name = motor_actuators.get("waist_yaw", "HTMotorCfg_5031")
+        waist_yaw_motor_cfg = globals()[waist_yaw_motor_cfg_name]
+        legs_stiffness, legs_damping, legs_armature = motor_constants(motor_actuators.get("legs", "HTMotorCfg_5036"), "5036")
+        feet_stiffness, feet_damping, feet_armature = motor_constants(motor_actuators.get("feet", "HTMotorCfg_5036"), "5036")
+        arms_stiffness, arms_damping, arms_armature = motor_constants(motor_actuators.get("arms", "HTMotorCfg_4438"), "4438")
+        wrists_stiffness, wrists_damping, wrists_armature = motor_constants(wrists_motor_cfg_name or "HTMotorCfg_4438", "4438")
+        waist_yaw_stiffness, waist_yaw_damping, waist_yaw_armature = motor_constants(waist_yaw_motor_cfg_name, "5031")
+        legs_effort_limit = motor_cfg_value(legs_motor_cfg, "max_torque") if use_motor_limits else 20.0
+        legs_velocity_limit = motor_cfg_value(legs_motor_cfg, "max_velocity") if use_motor_limits else 60.0
+        feet_effort_limit = motor_cfg_value(feet_motor_cfg, "max_torque") if use_motor_limits else 20.0
+        feet_velocity_limit = motor_cfg_value(feet_motor_cfg, "max_velocity") if use_motor_limits else 60.0
+        arms_effort_limit = motor_cfg_value(arms_motor_cfg, "max_torque") if use_motor_limits else 20.0
+        arms_velocity_limit = motor_cfg_value(arms_motor_cfg, "max_velocity") if use_motor_limits else 60.0
+        wrists_effort_limit = motor_cfg_value(wrists_motor_cfg, "max_torque") if wrists_motor_cfg else 10.0
+        wrists_velocity_limit = motor_cfg_value(wrists_motor_cfg, "max_velocity") if wrists_motor_cfg else 60.0
+        head_effort_limit = motor_cfg_value(head_motor_cfg, "max_torque") if head_motor_cfg_name else 3.0
+        head_velocity_limit = motor_cfg_value(head_motor_cfg, "max_velocity") if head_motor_cfg_name else 60.0
+        waist_yaw_effort_limit = motor_cfg_value(waist_yaw_motor_cfg, "max_torque") if use_motor_limits else 20.0
+        waist_yaw_velocity_limit = motor_cfg_value(waist_yaw_motor_cfg, "max_velocity") if use_motor_limits else 60.0
+
+        actuators = {
+            "legs": legs_motor_cfg(
                 joint_names_expr=[
                     ".*_thigh_joint",
                     ".*_hip_roll_joint",
@@ -309,67 +375,58 @@ class IsaacSim(BaseSimulator):
                     ".*_calf_joint",
                 ],
                 effort_limit_sim={
-                    ".*_thigh_joint": 20.0,
-                    ".*_hip_roll_joint": 20.0,
-                    ".*_hip_pitch_joint": 20.0,
-                    ".*_calf_joint": 20.0,
+                    ".*_thigh_joint": legs_effort_limit,
+                    ".*_hip_roll_joint": legs_effort_limit,
+                    ".*_hip_pitch_joint": legs_effort_limit,
+                    ".*_calf_joint": legs_effort_limit,
                 },
                 velocity_limit_sim={
-                    ".*_thigh_joint": 60.0,
-                    ".*_hip_roll_joint": 60.0,
-                    ".*_hip_pitch_joint": 60.0,
-                    ".*_calf_joint": 60.0,
+                    ".*_thigh_joint": legs_velocity_limit,
+                    ".*_hip_roll_joint": legs_velocity_limit,
+                    ".*_hip_pitch_joint": legs_velocity_limit,
+                    ".*_calf_joint": legs_velocity_limit,
                 },
                 stiffness={
-                    ".*_hip_pitch_joint": STIFFNESS_5036,
-                    ".*_hip_roll_joint": STIFFNESS_5036,
-                    ".*_thigh_joint": STIFFNESS_5036,
-                    ".*_calf_joint": STIFFNESS_5036,
+                    ".*_hip_pitch_joint": legs_stiffness,
+                    ".*_hip_roll_joint": legs_stiffness,
+                    ".*_thigh_joint": legs_stiffness,
+                    ".*_calf_joint": legs_stiffness,
                 },
                 damping={
-                    ".*_hip_pitch_joint": DAMPING_5036,
-                    ".*_hip_roll_joint": DAMPING_5036,
-                    ".*_thigh_joint": DAMPING_5036,
-                    ".*_calf_joint": DAMPING_5036,
+                    ".*_hip_pitch_joint": legs_damping,
+                    ".*_hip_roll_joint": legs_damping,
+                    ".*_thigh_joint": legs_damping,
+                    ".*_calf_joint": legs_damping,
                 },
                 armature={
-                    ".*_hip_pitch_joint": ARMATURE_5036,
-                    ".*_hip_roll_joint": ARMATURE_5036,
-                    ".*_thigh_joint": ARMATURE_5036,
-                    ".*_calf_joint": ARMATURE_5036,
+                    ".*_hip_pitch_joint": legs_armature,
+                    ".*_hip_roll_joint": legs_armature,
+                    ".*_thigh_joint": legs_armature,
+                    ".*_calf_joint": legs_armature,
                 },
                 min_delay=0,
                 max_delay=3,
             ),
-            "feet": HTMotorCfg_5036(
+            "feet": feet_motor_cfg(
                 joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
-                effort_limit_sim=20.0,
-                velocity_limit_sim=60.0,
-                stiffness=STIFFNESS_5036,
-                damping=DAMPING_5036,
-                armature=ARMATURE_5036,
+                effort_limit_sim=feet_effort_limit,
+                velocity_limit_sim=feet_velocity_limit,
+                stiffness=feet_stiffness,
+                damping=feet_damping,
+                armature=feet_armature,
                 min_delay=0,
                 max_delay=3,
             ),
-            "waist_yaw": HTMotorCfg_5031(
-                joint_names_expr=["waist_yaw_joint"],
-                effort_limit_sim=20.0,
-                velocity_limit_sim=60.0,
-                stiffness=STIFFNESS_5031,
-                damping=DAMPING_5031,
-                armature=ARMATURE_5031,
-                min_delay=0,
-                max_delay=3,
-            ),
-            "head": ImplicitActuatorCfg(
+            "head": head_motor_cfg(
                 joint_names_expr=[".*head_yaw_joint", ".*head_pitch_joint"],
-                effort_limit_sim=3.0,
-                velocity_limit_sim=60.0,
+                effort_limit_sim=head_effort_limit,
+                velocity_limit_sim=head_velocity_limit,
                 stiffness=STIFFNESS_3536,
                 damping=DAMPING_3536,
                 armature=ARMATURE_3536,
+                **head_motor_delay,
             ),
-            "arms": HTMotorCfg_4438(
+            "arms": arms_motor_cfg(
                 joint_names_expr=[
                     ".*_shoulder_pitch_joint",
                     ".*_shoulder_roll_joint",
@@ -377,39 +434,62 @@ class IsaacSim(BaseSimulator):
                     ".*_elbow_joint",
                 ],
                 effort_limit_sim={
-                    ".*_shoulder_pitch_joint": 20.0,
-                    ".*_shoulder_roll_joint": 20.0,
-                    ".*_upper_arm_joint": 20.0,
-                    ".*_elbow_joint": 20.0,
+                    ".*_shoulder_pitch_joint": arms_effort_limit,
+                    ".*_shoulder_roll_joint": arms_effort_limit,
+                    ".*_upper_arm_joint": arms_effort_limit,
+                    ".*_elbow_joint": arms_effort_limit,
                 },
                 velocity_limit_sim={
-                    ".*_shoulder_pitch_joint": 60.0,
-                    ".*_shoulder_roll_joint": 60.0,
-                    ".*_upper_arm_joint": 60.0,
-                    ".*_elbow_joint": 60.0,
+                    ".*_shoulder_pitch_joint": arms_velocity_limit,
+                    ".*_shoulder_roll_joint": arms_velocity_limit,
+                    ".*_upper_arm_joint": arms_velocity_limit,
+                    ".*_elbow_joint": arms_velocity_limit,
                 },
                 stiffness={
-                    ".*_shoulder_pitch_joint": STIFFNESS_4438,
-                    ".*_shoulder_roll_joint": STIFFNESS_4438,
-                    ".*_upper_arm_joint": STIFFNESS_4438,
-                    ".*_elbow_joint": STIFFNESS_4438,
+                    ".*_shoulder_pitch_joint": arms_stiffness,
+                    ".*_shoulder_roll_joint": arms_stiffness,
+                    ".*_upper_arm_joint": arms_stiffness,
+                    ".*_elbow_joint": arms_stiffness,
                 },
                 damping={
-                    ".*_shoulder_pitch_joint": DAMPING_4438,
-                    ".*_shoulder_roll_joint": DAMPING_4438,
-                    ".*_upper_arm_joint": DAMPING_4438,
-                    ".*_elbow_joint": DAMPING_4438,
+                    ".*_shoulder_pitch_joint": arms_damping,
+                    ".*_shoulder_roll_joint": arms_damping,
+                    ".*_upper_arm_joint": arms_damping,
+                    ".*_elbow_joint": arms_damping,
                 },
                 armature={
-                    ".*_shoulder_pitch_joint": ARMATURE_4438,
-                    ".*_shoulder_roll_joint": ARMATURE_4438,
-                    ".*_upper_arm_joint": ARMATURE_4438,
-                    ".*_elbow_joint": ARMATURE_4438,
+                    ".*_shoulder_pitch_joint": arms_armature,
+                    ".*_shoulder_roll_joint": arms_armature,
+                    ".*_upper_arm_joint": arms_armature,
+                    ".*_elbow_joint": arms_armature,
                 },
                 min_delay=0,
                 max_delay=3,
             ),
         }
+        if wrists_motor_cfg is not None and any("wrist_joint" in dof_name for dof_name in self.robot_config.dof_names):
+            actuators["wrists"] = wrists_motor_cfg(
+                joint_names_expr=[".*_wrist_joint"],
+                effort_limit_sim=wrists_effort_limit,
+                velocity_limit_sim=wrists_velocity_limit,
+                stiffness=wrists_stiffness,
+                damping=wrists_damping,
+                armature=wrists_armature,
+                min_delay=0,
+                max_delay=3,
+            )
+        if self.robot_config.get("waist_dof_names", []):
+            actuators["waist_yaw"] = waist_yaw_motor_cfg(
+                joint_names_expr=["waist_yaw_joint"],
+                effort_limit_sim=waist_yaw_effort_limit,
+                velocity_limit_sim=waist_yaw_velocity_limit,
+                stiffness=waist_yaw_stiffness,
+                damping=waist_yaw_damping,
+                armature=waist_yaw_armature,
+                min_delay=0,
+                max_delay=3,
+            )
+        return actuators
 
     def _build_actuators(
         self,
@@ -520,6 +600,7 @@ class IsaacSim(BaseSimulator):
         contact_sensor_config: ContactSensorCfg = ContactSensorCfg(
             prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
         )
+        contact_pair_sensor_configs = self._build_contact_pair_sensor_configs()
 
         imu_body_name = self.robot_config.get("imu_body_name", None)
         imu_body_config = None
@@ -615,6 +696,12 @@ class IsaacSim(BaseSimulator):
         self.scene.articulations["robot"] = self._robot
         self.contact_sensor = ContactSensor(contact_sensor_config)
         self.scene.sensors["contact_sensor"] = self.contact_sensor
+        self.contact_pair_sensors = {}
+        for pair_name, pair_sensor_config in contact_pair_sensor_configs.items():
+            sensor_name = f"contact_pair_{pair_name}"
+            pair_sensor = ContactSensor(pair_sensor_config)
+            self.contact_pair_sensors[pair_name] = pair_sensor
+            self.scene.sensors[sensor_name] = pair_sensor
         self.imu_body = None
         if imu_body_config is not None:
             self.imu_body = Imu(imu_body_config)
@@ -670,6 +757,32 @@ class IsaacSim(BaseSimulator):
             markers=sphere_markers))
         if self.config.simulator.get('enable_cameras', False):
             self.setup_rendering_cameras()
+
+    def _build_contact_pair_sensor_configs(self):
+        body_names = set(self.robot_config.get("isaacsim_body_names", self.robot_config.body_names))
+        pair_specs = {
+            "r_elbow_r_thigh": ("r_elbow_link", "r_thigh_link"),
+            "l_elbow_l_thigh": ("l_elbow_link", "l_thigh_link"),
+            "r_thigh_base": ("r_thigh_link", "base_link"),
+            "l_thigh_base": ("l_thigh_link", "base_link"),
+            "l_ankle_pitch_r_ankle_pitch": ("l_ankle_pitch_link", "r_ankle_pitch_link"),
+            "l_ankle_pitch_r_ankle_roll": ("l_ankle_pitch_link", "r_ankle_roll_link"),
+            "l_ankle_roll_r_ankle_pitch": ("l_ankle_roll_link", "r_ankle_pitch_link"),
+            "l_ankle_roll_r_ankle_roll": ("l_ankle_roll_link", "r_ankle_roll_link"),
+            "r_elbow_waist_yaw": ("r_elbow_link", "waist_yaw_link"),
+            "l_elbow_waist_yaw": ("l_elbow_link", "waist_yaw_link"),
+        }
+        pair_sensor_configs = {}
+        for pair_name, (sensor_body_name, filter_body_name) in pair_specs.items():
+            if sensor_body_name not in body_names or filter_body_name not in body_names:
+                continue
+            pair_sensor_configs[pair_name] = ContactSensorCfg(
+                prim_path=f"/World/envs/env_.*/Robot/{sensor_body_name}",
+                history_length=1,
+                update_period=0.005,
+                filter_prim_paths_expr=[f"/World/envs/env_.*/Robot/{filter_body_name}"],
+            )
+        return pair_sensor_configs
         
     def setup_keyboard(self):
         # TODO: add back
@@ -814,6 +927,16 @@ class IsaacSim(BaseSimulator):
     @property
     def contact_forces(self):
         return self.contact_sensor.data.net_forces_w[:, self.contact_to_body_idx, :]  # (num_envs, num_bodies, 3)
+
+    @property
+    def contact_pair_forces(self):
+        pair_forces = {}
+        for pair_name, pair_sensor in getattr(self, "contact_pair_sensors", {}).items():
+            force_matrix_w = pair_sensor.data.force_matrix_w
+            if force_matrix_w is None or force_matrix_w.shape[1] == 0 or force_matrix_w.shape[2] == 0:
+                continue
+            pair_forces[pair_name] = force_matrix_w[:, 0, 0, :]
+        return pair_forces
     
     @property
     def base_quat(self):
@@ -920,6 +1043,15 @@ class IsaacSim(BaseSimulator):
                     [
                         marker_body_to_index.get(body_name, body_id % len(self.vis_sphere_marker_names))
                         for body_id, body_name in enumerate(self.body_names)
+                    ],
+                    dtype=torch.long,
+                    device=pos.device,
+                )
+            elif marker_body_to_index and pos.shape[0] == len(self._body_list):
+                marker_indices = torch.tensor(
+                    [
+                        marker_body_to_index.get(body_name, body_id % len(self.vis_sphere_marker_names))
+                        for body_id, body_name in enumerate(self._body_list)
                     ],
                     dtype=torch.long,
                     device=pos.device,

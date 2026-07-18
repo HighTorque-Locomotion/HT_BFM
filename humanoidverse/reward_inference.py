@@ -18,7 +18,8 @@ from humanoidverse.agents.buffers.trajectory import TrajectoryDictBufferMultiDim
 from humanoidverse.agents.buffers.transition import DictBuffer
 from humanoidverse.envs.g1_env_helper.bench import RewardWrapperHV
 from humanoidverse.envs.piplus_env_helper.bench import PiPlusRewardWrapperHV
-from humanoidverse.utils.helpers import export_meta_policy_as_onnx
+from humanoidverse.utils.asset_paths import resolve_asset_path
+from humanoidverse.utils.helpers import export_meta_policy_as_onnx, export_z_encoder_as_onnx
 
 # Resolve humanoidverse root directory
 if getattr(humanoidverse, "__file__", None) is not None:
@@ -30,12 +31,24 @@ else:
 ROBOT_G1 = "g1"
 ROBOT_PIPLUS_LSE = "PiPlus_S_12L8A0G2H1W_LSE"
 ROBOT_PIPLUS_ALIAS = "piplus_lse"
-PIPLUS_ROBOTS = {ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_ALIAS}
-SUPPORTED_ROBOTS = {ROBOT_G1, *PIPLUS_ROBOTS}
+ROBOT_PIPLUS_H0W = "PiPlus_S_12L8A0G2H0W"
+ROBOT_PIPLUS_H0W_ALIAS = "piplus_h0w"
+ROBOT_H1_260402 = "Hi_P_12L10A0G2H1W_260402"
+ROBOT_H1_260402_ALIAS = "h1_260402"
+PIPLUS_LSE_ROBOTS = {ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_ALIAS}
+PIPLUS_H0W_ROBOTS = {ROBOT_PIPLUS_H0W, ROBOT_PIPLUS_H0W_ALIAS}
+PIPLUS_ROBOTS = PIPLUS_LSE_ROBOTS | PIPLUS_H0W_ROBOTS
+H1_260402_ROBOTS = {ROBOT_H1_260402, ROBOT_H1_260402_ALIAS}
+PI_STYLE_REWARD_ROBOTS = PIPLUS_ROBOTS | H1_260402_ROBOTS
+SUPPORTED_ROBOTS = {ROBOT_G1, *PI_STYLE_REWARD_ROBOTS}
 ROBOT_CONFIG_OVERRIDES = {
     ROBOT_G1: "robot=g1/g1_29dof_hard_waist",
     ROBOT_PIPLUS_LSE: "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
     ROBOT_PIPLUS_ALIAS: "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    ROBOT_PIPLUS_H0W: "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    ROBOT_PIPLUS_H0W_ALIAS: "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    ROBOT_H1_260402: "robot=Hi/Hi_P_12L10A0G2H1W_260402",
+    ROBOT_H1_260402_ALIAS: "robot=Hi/Hi_P_12L10A0G2H1W_260402",
 }
 G1_REWARD_XML = HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_noadditional_actuators.xml"
 PIPLUS_REWARD_XML = Path(
@@ -46,6 +59,11 @@ PIPLUS_SIM_XML = Path(
     "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
     "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
 )
+PIPLUS_H0W_SIM_XML = Path(
+    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
+    "PiPlus_S_12L8A0G2H0W_with_armature.xml"
+)
+H1_260402_SIM_XML = "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml"
 
 
 def _resolve_path(path: Path) -> Path:
@@ -81,6 +99,7 @@ class MuJoCoStateRenderer:
     def __init__(self, xml_path: Path, render_size: int = 256):
         import mujoco
 
+        xml_path = resolve_asset_path("", xml_path)
         self.mujoco = mujoco
         self.model = mujoco.MjModel.from_xml_path(str(xml_path))
         self.data = mujoco.MjData(self.model)
@@ -181,8 +200,12 @@ def main(
     if simulator == "mujoco":
         if robot == ROBOT_G1:
             _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
-        elif robot in PIPLUS_ROBOTS:
+        elif robot in PIPLUS_LSE_ROBOTS:
             _append_or_replace_hydra_override(hydra_overrides, f"robot.asset.xml_file={PIPLUS_SIM_XML}")
+        elif robot in PIPLUS_H0W_ROBOTS:
+            _append_or_replace_hydra_override(hydra_overrides, f"robot.asset.xml_file={PIPLUS_H0W_SIM_XML}")
+        elif robot in H1_260402_ROBOTS:
+            _append_or_replace_hydra_override(hydra_overrides, f"robot.asset.xml_file={H1_260402_SIM_XML}")
     config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
     config["env"]["disable_obs_noise"] = disable_obs_noise
@@ -198,7 +221,7 @@ def main(
 
     output_dir = model_folder / "exported"
     output_dir.mkdir(parents=True, exist_ok=True)
-    export_meta_policy_as_onnx(
+    policy_path = export_meta_policy_as_onnx(
         model,
         output_dir,
         f"{model_name}.onnx",
@@ -206,7 +229,13 @@ def main(
         z_dim=model.cfg.archi.z_dim,
         history=('history_actor' in model.cfg.archi.actor.input_filter.key),
     )
-    print(f"Exported model to {output_dir}/{model_name}.onnx")
+    z_encoder_path = export_z_encoder_as_onnx(
+        model,
+        output_dir,
+        f"{model_name}_z_encoder.onnx",
+    )
+    print(f"Exported model to {policy_path}")
+    print(f"Exported z encoder to {z_encoder_path}")
     tasks = [
         # stand
         "move-ego-0-0",
@@ -313,14 +342,16 @@ def main(
     # dataset = fast_load_buffer(model_folder / "checkpoint/buffers/train", device="cpu")
     print(f"done in {time.time()-start_t}s")
     inference_function = "reward_wr_inference"
-    if robot in PIPLUS_ROBOTS:
+    if robot in PI_STYLE_REWARD_ROBOTS:
+        reward_xml = H1_260402_SIM_XML if robot in H1_260402_ROBOTS else PIPLUS_REWARD_XML
+        reward_xml = resolve_asset_path("", reward_xml)
         reward_eval_agent = PiPlusRewardWrapperHV(
             model=model,
             inference_dataset=dataset,
             num_samples_per_inference=num_samples,
             inference_function=inference_function,
             max_workers=24,
-            env_model=str(PIPLUS_REWARD_XML),
+            env_model=str(reward_xml),
         )
     else:
         reward_eval_agent = RewardWrapperHV(
@@ -354,7 +385,14 @@ def main(
         if save_mp4:
             import mediapy as media
 
-            render_xml = PIPLUS_SIM_XML if robot in PIPLUS_ROBOTS else G1_REWARD_XML
+            if robot in PIPLUS_LSE_ROBOTS:
+                render_xml = PIPLUS_SIM_XML
+            elif robot in PIPLUS_H0W_ROBOTS:
+                render_xml = PIPLUS_H0W_SIM_XML
+            elif robot in H1_260402_ROBOTS:
+                render_xml = H1_260402_SIM_XML
+            else:
+                render_xml = G1_REWARD_XML
             rgb_renderer = MuJoCoStateRenderer(render_xml, render_size=256)
         for task in tasks:
             frames = []

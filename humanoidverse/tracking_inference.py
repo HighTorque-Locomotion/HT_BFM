@@ -8,8 +8,9 @@ from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
 import json
 from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig, IsaacRendererWithMuJoco
 import torch
-from humanoidverse.utils.helpers import export_meta_policy_as_onnx
+from humanoidverse.utils.helpers import export_meta_policy_as_onnx, export_z_encoder_as_onnx
 from humanoidverse.utils.helpers import get_backward_observation
+from humanoidverse.utils.asset_paths import resolve_asset_path
 import joblib
 import mediapy as media
 import numpy as np
@@ -26,18 +27,42 @@ ROBOT_CONFIG_OVERRIDES = {
     "g1": "robot=g1/g1_29dof_hard_waist",
     "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
     "piplus_lse": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    "PiPlus_S_12L8A0G2H1W_LSE_40V": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE_40V",
+    "piplus_lse_40v": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE_40V",
+    "PiPlus_S_12L8A0G2H0W": "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    "piplus_h0w": "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    "Hi_P_12L10A0G2H1W_260402": "robot=Hi/Hi_P_12L10A0G2H1W_260402",
+    "h1_260402": "robot=Hi/Hi_P_12L10A0G2H1W_260402",
 }
-PIPLUS_ROBOTS = {"PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"}
+PIPLUS_LSE_ROBOTS = {
+    "PiPlus_S_12L8A0G2H1W_LSE",
+    "piplus_lse",
+    "PiPlus_S_12L8A0G2H1W_LSE_40V",
+    "piplus_lse_40v",
+}
+PIPLUS_H0W_ROBOTS = {"PiPlus_S_12L8A0G2H0W", "piplus_h0w"}
+PIPLUS_ROBOTS = PIPLUS_LSE_ROBOTS | PIPLUS_H0W_ROBOTS
+H1_260402_ROBOTS = {"Hi_P_12L10A0G2H1W_260402", "h1_260402"}
 G1_RENDER_XML = HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_mujoco.xml"
-PIPLUS_RENDER_XML = Path(
+PIPLUS_LSE_RENDER_XML = Path(
     "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
     "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
 )
+PIPLUS_H0W_RENDER_XML = Path(
+    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
+    "PiPlus_S_12L8A0G2H0W_with_armature.xml"
+)
+H1_260402_RENDER_XML = "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml"
+MOTION_ALL_TOKEN = "motion_all"
 
 
 def _render_xml_for_robot(robot: str | None, qpos_dim: int) -> Path:
-    if robot in PIPLUS_ROBOTS or qpos_dim == 30:
-        return PIPLUS_RENDER_XML
+    if robot in PIPLUS_LSE_ROBOTS or qpos_dim == 30:
+        return PIPLUS_LSE_RENDER_XML
+    if robot in PIPLUS_H0W_ROBOTS or qpos_dim == 29:
+        return PIPLUS_H0W_RENDER_XML
+    if robot in H1_260402_ROBOTS or qpos_dim == 32:
+        return H1_260402_RENDER_XML
     if robot in (None, "g1") and qpos_dim == 36:
         return G1_RENDER_XML
     raise ValueError(f"No MP4 renderer configured for robot={robot!r} with {qpos_dim}-D qpos.")
@@ -72,6 +97,28 @@ def _is_hydra_group_override(override: str) -> bool:
     return "." not in key
 
 
+def _resolve_motion_list(motion_list, num_motions: int) -> list[int]:
+    if isinstance(motion_list, (str, int)):
+        requested = [motion_list]
+    else:
+        requested = list(motion_list)
+
+    requested_tokens = [str(motion).strip() for motion in requested]
+
+    if len(requested_tokens) == 1 and requested_tokens[0].lower() == MOTION_ALL_TOKEN:
+        return list(range(num_motions))
+
+    if any(token.lower() == MOTION_ALL_TOKEN for token in requested_tokens):
+        raise ValueError(f"{MOTION_ALL_TOKEN!r} must be passed by itself, e.g. --motion-list {MOTION_ALL_TOKEN}")
+
+    try:
+        return [int(token) for token in requested_tokens]
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid --motion-list value {requested!r}. Use integer motion ids or {MOTION_ALL_TOKEN!r}."
+        ) from exc
+
+
 def main(
     model_folder: Path,
     data_path: Path | None = None,
@@ -81,12 +128,12 @@ def main(
     save_mp4: bool = False,
     disable_dr: bool = False,
     disable_obs_noise: bool = False,
-    motion_list: list[int] = [25],
+    motion_list: list[str] = ["25"],
     robot: str | None = None,
     episode_len: int | None = None,
     no_training_config: bool = False,
 ):
-    # motion_list: motion ids to evaluate (default [25])
+    # motion_list: motion ids to evaluate, or ["motion_all"] for every motion.
     
     model_folder = _resolve_path(model_folder)
     env_device = "cuda:0" if device == "cuda" else device
@@ -148,10 +195,20 @@ def main(
     if simulator == "mujoco":
         if robot in (None, "g1"):
             _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
-        elif robot in ("PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"):
+        elif robot in PIPLUS_LSE_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
                 "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
+            )
+        elif robot in PIPLUS_H0W_ROBOTS:
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W_with_armature.xml",
+            )
+        elif robot in H1_260402_ROBOTS:
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                f"robot.asset.xml_file={H1_260402_RENDER_XML}",
             )
     config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
@@ -164,7 +221,7 @@ def main(
     # Outputs under model_folder/tracking_inference (sibling of exported/)
     output_dir = model_folder / "exported"
     output_dir.mkdir(parents=True, exist_ok=True)
-    export_meta_policy_as_onnx(
+    policy_path = export_meta_policy_as_onnx(
         model,
         output_dir,
         f"{model_name}.onnx",
@@ -172,12 +229,20 @@ def main(
         z_dim=model.cfg.archi.z_dim,
         history=('history_actor' in model.cfg.archi.actor.input_filter.key),
     )
-    print(f"Exported model to {output_dir}/{model_name}.onnx")
+    z_encoder_path = export_z_encoder_as_onnx(
+        model,
+        output_dir,
+        f"{model_name}_z_encoder.onnx",
+    )
+    print(f"Exported model to {policy_path}")
+    print(f"Exported z encoder to {z_encoder_path}")
 
     def tracking_inference(obs) -> torch.Tensor:
         z = model.backward_map(obs)
+        horizon = model.cfg.seq_length
+        print(f"Horizon: {horizon}")
         for step in range(z.shape[0]):
-            end_idx = min(step + 1, z.shape[0])
+            end_idx = min(step + horizon, z.shape[0])
             z[step] = z[step:end_idx].mean(dim=0)
         return model.project_z(z)
 
@@ -189,6 +254,12 @@ def main(
     print("="*80)
     print(env.config.simulator)
     print("-"*80)
+
+    motion_list = _resolve_motion_list(motion_list, env._motion_lib._num_unique_motions)
+    if motion_list == list(range(env._motion_lib._num_unique_motions)):
+        print(f"Resolved motion list to all {len(motion_list)} motions")
+    else:
+        print(f"Resolved motion list: {motion_list}")
     
     output_dir = model_folder / "tracking_inference"
 
@@ -210,8 +281,14 @@ def main(
 
         z = tracking_inference(tree_map(lambda x: x[1:], obs))
         output_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(z.cpu().numpy(), output_dir / f"zs_{MOTION_ID}.pkl")
-        print(f"Saved zs_{MOTION_ID}.pkl")
+        loaded_motion_key_name = (
+            "_".join(str(motion_key) for motion_key in loaded_motion_keys)
+            if isinstance(loaded_motion_keys, (list, tuple))
+            else str(loaded_motion_keys)
+        )
+        output_filename = f"zs_{MOTION_ID}_{loaded_motion_key_name}.pkl"
+        joblib.dump(z.cpu().numpy(), output_dir / output_filename)
+        print(f"Saved {output_filename}")
 
         observation, info = wrapped_env.reset(to_numpy=False)
 
@@ -252,7 +329,7 @@ def main(
             print(f"Requested {current_episode_len} steps; cycling {z.shape[0]} inferred latent steps")
         print(f"Saving video for tracking ({current_episode_len} steps)")
         if save_mp4:
-            render_xml = _render_xml_for_robot(robot, expert_qpos.shape[-1])
+            render_xml = resolve_asset_path("", _render_xml_for_robot(robot, expert_qpos.shape[-1]))
             if not render_xml.exists():
                 raise FileNotFoundError(f"MuJoCo render XML not found: {render_xml}")
             print(f"Rendering MP4 with MuJoCo XML: {render_xml}")
