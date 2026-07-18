@@ -10,6 +10,7 @@ import functools
 import inspect
 import json
 import numbers
+import os
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
@@ -127,7 +128,11 @@ class DictBuffer:
             nested_key_separator = self.nested_key_separator if nested_key_separator is None else nested_key_separator
             folder = Path(folder)
             folder.mkdir(exist_ok=True, parents=True)
-            hf = h5py.File(str(folder / "buffer.hdf5"), "w")
+            h5_path = folder / "buffer.hdf5"
+            tmp_h5_path = folder / "buffer.hdf5.tmp"
+            config_path = folder / "config.json"
+            tmp_config_path = folder / "config.json.tmp"
+            hf = h5py.File(str(tmp_h5_path), "w")
 
             def save_field(data, prefix: str = "", nested_key: str = "-"):
                 for k, v in data.items():
@@ -142,13 +147,15 @@ class DictBuffer:
 
             save_field(self.storage, nested_key=nested_key_separator)
             hf.close()
+            os.replace(tmp_h5_path, h5_path)
             # save config file
-            with (folder / "config.json").open("w+") as f:
+            with tmp_config_path.open("w+") as f:
                 m_dict = dataclasses.asdict(self)
                 m_dict["_idx"] = self._idx
                 m_dict["_is_full"] = self._is_full
                 m_dict["__target__"] = f"{inspect.getmodule(self).__name__}.{self.__class__.__name__}"
                 json.dump(m_dict, f, indent=4)
+            os.replace(tmp_config_path, config_path)
 
     def load_hdf5(self, h5_file: str | Path, nested_key_separator: str | None = None) -> None:
         nested_key_separator = nested_key_separator or self.nested_key_separator

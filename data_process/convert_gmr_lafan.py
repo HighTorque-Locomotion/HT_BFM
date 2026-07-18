@@ -24,8 +24,21 @@ from humanoidverse.utils.asset_paths import resolve_asset_path
 DEFAULT_INPUT_DIR = Path("data_process/dataset/g1_lafan_dataset")
 DEFAULT_OUTPUT_DIR = Path("humanoidverse/data")
 DEFAULT_ROBOT_XML = Path("humanoidverse/data/robots/g1/g1_29dof.xml")
-PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset_20260617")
+# PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset_20260629")
+PIPLUS_LSE_INPUT_DIR = Path("data_process/dataset/pi_LSE_lafan_dataset_20260706_walk50")
 PIPLUS_LSE_ROBOT_XML = "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
+PIPLUS_H0W_INPUT_DIR = Path("data_process/dataset/pi_0W_lafan_dataset_20260714")
+PIPLUS_H0W_ROBOT_XML = "package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml"
+PIPLUS_H0W_ROBOTS = {"piplus_h0w", "PiPlus_S_12L8A0G2H0W"}
+PIPLUS_ROBOTS = {"piplus_lse"} | PIPLUS_H0W_ROBOTS
+H1_260402_INPUT_DIR = Path("data_process/dataset/Hi_P_12L10A0G2H1W_260402_lafan_260714")
+H1_260402_OUTPUT_DIR = DEFAULT_OUTPUT_DIR / "Hi_P_12L10A0G2H1W_260402_lafan"
+H1_260402_ROBOT_URDF = (
+    "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/urdf/"
+    "Hi_P_12L10A0G2H1W_Simplify_260402.urdf"
+)
+H1_260402_ROBOTS = {"h1_260402", "Hi_P_12L10A0G2H1W_260402"}
+WXYZ_QUAT_ROBOTS = PIPLUS_ROBOTS | H1_260402_ROBOTS
 
 
 def install_numpy_pickle_compat() -> None:
@@ -59,15 +72,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="gmr_lafan")
     parser.add_argument(
         "--robot",
-        choices=("g1", "piplus_lse"),
+        choices=(
+            "g1",
+            "piplus_lse",
+            "piplus_h0w",
+            "PiPlus_S_12L8A0G2H0W",
+            "h1_260402",
+            "Hi_P_12L10A0G2H1W_260402",
+        ),
         default="g1",
-        help="Use piplus_lse to convert ~/HT_BFM/data_process/dataset/pi_LSE_dataset with the PiPlus LSE XML.",
+        help="Apply matching dataset and robot model defaults for g1, PiPlus, or H1 robots.",
     )
     parser.add_argument(
         "--quat-order",
         choices=("xyzw", "wxyz"),
         default=None,
-        help="Quaternion component order in the source files. Defaults to wxyz for piplus_lse, xyzw otherwise.",
+        help="Quaternion component order in the source files. Defaults to wxyz for PiPlus robots, xyzw otherwise.",
     )
     parser.add_argument("--clip-seconds", type=float, default=10.0)
     parser.add_argument("--overwrite", action="store_true")
@@ -79,13 +99,55 @@ def parse_args() -> argparse.Namespace:
             args.robot_xml = resolve_asset_path("", PIPLUS_LSE_ROBOT_XML)
         if args.name == "gmr_lafan":
             args.name = "piplus_lse_lafan"
+    elif args.robot in PIPLUS_H0W_ROBOTS:
+        if args.input_dir == DEFAULT_INPUT_DIR:
+            args.input_dir = PIPLUS_H0W_INPUT_DIR
+        if args.robot_xml == DEFAULT_ROBOT_XML:
+            args.robot_xml = resolve_asset_path("", PIPLUS_H0W_ROBOT_XML)
+        if args.name == "gmr_lafan":
+            args.name = "piplus_h0w_lafan"
+    elif args.robot in H1_260402_ROBOTS:
+        if args.input_dir == DEFAULT_INPUT_DIR:
+            args.input_dir = H1_260402_INPUT_DIR
+        if args.output_dir == DEFAULT_OUTPUT_DIR:
+            args.output_dir = H1_260402_OUTPUT_DIR
+        if args.robot_xml == DEFAULT_ROBOT_XML:
+            args.robot_xml = H1_260402_ROBOT_URDF
+        if args.name == "gmr_lafan":
+            args.name = "h1_lafan"
+    args.robot_xml = resolve_robot_model_path(args.robot_xml)
     if args.quat_order is None:
-        args.quat_order = "wxyz" if args.robot == "piplus_lse" else "xyzw"
+        args.quat_order = "wxyz" if args.robot in WXYZ_QUAT_ROBOTS else "xyzw"
     return args
 
 
-def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray, list[str], dict[str, str]]:
-    root = ET.parse(robot_xml).getroot()
+def normalize_package_path(path: Path | str) -> str:
+    path_text = str(path)
+    if path_text.startswith("package:/") and not path_text.startswith("package://"):
+        return path_text.replace("package:/", "package://", 1)
+    return path_text
+
+
+def resolve_robot_model_path(path: Path | str) -> Path:
+    resolved = resolve_asset_path("", normalize_package_path(path))
+    if not resolved.is_dir():
+        return resolved
+
+    robot_name = resolved.name
+    for candidate in (
+        resolved / "xml" / f"{robot_name}.xml",
+        resolved / "urdf" / f"{robot_name}.urdf",
+    ):
+        if candidate.exists():
+            return candidate
+
+    candidates = sorted((resolved / "xml").glob("*.xml")) + sorted((resolved / "urdf").glob("*.urdf"))
+    if candidates:
+        return candidates[0]
+    raise FileNotFoundError(f"{resolved} does not contain xml/*.xml or urdf/*.urdf robot model files.")
+
+
+def load_mjcf_dof_metadata(root: ET.Element, robot_xml: Path) -> tuple[list[str], np.ndarray, list[str], dict[str, str]]:
     motor_joints = [
         motor.attrib.get("joint", motor.attrib.get("name"))
         for actuator in root.iter("actuator")
@@ -105,6 +167,7 @@ def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray, list[str]
         joint_axes[name] = [float(value) for value in axis.split()]
         joint_order.append(name)
 
+    motor_joints = [name for name in motor_joints if name in joint_axes]
     joint_names = motor_joints or joint_order
     axes = []
     for name in joint_names:
@@ -137,6 +200,48 @@ def load_dof_metadata(robot_xml: Path) -> tuple[list[str], np.ndarray, list[str]
         add_body(body)
 
     return joint_names, np.asarray(axes, dtype=np.float32), body_names, body_to_joint
+
+
+def load_urdf_dof_metadata(root: ET.Element, robot_urdf: Path) -> tuple[list[str], np.ndarray, list[str], dict[str, str]]:
+    body_names = [link.attrib["name"] for link in root.findall("link") if "name" in link.attrib]
+    if not body_names:
+        raise ValueError(f"No links found in {robot_urdf}.")
+
+    joint_names = []
+    axes = []
+    body_to_joint = {}
+    for joint in root.findall("joint"):
+        joint_type = joint.attrib.get("type")
+        if joint_type in {"fixed", "floating", "planar"}:
+            continue
+
+        name = joint.attrib.get("name")
+        if name is None:
+            continue
+
+        axis = joint.find("axis")
+        axis_xyz = "1 0 0" if axis is None else axis.attrib.get("xyz", "1 0 0")
+        child = joint.find("child")
+        child_link = None if child is None else child.attrib.get("link")
+
+        joint_names.append(name)
+        axes.append([float(value) for value in axis_xyz.split()])
+        if child_link is not None:
+            body_to_joint[child_link] = name
+
+    if not axes:
+        raise ValueError(f"No movable one-DOF joints found in {robot_urdf}.")
+
+    return joint_names, np.asarray(axes, dtype=np.float32), body_names, body_to_joint
+
+
+def load_dof_metadata(robot_model: Path) -> tuple[list[str], np.ndarray, list[str], dict[str, str]]:
+    root = ET.parse(robot_model).getroot()
+    if root.tag == "mujoco":
+        return load_mjcf_dof_metadata(root, robot_model)
+    if root.tag == "robot":
+        return load_urdf_dof_metadata(root, robot_model)
+    raise ValueError(f"{robot_model}: unsupported robot model root tag {root.tag!r}.")
 
 
 def make_body_aligned_pose_aa(
@@ -187,6 +292,7 @@ def convert_motion(
     body_to_joint: dict[str, str],
     source: Path,
     quat_order: str,
+    robot: str,
 ) -> dict:
     required = (
         ("fps", "framerate"),
@@ -202,6 +308,8 @@ def convert_motion(
     root_rot = normalize_quat_xyzw(get_raw_field(raw, "root_rot", "base_quat_w", source=source), quat_order)
     dof = np.asarray(get_raw_field(raw, "dof_pos", "joint_pos", source=source), dtype=np.float32)
     fps = int(get_raw_field(raw, "fps", "framerate", source=source))
+    if robot in PIPLUS_ROBOTS and source.stem.lower().startswith("walk"):
+        fps = 50
 
     if root_pos.ndim != 2 or root_pos.shape[1] != 3:
         raise ValueError(f"{source}: root_pos must have shape (T, 3), got {root_pos.shape}.")
@@ -243,6 +351,7 @@ def load_dataset(
     body_names: list[str],
     body_to_joint: dict[str, str],
     quat_order: str,
+    robot: str,
 ) -> dict[str, dict]:
     files = sorted(input_dir.glob("*.pkl"))
     if not files:
@@ -259,6 +368,7 @@ def load_dataset(
             body_to_joint,
             path,
             quat_order,
+            robot,
         )
     return dataset
 
@@ -300,7 +410,7 @@ def main() -> None:
     output_clips = args.output_dir / f"{args.name}_10s-clipped.pkl"
 
     joint_names, dof_axes, body_names, body_to_joint = load_dof_metadata(args.robot_xml)
-    dataset = load_dataset(args.input_dir, joint_names, dof_axes, body_names, body_to_joint, args.quat_order)
+    dataset = load_dataset(args.input_dir, joint_names, dof_axes, body_names, body_to_joint, args.quat_order, args.robot)
     clips = make_clips(dataset, args.clip_seconds)
 
     dump_dataset(dataset, output_full, args.overwrite)

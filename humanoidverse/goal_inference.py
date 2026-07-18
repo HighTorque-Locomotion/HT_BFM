@@ -23,9 +23,17 @@ ROBOT_CONFIG_OVERRIDES = {
     "g1": "robot=g1/g1_29dof_hard_waist",
     "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
     "piplus_lse": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    "PiPlus_S_12L8A0G2H0W": "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    "piplus_h0w": "robot=piplus/PiPlus_S_12L8A0G2H0W",
+    "Hi_P_12L10A0G2H1W_260402": "robot=Hi/Hi_P_12L10A0G2H1W_260402",
+    "h1_260402": "robot=Hi/Hi_P_12L10A0G2H1W_260402",
 }
 
-PIPLUS_ROBOTS = {"PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"}
+PIPLUS_LSE_ROBOTS = {"PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"}
+PIPLUS_H0W_ROBOTS = {"PiPlus_S_12L8A0G2H0W", "piplus_h0w"}
+PIPLUS_ROBOTS = PIPLUS_LSE_ROBOTS | PIPLUS_H0W_ROBOTS
+H1_260402_ROBOTS = {"Hi_P_12L10A0G2H1W_260402", "h1_260402"}
+H1_260402_SIM_XML = "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml"
 
 
 def _resolve_path(path: Path) -> Path:
@@ -58,7 +66,7 @@ def _is_hydra_group_override(override: str) -> bool:
 
 
 def _default_goal_json_paths(robot: str | None) -> list[Path]:
-    if robot in PIPLUS_ROBOTS:
+    if robot in PIPLUS_ROBOTS | H1_260402_ROBOTS:
         return [
             HUMANOIDVERSE_DIR / "data" / "robots" / "piplus" / "goal_frames_piplus_lse_lafan.json",
             HUMANOIDVERSE_DIR / "data" / "goal_frames_piplus_lse_lafan.json",
@@ -135,7 +143,7 @@ def main(
 
     from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
     from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
-    from humanoidverse.utils.helpers import export_meta_policy_as_onnx
+    from humanoidverse.utils.helpers import export_meta_policy_as_onnx, export_z_encoder_as_onnx
     from humanoidverse.utils.helpers import get_backward_observation
 
     model = load_model_from_checkpoint_dir(model_folder / "checkpoint", device=device)
@@ -194,11 +202,18 @@ def main(
     if simulator == "mujoco":
         if robot in (None, "g1"):
             _append_or_replace_hydra_override(hydra_overrides, "robot.asset.xml_file=g1/scene_29dof_freebase_mujoco.xml")
-        elif robot in PIPLUS_ROBOTS:
+        elif robot in PIPLUS_LSE_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
                 "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
             )
+        elif robot in PIPLUS_H0W_ROBOTS:
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W_with_armature.xml",
+            )
+        elif robot in H1_260402_ROBOTS:
+            _append_or_replace_hydra_override(hydra_overrides, f"robot.asset.xml_file={H1_260402_SIM_XML}")
     config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
     config["env"]["disable_obs_noise"] = disable_obs_noise
@@ -209,7 +224,7 @@ def main(
 
     output_dir = model_folder / "exported"
     output_dir.mkdir(parents=True, exist_ok=True)
-    export_meta_policy_as_onnx(
+    policy_path = export_meta_policy_as_onnx(
         model,
         output_dir,
         f"{model_name}.onnx",
@@ -217,7 +232,13 @@ def main(
         z_dim=model.cfg.archi.z_dim,
         history=('history_actor' in model.cfg.archi.actor.input_filter.key),
     )
-    print(f"Exported model to {output_dir}/{model_name}.onnx")
+    z_encoder_path = export_z_encoder_as_onnx(
+        model,
+        output_dir,
+        f"{model_name}_z_encoder.onnx",
+    )
+    print(f"Exported model to {policy_path}")
+    print(f"Exported z encoder to {z_encoder_path}")
     env_cfg = HumanoidVerseIsaacConfig(**config["env"])
     num_envs = 1
     wrapped_env, _ = env_cfg.build(num_envs)
@@ -268,8 +289,8 @@ def main(
 
         from humanoidverse.agents.envs.humanoidverse_isaac import IsaacRendererWithMuJoco
 
-        if robot in PIPLUS_ROBOTS:
-            raise ValueError("save_mp4 currently uses the g1 MuJoCo renderer and is not supported for PiPlus.")
+        if robot in PIPLUS_ROBOTS | H1_260402_ROBOTS:
+            raise ValueError("save_mp4 currently uses the g1 MuJoCo renderer and is not supported for this robot.")
         rgb_renderer = IsaacRendererWithMuJoco(render_size=256)
 
     observation, info = wrapped_env.reset(to_numpy=False)

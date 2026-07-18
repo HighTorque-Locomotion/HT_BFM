@@ -24,6 +24,13 @@ from collections import OrderedDict
 
 
 class LeggedRobotMotions(LeggedRobotBase):
+    _CONTACT_DEBUG_BODY_NAMES = (
+        "l_thigh_link",
+        "r_thigh_link",
+        "l_elbow_link",
+        "r_elbow_link",
+    )
+
     def __init__(self, config, device):
         self.init_done = False
         self.debug_viz = False
@@ -490,7 +497,29 @@ class LeggedRobotMotions(LeggedRobotBase):
         
         if self.config.simulator.config.name == 'isaacsim':
             scales = torch.ones_like(self.marker_coords) * 0.5
-            self.simulator.draw_spheres_batch(self.marker_coords.reshape(-1, 3), scales = scales.view(-1, 3))
+            marker_indices = None
+            marker_body_to_index = getattr(self.simulator, "vis_sphere_marker_body_to_index", {})
+            motion_body_names = getattr(self, "motion_body_names_extend", None)
+            if motion_body_names is None:
+                motion_body_names = getattr(self, "motion_body_names", None)
+            if marker_body_to_index and motion_body_names is not None:
+                marker_indices = torch.tensor(
+                    [
+                        marker_body_to_index.get(
+                            body_name,
+                            body_id % len(self.simulator.vis_sphere_marker_names),
+                        )
+                        for body_id, body_name in enumerate(motion_body_names)
+                    ],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                marker_indices = marker_indices.repeat(self.num_envs)
+            self.simulator.draw_spheres_batch(
+                self.marker_coords.reshape(-1, 3),
+                scales=scales.view(-1, 3),
+                marker_indices=marker_indices,
+            )
         else:
             for env_id in range(self.num_envs):
                 if not self.config.use_teleop_control:
@@ -654,12 +683,160 @@ class LeggedRobotMotions(LeggedRobotBase):
 
     def _reward_penalty_undesired_contact(self):
         res = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        undesired_contact = torch.any(torch.abs(self.simulator.contact_forces[:, self.penalised_contact_indices, :]) > 1, dim=(1, 2))
+        contact_forces = self.simulator.contact_forces[:, self.penalised_contact_indices, :]
+        contact_abs_max = torch.amax(torch.abs(contact_forces), dim=-1)
+        contact_trigger = contact_abs_max > 1
+        undesired_contact = torch.any(contact_trigger, dim=1)
+        thigh_contact_count = self._contact_group_count(contact_trigger, ("l_thigh_link", "r_thigh_link"))
+        pair_contact_count = self._contact_pair_count(
+            contact_forces,
+            contact_trigger,
+            (
+                ("r_elbow_r_thigh", ("r_elbow_link",), ("r_thigh_link",), ("r_elbow_r_thigh",)),
+                ("l_elbow_l_thigh", ("l_elbow_link",), ("l_thigh_link",), ("l_elbow_l_thigh",)),
+                ("r_thigh_base", ("r_thigh_link",), ("base_link",), ("r_thigh_base",)),
+                ("l_thigh_base", ("l_thigh_link",), ("base_link",), ("l_thigh_base",)),
+                (
+                    "l_ankle_r_ankle",
+                    ("l_ankle_pitch_link", "l_ankle_roll_link"),
+                    ("r_ankle_pitch_link", "r_ankle_roll_link"),
+                    (
+                        "l_ankle_pitch_r_ankle_pitch",
+                        "l_ankle_pitch_r_ankle_roll",
+                        "l_ankle_roll_r_ankle_pitch",
+                        "l_ankle_roll_r_ankle_roll",
+                    ),
+                ),
+                (
+                    "elbow_waist_yaw",
+                    ("l_elbow_link", "r_elbow_link"),
+                    ("waist_yaw_link",),
+                    ("l_elbow_waist_yaw", "r_elbow_waist_yaw"),
+                ),
+            ),
+        )
+        self._log_undesired_contact_debug(contact_abs_max, contact_trigger, undesired_contact)
         # Penalize undesired contact
         # import ipdb; ipdb.set_trace()
         res[undesired_contact] = 1.0
+        # res += thigh_contact_count
+        res += pair_contact_count*8
         # print(res)
         return res
+
+    def _contact_group_count(self, contact_trigger, body_names):
+        if not hasattr(self, "penalized_contact_names"):
+            return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        name_to_idx = {name: idx for idx, name in enumerate(self.penalized_contact_names)}
+        indices = [name_to_idx[name] for name in body_names if name in name_to_idx]
+        if len(indices) == 0:
+            return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        return contact_trigger[:, indices].float().sum(dim=1)
+
+    def _contact_pair_count(self, contact_forces, contact_trigger, pair_specs):
+        if not hasattr(self, "penalized_contact_names"):
+            return torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+
+        name_to_idx = {name: idx for idx, name in enumerate(self.penalized_contact_names)}
+        exact_pair_forces = getattr(self.simulator, "contact_pair_forces", {})
+        count = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        for pair_key, body_names_a, body_names_b, exact_pair_names in pair_specs:
+            pair_trigger = self._contact_pair_exact_trigger(exact_pair_forces, pair_key, exact_pair_names)
+            if pair_trigger is None:
+                pair_trigger = self._contact_pair_force_match(
+                    contact_forces,
+                    contact_trigger,
+                    name_to_idx,
+                    body_names_a,
+                    body_names_b,
+                )
+                self.log_dict[f"contact_debug/pair_approx_{pair_key}_trigger_rate"] = pair_trigger.float().mean()
+            count += pair_trigger.float()
+        return count
+
+    def _contact_pair_exact_trigger(self, exact_pair_forces, pair_key, exact_pair_names, threshold=1.0):
+        triggers = []
+        force_norms = []
+        for exact_pair_name in exact_pair_names:
+            pair_force = exact_pair_forces.get(exact_pair_name)
+            if pair_force is None:
+                continue
+            pair_force_norm = torch.norm(pair_force, dim=-1)
+            triggers.append(pair_force_norm > threshold)
+            force_norms.append(pair_force_norm)
+
+        if len(triggers) == 0:
+            return None
+
+        pair_trigger = torch.stack(triggers, dim=0).any(dim=0)
+        pair_force_norm = torch.stack(force_norms, dim=0).amax(dim=0)
+        self.log_dict[f"contact_debug/pair_exact_{pair_key}_trigger_rate"] = pair_trigger.float().mean()
+        self.log_dict[f"contact_debug/pair_exact_{pair_key}_force_mean"] = pair_force_norm.mean()
+        self.log_dict[f"contact_debug/pair_exact_{pair_key}_force_max"] = pair_force_norm.max()
+        return pair_trigger
+
+    def _contact_pair_force_match(
+        self,
+        contact_forces,
+        contact_trigger,
+        name_to_idx,
+        body_names_a,
+        body_names_b,
+        force_rel_tol=0.35,
+        opposite_cos_threshold=-0.25,
+    ):
+        indices_a = [name_to_idx[name] for name in body_names_a if name in name_to_idx]
+        indices_b = [name_to_idx[name] for name in body_names_b if name in name_to_idx]
+        if len(indices_a) == 0 or len(indices_b) == 0:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        pair_trigger = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        for idx_a in indices_a:
+            for idx_b in indices_b:
+                force_a = contact_forces[:, idx_a, :]
+                force_b = contact_forces[:, idx_b, :]
+                norm_a = torch.norm(force_a, dim=-1)
+                norm_b = torch.norm(force_b, dim=-1)
+                both_contact = contact_trigger[:, idx_a] & contact_trigger[:, idx_b]
+                force_rel_diff = torch.abs(norm_a - norm_b) / torch.maximum(norm_a, norm_b).clamp_min(1.0)
+                force_cos = torch.sum(force_a * force_b, dim=-1) / (norm_a * norm_b).clamp_min(1e-6)
+                pair_trigger |= both_contact & (force_rel_diff < force_rel_tol) & (force_cos < opposite_cos_threshold)
+        return pair_trigger
+
+    def _log_undesired_contact_debug(self, contact_abs_max, contact_trigger, undesired_contact):
+        if not hasattr(self, "penalized_contact_names"):
+            return
+
+        name_to_idx = {name: idx for idx, name in enumerate(self.penalized_contact_names)}
+
+        def log_body(body_name):
+            idx = name_to_idx.get(body_name)
+            if idx is None:
+                return
+            body_key = body_name[:-5] if body_name.endswith("_link") else body_name
+            body_trigger = contact_trigger[:, idx].float()
+            body_force = contact_abs_max[:, idx]
+            self.log_dict[f"contact_debug/{body_key}_trigger_rate"] = body_trigger.mean()
+            self.log_dict[f"contact_debug/{body_key}_force_mean"] = body_force.mean()
+            self.log_dict[f"contact_debug/{body_key}_force_max"] = body_force.max()
+
+        def log_group(group_key, body_names):
+            indices = [name_to_idx[name] for name in body_names if name in name_to_idx]
+            if len(indices) == 0:
+                return
+            group_trigger = torch.any(contact_trigger[:, indices], dim=1)
+            group_force = contact_abs_max[:, indices]
+            undesired_count = undesired_contact.float().sum().clamp_min(1.0)
+            self.log_dict[f"contact_debug/{group_key}_trigger_rate"] = group_trigger.float().mean()
+            self.log_dict[f"contact_debug/{group_key}_force_max"] = group_force.max()
+            self.log_dict[f"contact_debug/{group_key}_given_undesired"] = (
+                (group_trigger & undesired_contact).float().sum() / undesired_count
+            )
+
+        for body_name in self._CONTACT_DEBUG_BODY_NAMES:
+            log_body(body_name)
+        log_group("thigh", ("l_thigh_link", "r_thigh_link"))
+        log_group("elbow", ("l_elbow_link", "r_elbow_link"))
     
     def _reward_penalty_ankle_roll(self):
         # Compute the penalty for ankle roll

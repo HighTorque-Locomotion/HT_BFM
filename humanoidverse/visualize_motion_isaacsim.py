@@ -12,8 +12,6 @@ import torch
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
-
 from humanoidverse.visualize_motion import RobotName, get_robot_spec, _load_motion, _motion_to_qpos
 
 
@@ -126,6 +124,8 @@ def main(
     fps: int | None = None,
 ) -> None:
     os.environ["OMNI_KIT_ACCEPT_EULA"] = "YES"
+
+    from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
 
     robot_spec = get_robot_spec(robot)
     if data_path is None:

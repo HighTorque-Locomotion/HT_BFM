@@ -78,40 +78,78 @@ class HTMotorCfg(DelayedPDActuatorCfg):
 
 @configclass
 class HTMotorCfg_5047(HTMotorCfg):
-    curve_param_a = -0.0141
-    curve_param_b = -0.0709
-    curve_param_c = 6.2756
-    max_torque = 20.0
-    max_velocity = 6.0
-    saturation_effort = 20.0
+    curve_param_a: float = -0.0141
+    curve_param_b: float = -0.0709
+    curve_param_c: float = 6.2756
+    max_torque: float = 18.7
+    max_velocity: float = 6.28
+    saturation_effort: float = 18.7
 
 
 @configclass
 class HTMotorCfg_5031(HTMotorCfg):
-    curve_param_a = -0.0141
-    curve_param_b = -0.0709
-    curve_param_c = 6.2756
-    max_torque = 20.0
-    max_velocity = 6.0
-    saturation_effort = 20.0
+    curve_param_a: float = -0.0141
+    curve_param_b: float = -0.0709
+    curve_param_c: float = 6.2756
+    max_torque: float = 20.0
+    max_velocity: float = 6.0
+    saturation_effort: float = 20.0
 
 
 @configclass
 class HTMotorCfg_5036(HTMotorCfg):
-    curve_param_a = -0.006667
-    curve_param_b = -0.113990
-    curve_param_c = 7.732552
-    max_torque = 20.0
-    max_velocity = 6.0
-    saturation_effort = 20.0
+    curve_param_a: float = -0.006667
+    curve_param_b: float = -0.113990
+    curve_param_c: float = 7.732552
+    max_torque: float = 23.7
+    max_velocity: float = 7.95
+    saturation_effort: float = 23.7
 
 
 @configclass
 class HTMotorCfg_4438(HTMotorCfg):
-    curve_param_a = -0.128416
-    curve_param_b = -0.699618
-    curve_param_c = 19.833274
-    max_torque = 10.0
-    max_velocity = 20.0
-    saturation_effort = 10.0
+    curve_param_a: float = -0.128416
+    curve_param_b: float = -0.699618
+    curve_param_c: float = 19.833274
+    max_torque: float = 10.0
+    max_velocity: float = 20.0
+    saturation_effort: float = 10.0
 
+@configclass
+class HTMotorCfg_6036(HTMotorCfg):
+    curve_param_a: float = -0.004215367
+    curve_param_b: float = -0.045892325
+    curve_param_c: float = 7.209663332
+    max_torque: float = 36.5
+    max_velocity: float = 7.435
+    saturation_effort: float = 36.5
+
+
+@configclass
+class HTMotor40VCfg_3536(HTMotorCfg):
+    curve_param_a: float = 2.860840068
+    curve_param_b: float = -22.221680648
+    curve_param_c: float = 41.753409187
+    max_torque: float = 3.3
+    max_velocity: float = 37.18
+    saturation_effort: float = 3.3
+
+
+@configclass
+class HTMotor40VCfg_4438(HTMotorCfg):
+    curve_param_a: float = -0.184120895
+    curve_param_b: float = -0.637858724
+    curve_param_c: float = 24.600869510
+    max_torque: float = 10.2
+    max_velocity: float = 24.6
+    saturation_effort: float = 10.2
+
+
+@configclass
+class HTMotor40VCfg_5036(HTMotorCfg):
+    curve_param_a: float = -0.021735007
+    curve_param_b: float = -0.030980508
+    curve_param_c: float = 14.063931256
+    max_torque: float = 22.3
+    max_velocity: float = 14.45
+    saturation_effort: float = 22.3
