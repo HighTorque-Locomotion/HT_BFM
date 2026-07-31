@@ -625,6 +625,10 @@ def instantiate_isaac_sim(num_envs: int, enable_cameras: bool = False, headless:
     args_cli.num_envs = num_envs
     args_cli.enable_cameras = enable_cameras
     args_cli.headless = headless
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        # Let IsaacLab select the worker-local GPU and disable Kit's
+        # single-process multi-GPU renderer for torchrun workers.
+        args_cli.distributed = True
 
     dest_path = Path(isaaclab.__file__) / "apps"
     current_file_dir_path = os.path.dirname(os.path.realpath(__file__))
