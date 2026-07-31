@@ -19,6 +19,7 @@ from humanoidverse.amp_stage2 import (
     _torchrun_command,
     _transition_core,
     compute_gae,
+    ppo_update,
     project_latent,
 )
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
@@ -57,6 +58,36 @@ class AmpStage2Test(unittest.TestCase):
         self.assertEqual(value.shape, (5,))
         projected = project_latent(raw_z)
         self.assertTrue(torch.allclose(projected.norm(dim=-1), torch.full((5,), 8.0**0.5), atol=1.0e-5))
+
+    def test_ppo_update_early_stops_and_reports_averaged_metrics(self):
+        torch.manual_seed(3)
+        policy = CommandEncoderPolicy(input_dim=5, z_dim=4, hidden_dim=16)
+        features = torch.randn(8, 5)
+        raw_z, log_prob, values = policy.sample(features)
+        rollout = SimpleNamespace(
+            encoder_features=features.reshape(2, 4, 5),
+            raw_z=raw_z.reshape(2, 4, 4),
+            old_log_prob=(log_prob + 1.0).reshape(2, 4),
+        )
+        optimizer = torch.optim.Adam(policy.parameters(), lr=1.0e-4)
+        metrics = ppo_update(
+            policy,
+            rollout,
+            torch.ones(2, 4),
+            values.detach().reshape(2, 4),
+            epochs=4,
+            minibatch_size=8,
+            clip_ratio=0.2,
+            value_coef=0.5,
+            entropy_coef=0.001,
+            optimizer=optimizer,
+            max_grad_norm=1.0,
+            target_kl=0.01,
+        )
+        self.assertEqual(metrics["ppo_updates"], 1.0)
+        self.assertEqual(metrics["ppo_early_stop"], 1.0)
+        self.assertTrue(np.isfinite(metrics["ratio_max"]))
+        self.assertGreaterEqual(metrics["clip_fraction"], 0.0)
 
     def test_amp_discriminator_wgan_gp_is_finite(self):
         discriminator = AMPDiscriminator(feature_dim=12, hidden_dims=(32, 16))
