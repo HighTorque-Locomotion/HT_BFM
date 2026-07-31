@@ -149,7 +149,7 @@ def _load_config_for_inference(
         elif robot in ("PiPlus_S_12L8A0G2H1W_LSE", "piplus_lse"):
             _append_or_replace_hydra_override(
                 hydra_overrides,
-                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/"
+                "robot.asset.xml_file=package://ht_urdf/"
                 "PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
                 "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
             )

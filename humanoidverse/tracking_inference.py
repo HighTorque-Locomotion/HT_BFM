@@ -44,13 +44,18 @@ PIPLUS_H0W_ROBOTS = {"PiPlus_S_12L8A0G2H0W", "piplus_h0w"}
 PIPLUS_ROBOTS = PIPLUS_LSE_ROBOTS | PIPLUS_H0W_ROBOTS
 H1_260402_ROBOTS = {"Hi_P_12L10A0G2H1W_260402", "h1_260402"}
 G1_RENDER_XML = HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_mujoco.xml"
-PIPLUS_LSE_RENDER_XML = Path(
-    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
-    "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
+PIPLUS_LSE_RENDER_XML = (
+    HUMANOIDVERSE_DIR
+    / "data"
+    / "robots"
+    / "piplus"
+    / "PiPlus_S_12L8A0G2H1W_LSE_260611"
+    / "xml"
+    / "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
 )
 PIPLUS_H0W_RENDER_XML = Path(
-    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
-    "PiPlus_S_12L8A0G2H0W_with_armature.xml"
+    "package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
+    "PiPlus_S_12L8A0G2H0W.xml"
 )
 H1_260402_RENDER_XML = "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml"
 MOTION_ALL_TOKEN = "motion_all"
@@ -198,12 +203,12 @@ def main(
         elif robot in PIPLUS_LSE_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
-                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
+                "robot.asset.xml_file=xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
             )
         elif robot in PIPLUS_H0W_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
-                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W_with_armature.xml",
+                "robot.asset.xml_file=package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml",
             )
         elif robot in H1_260402_ROBOTS:
             _append_or_replace_hydra_override(

@@ -205,12 +205,12 @@ def main(
         elif robot in PIPLUS_LSE_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
-                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
+                "robot.asset.xml_file=package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml",
             )
         elif robot in PIPLUS_H0W_ROBOTS:
             _append_or_replace_hydra_override(
                 hydra_overrides,
-                "robot.asset.xml_file=/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W_with_armature.xml",
+                "robot.asset.xml_file=package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml",
             )
         elif robot in H1_260402_ROBOTS:
             _append_or_replace_hydra_override(hydra_overrides, f"robot.asset.xml_file={H1_260402_SIM_XML}")
