@@ -939,6 +939,7 @@ def ppo_update(
     entropy_coef: float,
     optimizer: torch.optim.Optimizer,
     max_grad_norm: float,
+    target_kl: float | None = 0.01,
 ) -> dict[str, float]:
     features = rollout.encoder_features.reshape(-1, rollout.encoder_features.shape[-1])
     raw_z = rollout.raw_z.reshape(-1, rollout.raw_z.shape[-1])
@@ -947,7 +948,19 @@ def ppo_update(
     returns = returns.reshape(-1)
     advantages = (advantages - advantages.mean()) / advantages.std().clamp_min(1.0e-6)
 
-    metrics: dict[str, float] = {}
+    metric_sums = {
+        "policy_loss": 0.0,
+        "value_loss": 0.0,
+        "entropy": 0.0,
+        "approx_kl": 0.0,
+        "clip_fraction": 0.0,
+        "ratio_mean": 0.0,
+        "ratio_max": 0.0,
+        "grad_norm": 0.0,
+        "raw_z_norm": 0.0,
+    }
+    update_count = 0
+    early_stop = False
     sample_count = features.shape[0]
     for _ in range(int(epochs)):
         for indices in torch.randperm(sample_count, device=features.device).split(int(minibatch_size)):
@@ -955,7 +968,10 @@ def ppo_update(
             log_prob = distribution.log_prob(raw_z[indices]).sum(dim=-1)
             entropy = distribution.entropy().mean(dim=-1).mean()
             _, _, value = policy(features[indices])
-            ratio = (log_prob - old_log_prob[indices]).exp()
+            # Bound the exponent before exp() so one bad minibatch cannot poison
+            # all subsequent optimizer steps with inf/nan ratios.
+            log_ratio = (log_prob - old_log_prob[indices]).clamp(-20.0, 20.0)
+            ratio = log_ratio.exp()
             unclipped = ratio * advantages[indices]
             clipped = ratio.clamp(1.0 - clip_ratio, 1.0 + clip_ratio) * advantages[indices]
             policy_loss = -torch.minimum(unclipped, clipped).mean()
@@ -964,14 +980,31 @@ def ppo_update(
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             average_gradients(policy.parameters())
-            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
             optimizer.step()
-            metrics = {
-                "policy_loss": float(policy_loss.detach()),
-                "value_loss": float(value_loss.detach()),
-                "entropy": float(entropy.detach()),
-                "approx_kl": float((old_log_prob[indices] - log_prob).mean().detach()),
-            }
+            approx_kl = (old_log_prob[indices] - log_prob).mean()
+            metric_sums["policy_loss"] += float(policy_loss.detach())
+            metric_sums["value_loss"] += float(value_loss.detach())
+            metric_sums["entropy"] += float(entropy.detach())
+            metric_sums["approx_kl"] += float(approx_kl.detach())
+            metric_sums["clip_fraction"] += float((log_ratio.abs() > clip_ratio).float().mean().detach())
+            metric_sums["ratio_mean"] += float(ratio.mean().detach())
+            metric_sums["ratio_max"] += float(ratio.max().detach())
+            metric_sums["grad_norm"] += float(grad_norm.detach())
+            metric_sums["raw_z_norm"] += float(raw_z[indices].norm(dim=-1).mean().detach())
+            update_count += 1
+
+            if target_kl is not None and target_kl > 0.0 and float(approx_kl.detach()) > 1.5 * target_kl:
+                early_stop = True
+                break
+        if early_stop:
+            break
+
+    if update_count == 0:
+        return {**metric_sums, "ppo_updates": 0.0, "ppo_early_stop": 0.0}
+    metrics = {name: value / update_count for name, value in metric_sums.items()}
+    metrics["ppo_updates"] = float(update_count)
+    metrics["ppo_early_stop"] = float(early_stop)
     return metrics
 
 
@@ -1002,9 +1035,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
-    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--ppo-epochs", type=int, default=2)
     parser.add_argument("--minibatch-size", type=int, default=1024)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--learning-rate", type=float, default=3e-5)
+    parser.add_argument("--target-kl", type=float, default=0.01, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
     parser.add_argument("--amp-weight", type=float, default=0.04)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
@@ -1320,6 +1354,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "global_num_envs": int(args.num_envs * world_size),
         "resume": str(Path(args.resume).resolve()) if args.resume else None,
         "resume_iteration": start_iteration,
+        "ppo": {
+            "epochs": args.ppo_epochs,
+            "minibatch_size": args.minibatch_size,
+            "learning_rate": args.learning_rate,
+            "target_kl": args.target_kl,
+            "clip_ratio": 0.2,
+            "value_coef": 0.5,
+            "entropy_coef": 0.001,
+        },
     }
     if rank0:
         (work_dir / "config.json").write_text(json.dumps(metadata, indent=2) + "\n")
@@ -1467,6 +1510,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 entropy_coef=0.001,
                 optimizer=policy_optimizer,
                 max_grad_norm=1.0,
+                target_kl=args.target_kl,
             )
             metrics = {
                 "iteration": iteration,
