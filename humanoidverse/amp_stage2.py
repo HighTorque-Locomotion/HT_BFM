@@ -29,7 +29,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 
-from humanoidverse.agents.envs.humanoidverse_isaac import HumanoidVerseIsaacConfig
+from humanoidverse.agents.envs.humanoidverse_isaac import (
+    HumanoidVerseIsaacConfig,
+    load_expert_trajectories_from_motion_lib,
+)
 from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
 from humanoidverse.utils.asset_paths import resolve_asset_path
@@ -401,6 +404,7 @@ def _collect_bfm_latent_stats(
     *,
     bfm_agent,
     bfm_model,
+    stats_env,
     device: str,
     robot_config: str,
     expert_dataset: str,
@@ -409,22 +413,29 @@ def _collect_bfm_latent_stats(
     max_episode_length_s: float,
     max_frames: int,
 ) -> dict[str, Any]:
-    """Validate the model-only checkpoint's latent projection contract.
-
-    The supplied checkpoint intentionally omits the full agent/replay state, so
-    Stage2 cannot reconstruct the first-stage expert buffer here. The frozen
-    model still contains the authoritative z dimension and projection method.
-    """
-    del bfm_agent, device, robot_config, expert_dataset, num_envs, seed, max_episode_length_s, max_frames
+    """Collect the same expert backward-latent statistics used by UFO Stage2."""
+    del bfm_agent, robot_config, expert_dataset, num_envs, seed, max_episode_length_s
+    agent_cfg = SimpleNamespace(model=SimpleNamespace(seq_length=int(bfm_model.cfg.seq_length)))
+    expert_buffer = load_expert_trajectories_from_motion_lib(stats_env._env, agent_cfg, device=device)
+    observations = {
+        key: value
+        for key, value in expert_buffer.storage["observation"].items()
+        if key in {"state", "last_action", "privileged_state"}
+    }
+    frame_count = int(observations["state"].shape[0])
+    if max_frames > 0:
+        frame_count = min(frame_count, max_frames)
+        observations = {key: value[:frame_count] for key, value in observations.items()}
+    with torch.inference_mode():
+        raw_z = bfm_model.backward_map(observations)
+        projected_z = bfm_model.project_z(raw_z)
     z_dim = int(bfm_model.cfg.archi.z_dim)
-    if not bool(bfm_model.cfg.archi.norm_z):
-        raise ValueError("Model-only Stage2 migration currently requires a checkpoint with norm_z=True")
-    expected_norm = math.sqrt(z_dim)
-    zeros = torch.zeros(z_dim)
+    if raw_z.ndim != 2 or raw_z.shape[-1] != z_dim:
+        raise ValueError(f"Backward encoder returned shape {tuple(raw_z.shape)}, expected [N, {z_dim}]")
     return {
-        "frame_count": 0,
-        "raw": {"mean": zeros, "std": torch.ones(z_dim), "norm_mean": 0.0, "norm_std": 0.0},
-        "projected": {"norm_mean": expected_norm, "norm_std": 0.0},
+        "frame_count": frame_count,
+        "raw": _latent_stats(raw_z),
+        "projected": _latent_stats(projected_z),
     }
 
 
@@ -549,7 +560,13 @@ def _online_amp_feature(core, history: OnlineAMPHistory, key_body_indices: torch
 
 def _transition_core(live_core, info: Mapping[str, Any]):
     """Expose the target Isaac environment tensors under the UFO Stage2 contract."""
-    del info
+    terminal_state = info.get("terminal_state")
+    if terminal_state is not None:
+        return SimpleNamespace(
+            **terminal_state,
+            num_envs=live_core.num_envs,
+            device=live_core.device,
+        )
     simulator = live_core.simulator
     return SimpleNamespace(
         robot_root_states=simulator.robot_root_states,
@@ -568,6 +585,61 @@ def _transition_core(live_core, info: Mapping[str, Any]):
         num_envs=live_core.num_envs,
         device=live_core.device,
     )
+
+
+def _stage2_update_reset_buf(core) -> None:
+    """Apply UFO's Stage2 crash and fall-over definitions to the Isaac core."""
+    core.extras.pop("terminal_state", None)
+    core.extras.pop("terminal_observation", None)
+    if core.termination_contact_indices.numel() == 0:
+        crash = torch.zeros(core.num_envs, dtype=torch.bool, device=core.device)
+    else:
+        contact_norm = core.simulator.contact_forces[:, core.termination_contact_indices].norm(dim=-1)
+        crash = torch.any(contact_norm > 1.0, dim=-1)
+    fall_over = core.projected_gravity[:, :2].norm(dim=-1) >= 0.9
+    core.reset_buf |= crash
+    core.reset_buf |= fall_over
+    core.extras["termination_crash"] = crash.detach().clone()
+    core.extras["termination_fall_over"] = fall_over.detach().clone()
+
+
+def _stage2_prepare_pre_reset_transition(core, env_ids: torch.Tensor) -> None:
+    """Capture the complete final transition before Isaac auto-resets slots."""
+    if env_ids.numel() == 0:
+        return
+    simulator = core.simulator
+    core.extras["terminal_state"] = {
+        "robot_root_states": simulator.robot_root_states.detach().clone(),
+        "base_quat": core.base_quat.detach().clone(),
+        "base_lin_vel": core.base_lin_vel.detach().clone(),
+        "base_ang_vel": core.base_ang_vel.detach().clone(),
+        "projected_gravity": core.projected_gravity.detach().clone(),
+        "body_pos": simulator._rigid_body_pos.detach().clone(),
+        "body_rot": simulator._rigid_body_rot.detach().clone(),
+        "body_ang_vel": simulator._rigid_body_ang_vel.detach().clone(),
+        "contact_forces": simulator.contact_forces.detach().clone(),
+        "torques": core.torques.detach().clone(),
+        "dof_pos": simulator.dof_pos.detach().clone(),
+        "dof_vel": simulator.dof_vel.detach().clone(),
+        "default_dof_pos": core.default_dof_pos.detach().clone(),
+        "default_dof_pos_offset": core.default_dof_pos_offset.detach().clone(),
+    }
+    if not torch.any(core.time_out_buf):
+        return
+
+    # Build the final observation against the pre-reset physics state. The
+    # regular post-step path recomputes the live observation after resetting.
+    core._compute_observations()
+    raw = core.obs_buf_dict_raw["actor_obs"]
+    core.extras["terminal_observation"] = {
+        "state": torch.cat(
+            [raw["dof_pos"], raw["dof_vel"], raw["projected_gravity"], raw["base_ang_vel"]],
+            dim=-1,
+        ).detach().clone(),
+        "privileged_state": raw["max_local_self"].detach().clone(),
+        "last_action": raw["actions"].detach().clone(),
+        "history_actor": raw["history_actor"].detach().clone(),
+    }
 
 
 def _sample_commands(
@@ -790,17 +862,20 @@ def build_piplus_locomotion_env(
     disable_obs_noise: bool = False,
     disable_domain_randomization: bool = False,
 ):
-    del locomotion_mode
+    if not locomotion_mode:
+        raise ValueError("PiPlus AMP Stage2 requires locomotion_mode=True")
     robot_training = _load_piplus_robot_contract(robot_config)
     hydra_overrides = [
         "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
         "env.config.resample_motion_when_training=False",
         "env.config.termination.terminate_when_motion_end=False",
         "env.config.termination.terminate_when_motion_far=False",
-        "env.config.termination.terminate_by_contact=False",
-        "env.config.termination.terminate_by_gravity=False",
+        "env.config.termination.terminate_by_contact=True",
+        "env.config.termination.terminate_by_gravity=True",
         "env.config.termination.terminate_by_low_height=False",
         "env.config.lie_down_init=False",
+        "+rewards.reward_scales.survival=2.0",
+        "rewards.reward_scales.penalty_undesired_contact=-1.0",
     ]
     env_config = HumanoidVerseIsaacConfig(
         name="humanoidverse_isaac",
@@ -826,6 +901,8 @@ def build_piplus_locomotion_env(
     base_env._reset_tasks_callback = MethodType(LeggedRobotBase._reset_tasks_callback, base_env)
     base_env._reset_dofs = MethodType(LeggedRobotBase._reset_dofs, base_env)
     base_env._reset_root_states = MethodType(LeggedRobotBase._reset_root_states, base_env)
+    base_env._update_reset_buf = MethodType(_stage2_update_reset_buf, base_env)
+    base_env._prepare_pre_reset_transition = MethodType(_stage2_prepare_pre_reset_transition, base_env)
     return env, robot_training
 
 
@@ -1042,10 +1119,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     bfm_model = load_model_from_checkpoint_dir(args.bfm_checkpoint, device=bfm_load_device)
     _freeze_bfm(bfm_model)
     bfm_action_dim = int(getattr(bfm_model, "action_dim", -1))
-    if bfm_action_dim != len(robot_training.policy_joint_names):
+    env_action_dim = int(env.single_action_space.shape[0])
+    if env_action_dim != len(robot_training.policy_joint_names):
         raise ValueError(
-            f"BFM action dimension {bfm_action_dim} does not match PiPlus environment "
-            f"action dimension {len(robot_training.policy_joint_names)}"
+            f"PiPlus environment action dimension {env_action_dim} does not match policy joints "
+            f"{len(robot_training.policy_joint_names)}"
+        )
+    if bfm_action_dim != env_action_dim:
+        raise ValueError(
+            f"BFM action dimension {bfm_action_dim} does not match PiPlus environment action dimension {env_action_dim}"
         )
 
     obs, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
@@ -1070,6 +1152,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     latent_stats = _collect_bfm_latent_stats(
         bfm_agent=None,
         bfm_model=bfm_model,
+        stats_env=env,
         device=args.device,
         robot_config=args.robot_config,
         expert_dataset=args.expert_dataset,
@@ -1144,7 +1227,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         device=device,
         dtype=torch.long,
     )
-    torso_index = simulator_body_names.index("torso_link") if "torso_link" in simulator_body_names else simulator_body_names.index("base_link")
+    torso_name = str(
+        env._env.config.robot.get(
+            "isaacsim_torso_name",
+            env._env.config.robot.get("torso_name", "base_link"),
+        )
+    )
+    if torso_name not in simulator_body_names:
+        raise ValueError(f"PiPlus simulator is missing locomotion reward torso body: {torso_name}")
+    torso_index = simulator_body_names.index(torso_name)
     locomotion_reward_state = MimicLiteLocomotionRewardState(
         num_envs=args.num_envs,
         num_dof=len(control_joint_names),
@@ -1195,7 +1286,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "locomotion_reward_scaling": "each weighted term is multiplied by the environment control dt",
         "standalone_tracking_reward": "removed; linvel_exp and angvel_z_exp provide command tracking",
         "termination": {
-            "crash_contacts": [],
+            "crash_contacts": list(env._env.config.robot.terminate_after_contacts_on),
             "fall_over_projected_gravity_xy_threshold": 0.9,
         },
         "survival_reward": "provided by the PiPlus environment reward; no extra stage2 alive term",
@@ -1241,10 +1332,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 timeout_value = torch.zeros(args.num_envs, device=device)
                 if torch.any(truncated):
                     terminal_obs = info.get("terminal_observation")
-                    if terminal_obs is not None:
-                        terminal_input = flatten_encoder_observation(_to_torch_obs(terminal_obs, device), commands)
-                        with torch.no_grad():
-                            timeout_value[truncated] = policy(terminal_input)[2][truncated]
+                    if terminal_obs is None:
+                        raise RuntimeError("A truncated transition is missing its pre-reset terminal observation")
+                    terminal_input = flatten_encoder_observation(_to_torch_obs(terminal_obs, device), commands)
+                    with torch.no_grad():
+                        timeout_value[truncated] = policy(terminal_input)[2][truncated]
                 if torch.any(done):
                     online_history.reset_envs(done.nonzero(as_tuple=False).squeeze(-1), env._env.simulator.dof_pos)
 
@@ -1254,15 +1346,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 old_log_probs.append(old_log_prob.detach())
                 values_store.append(value.detach())
                 env_rewards.append(env_reward.to(device=device, dtype=torch.float32))
-                for name, contribution in info.get("reward_components", {}).items():
+                for name, contribution in info["reward_components"].items():
                     env_reward_components_store.setdefault(name, []).append(contribution.detach())
                 locomotion_rewards.append(locomotion.detach())
                 for name, contribution in locomotion_components.items():
                     locomotion_components_store[name].append(contribution.detach())
                 terminated_store.append(terminated)
                 truncated_store.append(truncated)
-                crash_store.append(terminated.clone())
-                fall_store.append(torch.zeros_like(terminated))
+                crash_store.append(info["termination_crash"].to(device=device, dtype=torch.bool))
+                fall_store.append(info["termination_fall_over"].to(device=device, dtype=torch.bool))
                 timeout_values.append(timeout_value)
                 amp_features.append(current_amp_feature)
                 obs = next_obs
