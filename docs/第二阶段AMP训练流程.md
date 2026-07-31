@@ -113,7 +113,33 @@ penalty_undesired_contact = -1.0
 Stage2 不再使用 motion-end 或 motion-far termination。碰撞终止体来自 PiPlus
 配置中的 `terminate_after_contacts_on`，当前为 `waist_yaw/head/shoulder/hip`。
 
-## 5. PPO、AMP 和保存
+## 5. Noise、Delay 与 Domain Randomization
+
+第二阶段使用与本项目 PiPlus Stage1 完全相同的 `exp/bfm_zero_piplus/bfm_zero_piplus`
+环境配置，`disable_obs_noise=False`、`disable_domain_randomization=False`。当前数值为：
+
+| 类别 | 配置 |
+| --- | --- |
+| observation noise | `base_ang_vel=0.2`、`projected_gravity=0.05`、`dof_pos=0.01`、`dof_vel=0.5`；其余 `0` |
+| noise curriculum | 关闭（`add_noise_currculum=False`），所以 noise multiplier 恒为 `1.0` |
+| control delay | 开启，按环境 slot 随机 `0..2` 个 policy step，episode reset 时重新采样 |
+| push | 开启；间隔 `[1,3] s`，线速度 `xy=0.5 m/s`、`z=0.1 m/s`，角速度 `0.5 rad/s`，恢复 `2 s` |
+| base COM | 开启；x/y/z 均为 `[-0.02,0.02] m` |
+| link mass | 开启；比例 `[0.8,1.2]` |
+| PD gain | 开启；Kp `[0.8,1.2]`，Kd `[0.9,1.1]` |
+| friction | 开启；摩擦 `[0.3,2.0]`，restitution `[0.05,0.5]`，512 buckets，一致化开启 |
+| default pose | 开启；每个 DoF offset `[-0.02,0.02] rad` |
+| reset DoF state | 开启；位置 `[-0.15,0.15] rad`，速度 `[0,0]` |
+
+这里的 `control delay` 是 HumanoidVerse 的 action queue 随机延迟；PiPlus
+actuator 配置中各组 `HTMotorCfg` 的 `min_delay=0,max_delay=4` 是另一层 actuator
+延迟，也和第一阶段使用同一份机器人配置。Stage2 不额外关闭或修改这两层延迟。
+
+通用 `terminate_by_contact/gravity` 保持为 `False`，这是 Isaac 环境构建的契约；
+Stage2 在 reset hook 中按 `terminate_after_contacts_on` 和 projected-gravity 阈值
+执行自己的 crash/fall 判定，训练语义不变。
+
+## 6. PPO、AMP 和保存
 
 默认 PPO 参数：
 
@@ -134,7 +160,7 @@ gae_lambda = 0.95
 command encoder、optimizer、discriminator、discriminator optimizer、AMP normalizer、
 iteration 和 metadata，可使用 `--resume` 继续训练。
 
-## 6. 多卡训练
+## 7. 多卡训练
 
 本项目通用 Fabric 配置没有接入该训练入口，Stage2 使用 PyTorch 内置
 `torch.distributed.run`。每个 rank 创建独立 Isaac 环境；trainable module 初始状态
@@ -173,7 +199,7 @@ python -m humanoidverse.amp_stage2 --dry-run --device cpu
 python -m humanoidverse.amp_stage2 --smoke --gpu-ids single --num-envs 2
 ```
 
-## 7. 验证记录
+## 8. 验证记录
 
 已完成：
 
