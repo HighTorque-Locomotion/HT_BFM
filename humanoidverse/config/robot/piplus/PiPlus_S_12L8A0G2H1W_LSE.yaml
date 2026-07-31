@@ -261,7 +261,7 @@ robot:
     density: 0.001
     angular_damping: 0.
     linear_damping: 0.
-    asset_root: "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611"
+    asset_root: "humanoidverse/data/robots/piplus/PiPlus_S_12L8A0G2H1W_LSE_260611"
     urdf_file: "urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
     usd_file: null
     xml_file: "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
@@ -273,7 +273,7 @@ robot:
   motion:
     motion_file: 'data/lafan_tail.pkl'
     asset:
-      assetRoot: "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611"
+      assetRoot: "humanoidverse/data/robots/piplus/PiPlus_S_12L8A0G2H1W_LSE_260611"
       assetFileName: "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml"
       urdfFileName: "urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
     humanoid_type: PiPlus_S_12L8A0G2H1W_LSE_260611

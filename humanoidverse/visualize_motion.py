@@ -43,7 +43,7 @@ ROBOT_SPECS: dict[RobotName, RobotSpec] = {
     "piplus_h0w": RobotSpec(
         name="piplus_h0w",
         default_data_path=HUMANOIDVERSE_DIR / "data" / "piplus_h0w_lafan.pkl",
-        mujoco_xml_path="/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml",
+        mujoco_xml_path="package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml",
         dof_size=22,
         hydra_robot="piplus/PiPlus_S_12L8A0G2H0W",
     ),

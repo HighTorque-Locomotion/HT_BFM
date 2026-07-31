@@ -1,6 +1,5 @@
-import os
+from pathlib import Path
 
-import ht_urdf
 import isaaclab.sim as sim_utils
 from HT_lab.actuators.HT_motor import HTMotorCfg_4438, HTMotorCfg_5031, HTMotorCfg_5036
 from HT_lab.actuators.HT_motor_cfg import (
@@ -20,7 +19,7 @@ from HT_lab.actuators.HT_motor_cfg import (
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
-__file_dir__ = os.path.dirname(ht_urdf.__file__)
+ASSET_DIR = Path(__file__).resolve().parents[3] / "data" / "robots" / "piplus"
 
 """
 joint name order (from isaacsim):
@@ -56,7 +55,12 @@ PiPlus_S_12L8A0G2H1W_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         replace_cylinders_with_capsules=True,
-        asset_path=f"{__file_dir__}/PiPlus_S_12L8A0G2H1W_LSE_260611/urdf/PiPlus_S_12L8A0G2H1W_LSE_260611.urdf",
+        asset_path=str(
+            ASSET_DIR
+            / "PiPlus_S_12L8A0G2H1W_LSE_260611"
+            / "urdf"
+            / "PiPlus_S_12L8A0G2H1W_LSE_260611.urdf"
+        ),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

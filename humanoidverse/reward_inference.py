@@ -52,16 +52,16 @@ ROBOT_CONFIG_OVERRIDES = {
 }
 G1_REWARD_XML = HUMANOIDVERSE_DIR / "data" / "robots" / "g1" / "scene_29dof_freebase_noadditional_actuators.xml"
 PIPLUS_REWARD_XML = Path(
-    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
-    "PiPlus_S_12L8A0G2H1W_robot_with_armature.xml"
+    "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
+    "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
 )
 PIPLUS_SIM_XML = Path(
-    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
+    "package://ht_urdf/PiPlus_S_12L8A0G2H1W_LSE_260611/xml/"
     "PiPlus_S_12L8A0G2H1W_LSE_260611_with_armature.xml"
 )
 PIPLUS_H0W_SIM_XML = Path(
-    "/home/youyou/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
-    "PiPlus_S_12L8A0G2H0W_with_armature.xml"
+    "package://ht_urdf/PiPlus_S_12L8A0G2H0W/xml/"
+    "PiPlus_S_12L8A0G2H0W.xml"
 )
 H1_260402_SIM_XML = "package://ht_urdf/Hi_P_12L10A0G2H1W_260402/xml/Hi_P_12L10A0G2H1W_Simplify_260402_with_armature.xml"
 
