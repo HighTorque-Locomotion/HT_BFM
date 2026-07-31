@@ -870,8 +870,11 @@ def build_piplus_locomotion_env(
         "env.config.resample_motion_when_training=False",
         "env.config.termination.terminate_when_motion_end=False",
         "env.config.termination.terminate_when_motion_far=False",
-        "env.config.termination.terminate_by_contact=True",
-        "env.config.termination.terminate_by_gravity=True",
+        # HumanoidVerseIsaacConfig requires the generic contact/gravity flags
+        # to stay disabled. Stage2 applies UFO's stricter crash/fall rules in
+        # _stage2_update_reset_buf instead.
+        "env.config.termination.terminate_by_contact=False",
+        "env.config.termination.terminate_by_gravity=False",
         "env.config.termination.terminate_by_low_height=False",
         "env.config.lie_down_init=False",
         "+rewards.reward_scales.survival=2.0",
