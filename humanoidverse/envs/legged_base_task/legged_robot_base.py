@@ -333,6 +333,7 @@ class LeggedRobotBase(BaseTask):
         self._compute_reward()
         # check terminations
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self._prepare_pre_reset_transition(env_ids)
         self.reset_envs_idx(env_ids)
 
         # set envs
@@ -363,6 +364,10 @@ class LeggedRobotBase(BaseTask):
             self._setup_simulator_next_task()
             if self.debug_viz:
                 self._draw_debug_vis()
+
+    def _prepare_pre_reset_transition(self, env_ids):
+        """Optional hook for adapters that need terminal data before auto-reset."""
+        del env_ids
     
     def _setup_simulator_next_task(self):
         pass
@@ -610,6 +615,7 @@ class LeggedRobotBase(BaseTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
+        reward_components = {}
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew_raw = self.reward_functions[i]()
@@ -624,6 +630,7 @@ class LeggedRobotBase(BaseTask):
                 if self.config.rewards.reward_penalty_curriculum:
                     rew *= self.reward_penalty_scale
             self.rew_buf += rew
+            reward_components[name] = rew.detach().clone()
             # no curriculum, no scale here
             self.extras["aux_rewards"][name] = rew_raw.clone().detach()
             self.episode_sums[name] += rew
@@ -635,6 +642,9 @@ class LeggedRobotBase(BaseTask):
             rew = self._reward_termination() * self.reward_scales["termination"]
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
+            reward_components["termination"] = rew.detach().clone()
+
+        self.extras["reward_components"] = reward_components
 
         if self.use_reward_penalty_curriculum:
             self.log_dict["penalty_scale"] = torch.tensor(self.reward_penalty_scale, dtype=torch.float, device=self.device)
@@ -828,6 +838,9 @@ class LeggedRobotBase(BaseTask):
     def _reward_termination(self):
         # Terminal reward / penalty
         return self.reset_buf * ~self.time_out_buf
+
+    def _reward_survival(self):
+        return torch.ones(self.num_envs, dtype=torch.float, device=self.device)
 
     def _reward_penalty_torques(self):
         # Penalize torques
