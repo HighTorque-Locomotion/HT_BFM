@@ -14,6 +14,8 @@ import argparse
 import json
 import math
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -903,7 +905,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-dataset", default=DEFAULT_EXPERT_DATASET)
     parser.add_argument("--robot-config", default=DEFAULT_ROBOT_CONFIG)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--gpu-ids", default="single", help="GPU ids for the first-stage torchrunx launcher: single, all, or comma-separated ids.")
+    parser.add_argument(
+        "--gpu-ids",
+        default="single",
+        help="GPU ids for the local torchrun launcher: single, all, or comma-separated ids.",
+    )
     parser.add_argument("--work-dir", default="runs/amp_stage2_piplus_lse")
     parser.add_argument("--resume", default=None, help="Stage2 checkpoint (.pt) to resume, including optimizer and normalizer state.")
     parser.add_argument("--num-envs", type=int, default=64)
@@ -1030,7 +1036,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         seed=args.seed,
         max_episode_length_s=args.max_episode_length_s,
     )
-    # Checkpoint configs use the device literal ``cuda``; each torchrunx
+    # Checkpoint configs use the device literal ``cuda``; each torchrun
     # worker has already selected its local CUDA device above.
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
     bfm_model = load_model_from_checkpoint_dir(args.bfm_checkpoint, device=bfm_load_device)
@@ -1416,6 +1422,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
 def launch() -> None:
     args = _parse_args()
+    # A process started by torchrun is already a worker. Do not recursively
+    # create another process group from inside that worker.
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        main(args)
+        return
     if args.gpu_ids in (None, "single"):
         main(args)
         return
@@ -1438,42 +1449,28 @@ def launch() -> None:
         main(args)
         return
 
-    import logging
-
-    import torchrunx
-
-    logging.basicConfig(level=logging.INFO)
     if selected_gpus is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(selected_gpus)
-    os.environ.setdefault("TORCHRUNX_LOG_DIR", str(Path(args.work_dir) / "torchrunx"))
-    # Resolve the worker from the package module.  When this file is launched
-    # with ``python -m``, passing the ``__main__`` function directly makes
-    # torchrunx cloudpickle the entire script namespace (including TorchScript
-    # functions imported by the environment helpers).
-    from humanoidverse.amp_stage2 import main as worker_main
 
-    torchrunx.Launcher(
-        hostnames=["localhost"],
-        workers_per_host=num_gpus,
-        backend=None,
-        agent_timeout=int(os.environ.get("UFO_TORCHRUNX_AGENT_TIMEOUT", "60")),
-        worker_timeout=int(os.environ.get("UFO_TORCHRUNX_WORKER_TIMEOUT", "600")),
-        copy_env_vars=torchrunx.DEFAULT_ENV_VARS_FOR_COPY
-        + (
-            "MUJOCO*",
-            "UFO_CACHE_DIR",
-            "BFMZERO_MJLAB_CACHE_DIR",
-            "UV_CACHE_DIR",
-            "PYTHONPYCACHEPREFIX",
-            "TMPDIR",
-            "TEMP",
-            "TMP",
-            "TORCHINDUCTOR_CACHE_DIR",
-            "TRITON_CACHE_DIR",
-            "CUDA_CACHE_PATH",
-            "WARP_CACHE_PATH",
-        ),
-    ).run(worker_main, args)
+    command = _torchrun_command(num_gpus, sys.argv[1:])
+    print(f"Launching PiPlus AMP Stage2 with {num_gpus} torchrun workers", flush=True)
+    subprocess.run(command, check=True, env=os.environ.copy())
+
+
+def _torchrun_command(num_gpus: int, argv: list[str]) -> list[str]:
+    """Build the dependency-free local torchrun command used by ``launch``."""
+    if int(num_gpus) < 2:
+        raise ValueError(f"torchrun requires at least two workers, got {num_gpus}")
+    return [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        f"--nproc_per_node={num_gpus}",
+        "--module",
+        "humanoidverse.amp_stage2",
+        *argv,
+    ]
 
 
 if __name__ == "__main__":

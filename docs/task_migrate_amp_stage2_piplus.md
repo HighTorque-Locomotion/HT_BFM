@@ -56,11 +56,25 @@ this is sufficient for Stage2 because every BFM parameter is frozen.
 3. Run `--dry-run` without starting Isaac Sim.
 4. Run `--smoke` with a small Isaac environment when IsaacLab/GPU is available.
 
+## Multi-GPU status
+
+The repository's generic `config/base/fabric.yaml` is a dormant Lightning
+Fabric template (`base.yaml` keeps `multi_gpu: False`) and is not wired into
+the existing training entrypoint. Stage2 therefore owns a small, standard
+PyTorch distributed launcher in `humanoidverse/amp_stage2.py`: it uses one
+Isaac environment per rank, averages trainable gradients, broadcasts initial
+trainable state, reduces scalar metrics, and writes checkpoints only from
+rank 0. It requires only PyTorch's built-in `torch.distributed.run`; no
+`torchrunx` package is needed.
+
 ## Server training
 
 Run from the HT_BFM repository on the training server after copying the project,
 the model-only checkpoint directory, and the AMP dataset. Use `--gpu-ids all`
-for multi-GPU torchrunx; use `--gpu-ids single` for one GPU.
+for the built-in standard PyTorch torchrun launcher; use `--gpu-ids single`
+for one GPU. The Stage2 launcher performs `torch.distributed` process-group
+initialization, synchronous gradient averaging, rank-0 checkpoint writes, and
+scalar metric reduction.
 
 ```bash
 python -m humanoidverse.amp_stage2 \

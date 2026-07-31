@@ -12,6 +12,7 @@ from humanoidverse.amp_stage2 import (
     _motion_qpos,
     _policy_dof_from_motion,
     _sample_commands,
+    _torchrun_command,
     _transition_core,
     compute_gae,
     project_latent,
@@ -108,6 +109,12 @@ class AmpStage2Test(unittest.TestCase):
         high = torch.tensor([1.2, 0.2, 0.8])
         commands = _sample_commands(32, torch.device("cpu"), low, high, stand_prob=1.0)
         self.assertTrue(torch.equal(commands, torch.zeros_like(commands)))
+
+    def test_torchrun_command_uses_standard_pytorch_launcher(self):
+        command = _torchrun_command(4, ["--smoke", "--gpu-ids", "all"])
+        self.assertEqual(command[1:4], ["-m", "torch.distributed.run", "--standalone"])
+        self.assertIn("--nproc_per_node=4", command)
+        self.assertEqual(command[-3:], ["--smoke", "--gpu-ids", "all"])
 
 
 if __name__ == "__main__":
