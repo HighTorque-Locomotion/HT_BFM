@@ -34,9 +34,31 @@ class MuJoCo(BaseSimulator):
         ))
         self.freebase = True
 
-        self.model = mujoco.MjModel.from_xml_path(self.model_path)
+        spec = mujoco.MjSpec.from_file(self.model_path)
+        if self.config.terrain.mesh_type == "plane":
+            spec.worldbody.add_geom(
+                name="ground_plane",
+                type=mujoco.mjtGeom.mjGEOM_PLANE,
+                pos=[0.0, 0.0, 0.0],
+                size=[20.0, 20.0, 0.02],
+                rgba=[0.45, 0.47, 0.50, 1.0],
+                contype=1,
+                conaffinity=1,
+            )
+        self.model = spec.compile()
+        ground_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground_plane")
+        if ground_id >= 0 and self.config.terrain.mesh_type == "plane":
+            self.model.geom_friction[ground_id] = np.asarray(
+                [
+                    float(self.config.terrain.static_friction),
+                    float(self.config.terrain.dynamic_friction),
+                    float(self.config.terrain.restitution),
+                ],
+                dtype=np.float64,
+            )
         self.data = mujoco.MjData(self.model)
         self.dof_ctrl_ids = self._build_dof_ctrl_ids()
+        self.direct_dof_ids = self._build_direct_dof_ids() if self.model.nu == 0 else None
         self.sim_substeps = self.simulator_config.sim.substeps
         self.sim_dt = 1 / self.simulator_config.sim.fps  # MuJoCo timestep from the model options.
 
@@ -59,6 +81,10 @@ class MuJoCo(BaseSimulator):
         self.episodic_domain_randomization(None)
 
     def _build_dof_ctrl_ids(self):
+        if self.model.nu == 0:
+            # Some PiPlus MJCFs declare joint force limits but omit actuator
+            # elements.  Playback can still apply generalized torques directly.
+            return np.asarray([], dtype=np.int32)
         joint_name_to_ctrl_ids = {}
         for actuator_id in range(self.model.nu):
             joint_id = int(self.model.actuator_trnid[actuator_id, 0])
@@ -89,6 +115,19 @@ class MuJoCo(BaseSimulator):
             raise ValueError("Invalid MuJoCo actuator mapping; " + "; ".join(details))
 
         return np.asarray(ctrl_ids, dtype=np.int32)
+
+    def _build_direct_dof_ids(self):
+        joint_ids = []
+        missing = []
+        for dof_name in self.robot_cfg.dof_names:
+            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, str(dof_name))
+            if joint_id < 0:
+                missing.append(str(dof_name))
+            else:
+                joint_ids.append(int(self.model.jnt_dofadr[joint_id]))
+        if missing:
+            raise ValueError(f"Invalid direct MuJoCo DOF mapping; missing joints: {missing}")
+        return np.asarray(joint_ids, dtype=np.int32)
 
     def episodic_domain_randomization(self, env_ids):
         # First reset to defaults
@@ -265,8 +304,22 @@ class MuJoCo(BaseSimulator):
         torques = np.asarray(torques).reshape(-1)
         if torques.shape[0] != self.num_dof:
             raise ValueError(f"Expected {self.num_dof} torques, got {torques.shape[0]}.")
-        self.data.ctrl[self.dof_ctrl_ids] = torques
+        if self.model.nu == 0:
+            self.data.qfrc_applied[:] = 0.0
+            self.data.qfrc_applied[self.direct_dof_ids] = torques
+        else:
+            self.data.ctrl[self.dof_ctrl_ids] = torques
         # mujoco.mj_step(self.model, self.data)
+
+    def apply_position_targets_at_dof(self, position_targets, p_gains, d_gains, torque_limits):
+        """Apply Isaac-style position targets through an explicit MuJoCo PD loop."""
+        targets = torch.as_tensor(position_targets, device=self.device, dtype=torch.float32).reshape(-1)
+        p_gains = torch.as_tensor(p_gains, device=self.device, dtype=torch.float32).reshape(-1)
+        d_gains = torch.as_tensor(d_gains, device=self.device, dtype=torch.float32).reshape(-1)
+        torque_limits = torch.as_tensor(torque_limits, device=self.device, dtype=torch.float32).reshape(-1)
+        torques = p_gains * (targets - self.dof_pos.reshape(-1)) - d_gains * self.dof_vel.reshape(-1)
+        torques = torch.clip(torques, -torque_limits, torque_limits)
+        self.apply_torques_at_dof(torques)
     
     def set_actor_root_state_tensor(self, set_env_ids, root_states):
         # In MuJoCo, the full state is given by qpos and qvel.
@@ -324,7 +377,10 @@ class MuJoCo(BaseSimulator):
         dof_props["velocity"] = torch.tensor([model.dof_damping[6:][i] for i in range(self.num_dof)])
 
         # Torque limits (from actuator control range)
-        dof_props["effort"] = torch.tensor([model.actuator_ctrlrange[self.dof_ctrl_ids[i], 1] for i in range(self.num_dof)])
+        if model.nu == 0:
+            dof_props["effort"] = torch.as_tensor(self.robot_cfg.dof_effort_limit_list, dtype=torch.float32)
+        else:
+            dof_props["effort"] = torch.tensor([model.actuator_ctrlrange[self.dof_ctrl_ids[i], 1] for i in range(self.num_dof)])
 
         return dof_props
 

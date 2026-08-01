@@ -303,7 +303,20 @@ class LeggedRobotBase(BaseTask):
             self.simulator.simulate_at_each_physics_step()
 
     def _apply_force_in_physics_step(self):
-        if self.config.simulator.config.name == "isaacgym" or self.config.simulator.config.name == "mujoco":
+        if self.config.simulator.config.name == "mujoco" and self.config.robot.control.control_type == "P":
+            actions_scaled = self.actions_after_delay * self.config.robot.control.action_scale
+            if self.config.robot.control.get("action_rescale", False):
+                dof_effort_limit = torch.tensor(self.config.robot.dof_effort_limit_list, dtype=torch.float, device=self.device)
+                actions_scaled = actions_scaled * dof_effort_limit / self.p_gains
+            position_targets = actions_scaled + self.default_dof_pos + self.default_dof_pos_offset
+            self.torques = self._compute_torques(self.actions_after_delay).view(self.torques.shape)
+            self.simulator.apply_position_targets_at_dof(
+                position_targets,
+                self._kp_scale * self.p_gains,
+                self._kd_scale * self.d_gains,
+                self.torque_limits,
+            )
+        elif self.config.simulator.config.name == "isaacgym" or self.config.simulator.config.name == "mujoco":
             self.torques = self._compute_torques(self.actions_after_delay).view(self.torques.shape)
             self.simulator.apply_torques_at_dof(self.torques)
         elif self.config.simulator.config.name == "isaacsim":

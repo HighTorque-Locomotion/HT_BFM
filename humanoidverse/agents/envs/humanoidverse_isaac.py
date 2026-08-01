@@ -36,6 +36,15 @@ HYDRA_CONFIG_DIR = os.path.join(HUMANOIDVERSE_DIR, "config")
 HYDRA_CONFIG_REL_PATH = os.path.join("exp", "bfm_zero", "bfm_zero")
 
 
+def build_default_pose_target(default_dof_pos: torch.Tensor, num_envs: int) -> torch.Tensor:
+    """Build a ``[num_envs, num_dofs, 2]`` position/velocity reset target."""
+    if num_envs <= 0:
+        raise ValueError(f"num_envs must be positive, got {num_envs}")
+    positions = default_dof_pos.reshape(1, -1).expand(num_envs, -1)
+    velocities = torch.zeros_like(positions)
+    return torch.stack((positions, velocities), dim=-1)
+
+
 def _split_hydra_overrides(overrides: tp.List[str]) -> tuple[tp.List[str], tp.List[str]]:
     group_overrides = []
     value_overrides = []
@@ -407,9 +416,7 @@ class HumanoidVerseVectorEnv(VectorEnv):
                 dims[k] = 1 if len(v.shape) == 0 else v.shape[0]
             self.history_handler = HistoryHandler(self.num_envs, context_length=self.context_length, keys_dims=dims, device=self.device)
 
-        _target_dof_pos = self._env.default_dof_pos.clone().unsqueeze(0).repeat(self.num_envs, 1, 2)
-        # Set velocities to zero
-        _target_dof_pos[..., 1] = 0.0
+        _target_dof_pos = build_default_pose_target(self._env.default_dof_pos, self.num_envs)
         self._default_pose_target_reset = {
             "dof_states": _target_dof_pos,
             "root_states": self._env.base_init_state,
@@ -622,6 +629,13 @@ def instantiate_isaac_sim(num_envs: int, enable_cameras: bool = False, headless:
     AppLauncher.add_app_launcher_args(parser)
 
     args_cli, _ = parser.parse_known_args()
+    # ``amp_stage2_play --device auto`` is a playback convenience flag, while
+    # IsaacLab requires a concrete device string.  Normalize both forms before
+    # constructing the application.
+    if args_cli.device == "auto":
+        args_cli.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    elif args_cli.device == "cuda":
+        args_cli.device = "cuda:0"
     args_cli.num_envs = num_envs
     args_cli.enable_cameras = enable_cameras
     args_cli.headless = headless
