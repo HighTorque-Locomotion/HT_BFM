@@ -30,7 +30,9 @@ from humanoidverse.amp_stage2 import (
     _ensure_runtime_cache,
     _to_torch_obs,
     build_piplus_locomotion_env,
+    encoder_input_scale,
     flatten_encoder_observation,
+    load_command_encoder_policy_state,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -446,7 +448,7 @@ def play(args: argparse.Namespace) -> None:
         hidden_layers=int(metadata["command_encoder_hidden_layers"]),
     ).to(policy_device)
     checkpoint = torch.load(paths.checkpoint, map_location=policy_device, weights_only=False)
-    policy.load_state_dict(checkpoint["policy"])
+    load_command_encoder_policy_state(policy, checkpoint, encoder_input_scale(observation_t, commands))
     policy.eval()
 
     command_low = np.asarray(metadata["command_range"]["low"], dtype=np.float32)

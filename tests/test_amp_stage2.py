@@ -18,9 +18,15 @@ from humanoidverse.amp_stage2 import (
     _stage2_update_reset_buf,
     _torchrun_command,
     _transition_core,
+    baseline_normalized_linvel_reward,
+    command_tracking_metrics,
     compute_gae,
+    encoder_input_scale,
+    flatten_encoder_observation,
+    load_command_encoder_policy_state,
     ppo_update,
     project_latent,
+    restore_policy_optimizer,
 )
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
 
@@ -85,9 +91,67 @@ class AmpStage2Test(unittest.TestCase):
             target_kl=0.01,
         )
         self.assertEqual(metrics["ppo_updates"], 1.0)
+        self.assertEqual(metrics["ppo_expected_updates"], 4.0)
+        self.assertEqual(metrics["ppo_update_fraction"], 0.25)
         self.assertEqual(metrics["ppo_early_stop"], 1.0)
         self.assertTrue(np.isfinite(metrics["ratio_max"]))
         self.assertGreaterEqual(metrics["clip_fraction"], 0.0)
+
+    def test_encoder_input_scaling_and_legacy_policy_migration_are_equivalent(self):
+        torch.manual_seed(4)
+        obs = {
+            "state": torch.randn(3, 10),
+            "last_action": torch.randn(3, 2),
+            "history_actor": torch.randn(3, 48),
+        }
+        commands = torch.randn(3, 3)
+        raw_features = torch.cat((commands, obs["state"], obs["last_action"], obs["history_actor"]), dim=-1)
+        scaled_features = flatten_encoder_observation(obs, commands)
+        scale = encoder_input_scale(obs, commands)
+        self.assertTrue(torch.allclose(scaled_features, raw_features * scale))
+        self.assertTrue(torch.equal(scale[5:7], torch.full((2,), 0.05)))
+        self.assertEqual(int((scale == 0.05).sum()), 10)
+
+        legacy_policy = CommandEncoderPolicy(raw_features.shape[-1], z_dim=4, hidden_dim=16)
+        expected = legacy_policy(raw_features)
+        migrated_policy = CommandEncoderPolicy(raw_features.shape[-1], z_dim=4, hidden_dim=16)
+        checkpoint = {"policy": legacy_policy.state_dict(), "metadata": {}}
+        migrated = load_command_encoder_policy_state(migrated_policy, checkpoint, scale)
+        actual = migrated_policy(scaled_features)
+        self.assertTrue(migrated)
+        for expected_value, actual_value in zip(expected, actual, strict=True):
+            self.assertTrue(torch.allclose(expected_value, actual_value, atol=1.0e-6))
+
+    def test_optimizer_resume_overrides_checkpoint_learning_rate(self):
+        policy = CommandEncoderPolicy(input_dim=5, z_dim=4, hidden_dim=16)
+        old_optimizer = torch.optim.Adam(policy.parameters(), lr=3.0e-5)
+        checkpoint = {"policy_optimizer": old_optimizer.state_dict()}
+        optimizer = torch.optim.Adam(policy.parameters(), lr=9.0e-4)
+        status = restore_policy_optimizer(
+            optimizer,
+            checkpoint,
+            learning_rate=1.0e-4,
+            reset_for_input_migration=False,
+        )
+        self.assertEqual(status, "loaded_with_lr_override")
+        self.assertTrue(all(group["lr"] == 1.0e-4 for group in optimizer.param_groups))
+
+    def test_signed_linvel_reward_removes_zero_speed_baseline(self):
+        commands = torch.tensor([[0.4, 0.0, 0.0], [0.4, 0.0, 0.0], [0.4, 0.0, 0.0]])
+        achieved = torch.tensor([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]])
+        reward = baseline_normalized_linvel_reward(achieved, commands)
+        self.assertAlmostEqual(float(reward[0]), 0.0, places=6)
+        self.assertAlmostEqual(float(reward[1]), 1.0, places=6)
+        self.assertLess(float(reward[2]), 0.0)
+
+    def test_tracking_metrics_report_nonzero_response_slope(self):
+        commands = torch.tensor([[[0.2, 0.0, 0.0], [0.4, 0.0, 0.0], [0.6, 0.0, 0.0]]])
+        base_lin_vel = torch.tensor([[[0.1, 0.0, 0.0], [0.2, 0.0, 0.0], [0.3, 0.0, 0.0]]])
+        base_ang_vel = torch.zeros_like(base_lin_vel)
+        metrics = command_tracking_metrics(commands, base_lin_vel, base_ang_vel)
+        self.assertAlmostEqual(metrics["tracking/nonzero_vx_response_slope"], 0.5, places=6)
+        self.assertAlmostEqual(metrics["tracking/nonzero_vx_command_correlation"], 1.0, places=6)
+        self.assertAlmostEqual(metrics["tracking/nonzero_vx_mae"], 0.2, places=6)
 
     def test_amp_discriminator_wgan_gp_is_finite(self):
         discriminator = AMPDiscriminator(feature_dim=12, hidden_dims=(32, 16))
