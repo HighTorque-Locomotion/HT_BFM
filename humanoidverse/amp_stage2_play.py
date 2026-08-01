@@ -18,6 +18,11 @@ import mujoco
 import numpy as np
 import torch
 
+try:
+    import pygame
+except ImportError:  # pragma: no cover - exercised only when --gamepad is requested
+    pygame = None
+
 from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
 from humanoidverse.amp_stage2 import (
     CommandEncoderPolicy,
@@ -92,6 +97,20 @@ def resolve_expert_dataset(metadata: Mapping[str, object], override: Path | None
     return _existing_path([recorded, PROJECT_ROOT / "dataset/pi_LSE_lafan_260706" / recorded.name], "expert dataset")
 
 
+def resolve_play_device(requested: str) -> torch.device:
+    """Resolve playback device, falling back to CPU when CUDA is unavailable."""
+    requested = str(requested).strip().lower()
+    if requested == "auto":
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(requested)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        print(f"[WARN] Requested {device}, but CUDA is unavailable; falling back to CPU.", flush=True)
+        return torch.device("cpu")
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda:0")
+    return device
+
+
 def _apply_deadzone(value: float, deadzone: float) -> float:
     magnitude = abs(float(value))
     if magnitude <= deadzone:
@@ -164,6 +183,89 @@ class LinuxJoystick:
 
     def close(self) -> None:
         os.close(self.fd)
+
+
+class PygameGamepad:
+    """Read an Xbox-style gamepad using the same mapping as HT_lab_hi/play."""
+
+    def __init__(
+        self,
+        joystick_id: int,
+        *,
+        axis_lx: int,
+        axis_ly: int,
+        axis_rx: int,
+        deadzone: float,
+        reset_button: int,
+        quit_button: int,
+        debug: bool = False,
+    ) -> None:
+        if pygame is None:
+            raise RuntimeError("--gamepad requires pygame; install it with `python -m pip install pygame`")
+        if not 0.0 <= deadzone < 1.0:
+            raise ValueError("--deadzone must be in [0, 1)")
+        pygame.init()
+        pygame.joystick.init()
+        count = pygame.joystick.get_count()
+        if count == 0:
+            raise RuntimeError("No pygame joystick detected; check the controller and SDL input permissions")
+        if not 0 <= joystick_id < count:
+            raise ValueError(f"--gamepad-id must be in [0, {count - 1}], got {joystick_id}")
+        self.joystick = pygame.joystick.Joystick(joystick_id)
+        self.joystick.init()
+        self.axis_lx = int(axis_lx)
+        self.axis_ly = int(axis_ly)
+        self.axis_rx = int(axis_rx)
+        self.deadzone = float(deadzone)
+        self.reset_button = int(reset_button)
+        self.quit_button = int(quit_button)
+        self.debug = bool(debug)
+        self._buttons = [False] * self.joystick.get_numbuttons()
+        print(
+            f"[INFO] Gamepad={self.joystick.get_name()} axes={self.joystick.get_numaxes()} "
+            f"buttons={self.joystick.get_numbuttons()} mapping="
+            f"(lx={self.axis_lx}, ly={self.axis_ly}, rx={self.axis_rx}) deadzone={self.deadzone:.3f}"
+        )
+        if self.debug:
+            self.print_debug()
+
+    def _axis(self, index: int) -> float:
+        if 0 <= index < self.joystick.get_numaxes():
+            return float(self.joystick.get_axis(index))
+        return 0.0
+
+    def poll(self) -> tuple[dict[int, float], set[int]]:
+        pygame.event.pump()
+        axes = {
+            self.axis_lx: self._axis(self.axis_lx),
+            self.axis_ly: self._axis(self.axis_ly),
+            self.axis_rx: self._axis(self.axis_rx),
+        }
+        pressed: set[int] = set()
+        current = [bool(self.joystick.get_button(index)) for index in range(len(self._buttons))]
+        pressed.update(index for index, (was_down, is_down) in enumerate(zip(self._buttons, current)) if is_down and not was_down)
+        self._buttons = current
+        if self.debug:
+            self.print_debug(axes, current)
+        return axes, pressed
+
+    def print_debug(self, axes: Mapping[int, float] | None = None, buttons: list[bool] | None = None) -> None:
+        if axes is None:
+            axes = {index: self._axis(index) for index in range(self.joystick.get_numaxes())}
+        if buttons is None:
+            buttons = [bool(self.joystick.get_button(index)) for index in range(self.joystick.get_numbuttons())]
+        print(
+            f"[GAMEPAD] axes={[f'{axes.get(index, 0.0):+.2f}' for index in sorted(axes)]} "
+            f"buttons={buttons}",
+            flush=True,
+        )
+
+    def close(self) -> None:
+        try:
+            self.joystick.quit()
+        finally:
+            pygame.joystick.quit()
+            pygame.quit()
 
 
 class PassivePolicyViewer:
@@ -308,14 +410,13 @@ def play(args: argparse.Namespace) -> None:
     if args.render_size <= 0:
         raise ValueError("--render-size must be positive")
 
-    device = torch.device(args.device)
+    device = resolve_play_device(args.device)
+    policy_device = resolve_play_device(args.policy_device or str(device))
     if device.type == "cuda":
         torch.cuda.set_device(device)
-        bfm_load_device = "cuda"
-    elif device.type == "cpu":
-        bfm_load_device = "cpu"
-    else:
-        raise ValueError(f"Unsupported device: {device}")
+    if policy_device.type not in {"cuda", "cpu"}:
+        raise ValueError(f"Unsupported policy device: {policy_device}")
+    bfm_load_device = str(policy_device)
 
     _ensure_runtime_cache(paths.model_folder)
     env, robot_training = build_piplus_locomotion_env(
@@ -325,6 +426,7 @@ def play(args: argparse.Namespace) -> None:
         num_envs=1,
         seed=args.seed,
         max_episode_length_s=args.max_episode_length_s,
+        simulator=args.simulator,
         disable_obs_noise=True,
         disable_domain_randomization=True,
     )
@@ -334,22 +436,39 @@ def play(args: argparse.Namespace) -> None:
         parameter.requires_grad_(False)
 
     observation, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
-    observation_t = _to_torch_obs(observation, device)
-    commands = torch.zeros(1, 3, device=device)
+    observation_t = _to_torch_obs(observation, policy_device)
+    commands = torch.zeros(1, 3, device=policy_device)
     encoder_input = flatten_encoder_observation(observation_t, commands)
     policy = CommandEncoderPolicy(
         encoder_input.shape[-1],
         int(metadata["z_dim"]),
         hidden_dim=int(metadata["command_encoder_hidden_dim"]),
         hidden_layers=int(metadata["command_encoder_hidden_layers"]),
-    ).to(device)
-    checkpoint = torch.load(paths.checkpoint, map_location=device, weights_only=False)
+    ).to(policy_device)
+    checkpoint = torch.load(paths.checkpoint, map_location=policy_device, weights_only=False)
     policy.load_state_dict(checkpoint["policy"])
     policy.eval()
 
     command_low = np.asarray(metadata["command_range"]["low"], dtype=np.float32)
     command_high = np.asarray(metadata["command_range"]["high"], dtype=np.float32)
-    joystick = None if args.fixed_command is not None else LinuxJoystick(args.joystick)
+    if args.gamepad and args.fixed_command is not None:
+        raise ValueError("--gamepad and --fixed-command are mutually exclusive")
+    joystick = None
+    gamepad = None
+    if args.fixed_command is None:
+        if args.gamepad:
+            gamepad = PygameGamepad(
+                args.gamepad_id,
+                axis_lx=args.axis_lx,
+                axis_ly=args.axis_ly,
+                axis_rx=args.axis_rx,
+                deadzone=args.deadzone,
+                reset_button=args.reset_button,
+                quit_button=args.quit_button,
+                debug=args.gamepad_debug,
+            )
+        else:
+            joystick = LinuxJoystick(args.joystick)
     fixed_command = None if args.fixed_command is None else np.asarray(args.fixed_command, dtype=np.float32)
     if fixed_command is not None:
         if (fixed_command < command_low).any() or (fixed_command > command_high).any():
@@ -381,10 +500,16 @@ def play(args: argparse.Namespace) -> None:
         video_path.parent.mkdir(parents=True, exist_ok=True)
     video_writer: media.VideoWriter | None = None
     print(f"[INFO] Stage2 checkpoint={paths.checkpoint} iteration={checkpoint.get('iteration', 'unknown')}")
+    print(f"[INFO] Simulator={args.simulator} env_device={device} policy_device={policy_device}")
     print(f"[INFO] First-stage BFM checkpoint={paths.bfm_checkpoint}")
     if video_path is not None:
         print(f"[INFO] Recording MP4 to {video_path} at {args.fps} FPS")
-    if joystick is not None:
+    if gamepad is not None:
+        print(
+            "[INFO] Controls: left stick Y=forward, left stick X=lateral, right stick X=yaw; "
+            f"button {args.reset_button}=reset, button {args.quit_button}=quit"
+        )
+    elif joystick is not None:
         print(
             "[INFO] Controls: left stick Y=forward, left stick X=lateral, right stick X=yaw; "
             f"button {args.reset_button}=reset, button {args.quit_button}=quit"
@@ -396,7 +521,10 @@ def play(args: argparse.Namespace) -> None:
             if viewer is not None and not viewer.is_running():
                 break
             started_at = time.monotonic()
-            pressed = set() if joystick is None else joystick.poll()
+            if gamepad is not None:
+                gamepad_axes, pressed = gamepad.poll()
+            else:
+                gamepad_axes, pressed = None, set() if joystick is None else joystick.poll()
             if args.quit_button in pressed:
                 break
             if args.reset_button in pressed:
@@ -404,13 +532,16 @@ def play(args: argparse.Namespace) -> None:
                 commands.zero_()
 
             if fixed_command is None:
+                forward_axis = args.axis_ly if gamepad_axes is not None else args.forward_axis
+                lateral_axis = args.axis_lx if gamepad_axes is not None else args.lateral_axis
+                yaw_axis = args.axis_rx if gamepad_axes is not None else args.yaw_axis
                 target = command_from_axes(
-                    joystick.axes,
+                    gamepad_axes if gamepad_axes is not None else joystick.axes,
                     command_low,
                     command_high,
-                    forward_axis=args.forward_axis,
-                    lateral_axis=args.lateral_axis,
-                    yaw_axis=args.yaw_axis,
+                    forward_axis=forward_axis,
+                    lateral_axis=lateral_axis,
+                    yaw_axis=yaw_axis,
                     forward_sign=args.forward_sign,
                     lateral_sign=args.lateral_sign,
                     yaw_sign=args.yaw_sign,
@@ -418,14 +549,14 @@ def play(args: argparse.Namespace) -> None:
                 )
             else:
                 target = fixed_command
-            target_t = torch.as_tensor(target, device=device).unsqueeze(0)
+            target_t = torch.as_tensor(target, device=policy_device).unsqueeze(0)
             commands.add_(args.command_smoothing * (target_t - commands))
 
             with torch.inference_mode():
-                observation_t = _to_torch_obs(observation, device)
+                observation_t = _to_torch_obs(observation, policy_device)
                 encoder_input = flatten_encoder_observation(observation_t, commands)
                 raw_z = policy.deterministic_z(encoder_input)
-                action = _bfm_action(bfm_model, observation_t, bfm_model.project_z(raw_z))
+                action = _bfm_action(bfm_model, observation_t, bfm_model.project_z(raw_z)).to(device)
             observation, _reward, terminated, truncated, _info = env.step(action, to_numpy=False)
 
             if viewer is not None or video_renderer is not None:
@@ -458,6 +589,8 @@ def play(args: argparse.Namespace) -> None:
             video_renderer.close()
         if joystick is not None:
             joystick.close()
+        if gamepad is not None:
+            gamepad.close()
         if viewer is not None:
             viewer.close()
         env.close()
@@ -470,15 +603,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bfm-checkpoint", type=Path, default=None)
     parser.add_argument("--robot-config", type=Path, default=None)
     parser.add_argument("--expert-dataset", type=Path, default=None)
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--simulator", choices=("isaacsim", "mujoco"), default="mujoco")
+    parser.add_argument("--device", default="auto", help="auto selects CUDA when available, otherwise CPU.")
+    parser.add_argument(
+        "--policy-device",
+        default=None,
+        help="Device for BFM and Stage2 inference; useful as CPU when Isaac Sim exhausts GPU memory.",
+    )
     parser.add_argument("--joystick", type=Path, default=Path("/dev/input/js0"))
+    parser.add_argument("--gamepad", action="store_true", help="Use pygame gamepad input (HT_lab_hi mapping).")
+    parser.add_argument("--gamepad-id", "--gamepad_id", dest="gamepad_id", type=int, default=0, help="pygame joystick index.")
+    parser.add_argument(
+        "--gamepad-debug",
+        "--gamepad_debug",
+        dest="gamepad_debug",
+        action="store_true",
+        help="Print raw pygame axes/buttons each step.",
+    )
+    parser.add_argument("--axis-lx", "--axis_lx", dest="axis_lx", type=int, default=0, help="Gamepad left stick X axis.")
+    parser.add_argument("--axis-ly", "--axis_ly", dest="axis_ly", type=int, default=1, help="Gamepad left stick Y axis.")
+    parser.add_argument("--axis-rx", "--axis_rx", dest="axis_rx", type=int, default=3, help="Gamepad right stick X axis.")
     parser.add_argument("--forward-axis", type=int, default=1)
     parser.add_argument("--lateral-axis", type=int, default=0)
     parser.add_argument("--yaw-axis", type=int, default=3)
     parser.add_argument("--forward-sign", type=float, choices=(-1.0, 1.0), default=-1.0)
     parser.add_argument("--lateral-sign", type=float, choices=(-1.0, 1.0), default=-1.0)
     parser.add_argument("--yaw-sign", type=float, choices=(-1.0, 1.0), default=-1.0)
-    parser.add_argument("--deadzone", type=float, default=0.1)
+    parser.add_argument("--deadzone", type=float, default=0.08)
     parser.add_argument("--reset-button", type=int, default=0, help="Xbox A / PlayStation Cross by default.")
     parser.add_argument("--quit-button", type=int, default=1, help="Xbox B / PlayStation Circle by default.")
     parser.add_argument("--fixed-command", type=float, nargs=3, metavar=("VX", "VY", "WZ"), default=None)

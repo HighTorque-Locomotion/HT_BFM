@@ -858,15 +858,19 @@ def build_piplus_locomotion_env(
     num_envs: int,
     seed: int,
     max_episode_length_s: float,
+    simulator: str = "isaacsim",
     locomotion_mode: bool = True,
     disable_obs_noise: bool = False,
     disable_domain_randomization: bool = False,
 ):
     if not locomotion_mode:
         raise ValueError("PiPlus AMP Stage2 requires locomotion_mode=True")
+    if simulator not in {"isaacsim", "mujoco"}:
+        raise ValueError(f"Unsupported Stage2 playback simulator: {simulator}")
     robot_training = _load_piplus_robot_contract(robot_config)
     hydra_overrides = [
         "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+        f"simulator={simulator}",
         "env.config.resample_motion_when_training=False",
         "env.config.termination.terminate_when_motion_end=False",
         "env.config.termination.terminate_when_motion_far=False",
@@ -1049,7 +1053,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
     parser.add_argument("--amp-weight", type=float, default=0.04)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
-    parser.add_argument("--locomotion-reward-weight", type=float, default=1.0)
+    parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-every", type=int, default=100)
