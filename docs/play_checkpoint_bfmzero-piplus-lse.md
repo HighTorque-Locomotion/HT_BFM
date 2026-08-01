@@ -43,8 +43,8 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2/checkpoint_1700.pt \
+  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
+  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
   --simulator isaacsim \
   --device cuda:0 \
   --policy-device cpu \
@@ -58,8 +58,8 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2/checkpoint_1700.pt \
+  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
+  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
   --simulator mujoco \
   --device auto \
   --fixed-command 0.4 0.0 0.0
@@ -73,8 +73,8 @@ python -m humanoidverse.amp_stage2_play \
 
 ```bash
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2/checkpoint_1700.pt \
+  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
+  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
   --simulator isaacsim \
   --device cuda:0 \
   --policy-device cpu \
@@ -90,6 +90,6 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python3 "/home/sunteng/Project/deployment/ROS2 Plugin/retarget/instinct_onboard/scripts/export_piplus_bfm_command_onnx.py" \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_loco11_resume1400_v2/checkpoint_1700.pt \
+  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
   --output huiying/stage2_command_encoder.onnx
 ```

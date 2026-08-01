@@ -52,6 +52,11 @@ DEFAULT_KEY_BODIES = (
     "r_elbow_link",
     "head_pitch_link",
 )
+ENCODER_INPUT_TRANSFORM_VERSION = 1
+ENCODER_COMMAND_SCALE = (1.25, 5.0, 1.25)
+ENCODER_DOF_VEL_SCALE = 0.05
+LINVEL_EXP_ERROR_SCALE = 0.16
+MOVING_COMMAND_THRESHOLD = 0.1
 
 
 def _distributed_ready() -> bool:
@@ -474,12 +479,96 @@ def _validate_and_configure_latent_contract(
     }
 
 
+def encoder_input_scale(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
+    """Build field-wise scales without changing the Stage2 checkpoint input shape."""
+    state = obs["state"]
+    last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
+    command_scale = commands.new_tensor(ENCODER_COMMAND_SCALE)
+    if commands.shape[-1] != command_scale.numel():
+        raise ValueError(f"Expected {command_scale.numel()} commands, got {commands.shape[-1]}")
+
+    state_scale = torch.ones(state.shape[-1], device=state.device, dtype=state.dtype)
+    dof_dim = int(last_action.shape[-1])
+    if dof_dim > 0:
+        expected_state_dim = 2 * dof_dim + 6
+        if state.shape[-1] != expected_state_dim:
+            raise ValueError(f"Expected PiPlus state dim {expected_state_dim}, got {state.shape[-1]}")
+        state_scale[dof_dim : 2 * dof_dim] = ENCODER_DOF_VEL_SCALE
+
+    pieces = [command_scale, state_scale, torch.ones(last_action.shape[-1], device=state.device, dtype=state.dtype)]
+    history = obs.get("history_actor")
+    if history is not None:
+        history_scale = torch.ones(history.shape[-1], device=history.device, dtype=history.dtype)
+        per_frame_dim = 3 * dof_dim + 6
+        if dof_dim <= 0 or history.shape[-1] % per_frame_dim != 0:
+            raise ValueError(
+                f"Cannot infer grouped PiPlus history layout from history dim {history.shape[-1]} and dof dim {dof_dim}"
+            )
+        history_length = history.shape[-1] // per_frame_dim
+        # history_actor is grouped by key: actions, base_ang_vel, dof_pos,
+        # dof_vel, projected_gravity. Only the raw joint velocity block needs
+        # the same 0.05 scale used by the first-stage UFO observations.
+        dof_vel_start = history_length * (2 * dof_dim + 3)
+        history_scale[dof_vel_start : dof_vel_start + history_length * dof_dim] = ENCODER_DOF_VEL_SCALE
+        pieces.append(history_scale)
+    return torch.cat(pieces)
+
+
 def flatten_encoder_observation(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
-    pieces = [commands, obs["state"], obs.get("last_action", torch.zeros_like(obs["state"][..., :0]))]
+    state = obs["state"]
+    last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
+    pieces = [commands, state, last_action]
     history = obs.get("history_actor")
     if history is not None:
         pieces.append(history)
-    return torch.cat(pieces, dim=-1)
+    features = torch.cat(pieces, dim=-1)
+    return features * encoder_input_scale(obs, commands)
+
+
+@torch.no_grad()
+def load_command_encoder_policy_state(
+    policy: CommandEncoderPolicy,
+    checkpoint: Mapping[str, Any],
+    input_scale: torch.Tensor,
+) -> bool:
+    """Load a policy and migrate legacy raw-input weights losslessly.
+
+    Returns True when the first layer was reparameterized. Its optimizer state
+    must then be reset because the stored Adam moments use the old coordinates.
+    """
+    policy.load_state_dict(checkpoint["policy"])
+    metadata = checkpoint.get("metadata", {})
+    transform = metadata.get("encoder_input_transform", {}) if isinstance(metadata, Mapping) else {}
+    version = int(transform.get("version", 0)) if isinstance(transform, Mapping) else 0
+    if version == ENCODER_INPUT_TRANSFORM_VERSION:
+        return False
+    if version != 0:
+        raise ValueError(
+            f"Unsupported encoder input transform version {version}; expected 0 or {ENCODER_INPUT_TRANSFORM_VERSION}"
+        )
+    first_layer = policy.trunk[0]
+    if not isinstance(first_layer, nn.Linear) or first_layer.in_features != input_scale.numel():
+        raise ValueError("Cannot migrate the command encoder first layer for the new input scaling")
+    first_layer.weight.div_(input_scale.to(first_layer.weight).unsqueeze(0))
+    return True
+
+
+def restore_policy_optimizer(
+    optimizer: torch.optim.Optimizer,
+    checkpoint: Mapping[str, Any],
+    *,
+    learning_rate: float,
+    reset_for_input_migration: bool,
+) -> str:
+    """Restore valid Adam state while always honoring the requested LR."""
+    if not reset_for_input_migration and "policy_optimizer" in checkpoint:
+        optimizer.load_state_dict(checkpoint["policy_optimizer"])
+        status = "loaded_with_lr_override"
+    else:
+        status = "reset_for_encoder_input_transform" if reset_for_input_migration else "reset_missing_state"
+    for group in optimizer.param_groups:
+        group["lr"] = float(learning_rate)
+    return status
 
 
 def compute_gae(
@@ -528,6 +617,8 @@ class Stage2Rollout:
     fall_over: torch.Tensor
     timeout_values: torch.Tensor
     amp_features: torch.Tensor
+    base_lin_vel: torch.Tensor
+    base_ang_vel: torch.Tensor
 
 
 class OnlineAMPHistory:
@@ -680,7 +771,7 @@ def _mimiclite_resample_mask(
 
 
 MIMICLITE_LOCOMOTION_WEIGHTS = {
-    "linvel_exp": 1.5,
+    "linvel_exp": 1.8,
     # Give signed command alignment a slightly stronger gradient, including for reverse vx.
     "linvel_projection": 0.6,
     "angvel_z_exp": 1.2,
@@ -695,6 +786,102 @@ MIMICLITE_LOCOMOTION_WEIGHTS = {
     "joint_vel_l2": 1.0e-3,
     "joint_deviation_l2": 0.1,
 }
+
+
+def baseline_normalized_linvel_reward(
+    base_lin_vel: torch.Tensor,
+    commands: torch.Tensor,
+    *,
+    error_scale: float = LINVEL_EXP_ERROR_SCALE,
+) -> torch.Tensor:
+    """Return a signed tracking reward whose moving-command zero-speed baseline is zero."""
+    command_xy = commands[..., :2]
+    tracking_error = (base_lin_vel[..., :2] - command_xy).square().sum(dim=-1)
+    tracking_score = torch.exp(-tracking_error / error_scale)
+    zero_speed_score = torch.exp(-command_xy.square().sum(dim=-1) / error_scale)
+    improvement = (tracking_score - zero_speed_score) / (1.0 - zero_speed_score).clamp_min(0.05)
+    moving = command_xy.norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
+    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+
+
+def _global_tracking_sums(values: torch.Tensor) -> torch.Tensor:
+    totals = values.detach().to(dtype=torch.float64)
+    if _distributed_ready():
+        torch.distributed.all_reduce(totals, op=torch.distributed.ReduceOp.SUM)
+    return totals
+
+
+def command_tracking_metrics(
+    commands: torch.Tensor,
+    base_lin_vel: torch.Tensor,
+    base_ang_vel: torch.Tensor,
+) -> dict[str, float]:
+    """Summarize direct command errors and the learned command-to-speed response."""
+    command = commands.reshape(-1, 3)
+    achieved_xy = base_lin_vel.reshape(-1, base_lin_vel.shape[-1])[:, :2]
+    achieved_yaw = base_ang_vel.reshape(-1, base_ang_vel.shape[-1])[:, 2]
+    vx_error = (achieved_xy[:, 0] - command[:, 0]).abs()
+    vy_error = (achieved_xy[:, 1] - command[:, 1]).abs()
+    planar_error = torch.linalg.vector_norm(achieved_xy - command[:, :2], dim=-1)
+    yaw_error = (achieved_yaw - command[:, 2]).abs()
+    moving = command[:, :2].norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
+
+    metrics: dict[str, float] = {}
+
+    def add_mean(name: str, values: torch.Tensor, mask: torch.Tensor | None = None) -> None:
+        selected = values if mask is None else values[mask]
+        totals = _global_tracking_sums(
+            torch.stack((selected.sum(), selected.new_tensor(float(selected.numel()))))
+        )
+        metrics[name] = float(totals[0] / totals[1].clamp_min(1.0))
+
+    add_mean("tracking/vx_mae", vx_error)
+    add_mean("tracking/vy_mae", vy_error)
+    add_mean("tracking/planar_l2_mae", planar_error)
+    add_mean("tracking/yaw_rate_mae", yaw_error)
+    add_mean("tracking/nonzero_vx_mae", vx_error, moving)
+    add_mean("tracking/nonzero_vy_mae", vy_error, moving)
+    add_mean("tracking/nonzero_planar_l2_mae", planar_error, moving)
+
+    bin_masks = {
+        "backward": moving & (command[:, 0] < -0.05),
+        "near_zero": moving & (command[:, 0].abs() <= 0.05),
+        "slow_forward": moving & (command[:, 0] > 0.05) & (command[:, 0] <= 0.4),
+        "fast_forward": moving & (command[:, 0] > 0.4),
+    }
+    global_count = _global_tracking_sums(command.new_tensor(float(command.shape[0]))).clamp_min(1.0)
+    for name, mask in bin_masks.items():
+        add_mean(f"tracking/vx_bin_{name}_mae", vx_error, mask)
+        bin_count = _global_tracking_sums(mask.sum().to(dtype=torch.float64))
+        metrics[f"tracking/vx_bin_{name}_fraction"] = float(bin_count / global_count)
+
+    response_mask = moving & (command[:, 0].abs() > 0.05)
+    x = command[response_mask, 0]
+    y = achieved_xy[response_mask, 0]
+    response_sums = _global_tracking_sums(
+        torch.stack(
+            (
+                x.new_tensor(float(x.numel())),
+                x.sum(),
+                y.sum(),
+                x.square().sum(),
+                y.square().sum(),
+                (x * y).sum(),
+            )
+        )
+    )
+    count, sum_x, sum_y, sum_xx, sum_yy, sum_xy = response_sums
+    denominator = count.clamp_min(1.0)
+    variance_x = (sum_xx - sum_x.square() / denominator).clamp_min(0.0)
+    variance_y = (sum_yy - sum_y.square() / denominator).clamp_min(0.0)
+    covariance = sum_xy - sum_x * sum_y / denominator
+    slope = covariance / variance_x.clamp_min(1.0e-12)
+    correlation = covariance / (variance_x * variance_y).sqrt().clamp_min(1.0e-12)
+    valid = bool(count >= 2.0 and variance_x > 1.0e-12 and variance_y > 1.0e-12)
+    metrics["tracking/nonzero_vx_response_slope"] = float(slope) if valid else 0.0
+    metrics["tracking/nonzero_vx_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
+    metrics["tracking/nonzero_achieved_vx_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
+    return metrics
 
 
 class MimicLiteLocomotionRewardState:
@@ -748,8 +935,7 @@ class MimicLiteLocomotionRewardState:
 
         standing = (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() < 0.1)
         command_speed = commands[:, :2].norm(dim=-1)
-        linvel_error = (core.base_lin_vel[:, :2] - commands[:, :2]).square().sum(dim=-1)
-        linvel_exp = torch.exp(-linvel_error / 0.25)
+        linvel_exp = baseline_normalized_linvel_reward(core.base_lin_vel, commands)
         linvel_projection = (core.base_lin_vel[:, :2] * commands[:, :2]).sum(dim=-1).clamp_max(command_speed)
         yaw_error = (core.base_ang_vel[:, 2] - commands[:, 2]).square()
         angvel_z_exp = torch.exp(-yaw_error / 0.25)
@@ -966,6 +1152,7 @@ def ppo_update(
     update_count = 0
     early_stop = False
     sample_count = features.shape[0]
+    expected_update_count = int(epochs) * math.ceil(sample_count / int(minibatch_size))
     for _ in range(int(epochs)):
         for indices in torch.randperm(sample_count, device=features.device).split(int(minibatch_size)):
             distribution = policy.distribution(features[indices])
@@ -1012,9 +1199,17 @@ def ppo_update(
             break
 
     if update_count == 0:
-        return {**metric_sums, "ppo_updates": 0.0, "ppo_early_stop": 0.0}
+        return {
+            **metric_sums,
+            "ppo_updates": 0.0,
+            "ppo_expected_updates": float(expected_update_count),
+            "ppo_update_fraction": 0.0,
+            "ppo_early_stop": 0.0,
+        }
     metrics = {name: value / update_count for name, value in metric_sums.items()}
     metrics["ppo_updates"] = float(update_count)
+    metrics["ppo_expected_updates"] = float(expected_update_count)
+    metrics["ppo_update_fraction"] = float(update_count / max(expected_update_count, 1))
     metrics["ppo_early_stop"] = float(early_stop)
     return metrics
 
@@ -1046,10 +1241,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
-    parser.add_argument("--ppo-epochs", type=int, default=2)
+    parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=1024)
-    parser.add_argument("--learning-rate", type=float, default=3e-5)
-    parser.add_argument("--target-kl", type=float, default=0.01, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--target-kl", type=float, default=0.0, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
     parser.add_argument("--amp-weight", type=float, default=0.04)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
@@ -1199,14 +1394,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     obs, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
     obs_t = _to_torch_obs(obs, device)
-    commands_low = torch.tensor([-0.5, -0.2, -0.8], device=device)
-    commands_high = torch.tensor([1.2, 0.2, 0.8], device=device)
+    commands_low = torch.tensor([-0.2, -0.2, -0.8], device=device)
+    commands_high = torch.tensor([0.8, 0.2, 0.8], device=device)
     if not 0.0 <= args.command_smoothing <= 1.0:
         raise ValueError(f"command_smoothing must be in [0, 1], got {args.command_smoothing}")
     commands = torch.zeros(args.num_envs, 3, device=device)
     command_targets = torch.zeros_like(commands)
     command_episode_steps = torch.zeros(args.num_envs, device=device, dtype=torch.long)
     encoder_input = flatten_encoder_observation(obs_t, commands)
+    input_scale = encoder_input_scale(obs_t, commands)
     backward_arch = bfm_model.cfg.archi.b
     policy = CommandEncoderPolicy(
         encoder_input.shape[-1],
@@ -1268,21 +1464,39 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     discriminator_optimizer = torch.optim.Adam(discriminator.parameters(), lr=args.discriminator_learning_rate)
     reward_normalizer = MimicLiteRewardNormalizer().to(device)
     start_iteration = 0
+    policy_optimizer_resume = "fresh"
+    legacy_input_migrated = False
     if args.resume:
         resume_path = Path(args.resume)
         if not resume_path.is_file():
             raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
-        policy.load_state_dict(checkpoint["policy"])
+        legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
         discriminator.load_state_dict(checkpoint["discriminator"])
-        policy_optimizer.load_state_dict(checkpoint["policy_optimizer"])
+        policy_optimizer_resume = restore_policy_optimizer(
+            policy_optimizer,
+            checkpoint,
+            learning_rate=args.learning_rate,
+            reset_for_input_migration=legacy_input_migrated,
+        )
         discriminator_optimizer.load_state_dict(checkpoint["discriminator_optimizer"])
         reward_normalizer.load_state_dict(checkpoint["amp_reward_normalizer"])
         start_iteration = int(checkpoint.get("iteration", 0))
         if start_iteration < 0 or start_iteration > args.iterations:
             raise ValueError(f"Resume iteration {start_iteration} is outside [0, {args.iterations}]")
         if rank0:
-            print(json.dumps({"resumed_from": str(resume_path.resolve()), "start_iteration": start_iteration}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "resumed_from": str(resume_path.resolve()),
+                        "start_iteration": start_iteration,
+                        "legacy_encoder_input_migrated": legacy_input_migrated,
+                        "policy_optimizer_resume": policy_optimizer_resume,
+                        "policy_learning_rate": args.learning_rate,
+                    }
+                ),
+                flush=True,
+            )
     online_history = OnlineAMPHistory(args.num_envs, args.history_length, len(robot_training.policy_joint_names), device)
     online_history.reset(env._env.simulator.dof_pos)
     control_joint_names = tuple(robot_training.policy_joint_names)
@@ -1332,6 +1546,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 else []
             ),
         ],
+        "encoder_input_transform": {
+            "version": ENCODER_INPUT_TRANSFORM_VERSION,
+            "command_scale": list(ENCODER_COMMAND_SCALE),
+            "dof_vel_scale": ENCODER_DOF_VEL_SCALE,
+            "legacy_checkpoint_first_layer_migrated": legacy_input_migrated,
+        },
         "z_dim": int(bfm_model.cfg.archi.z_dim),
         "backward_hidden_dim": int(backward_arch.hidden_dim),
         "backward_hidden_layers": int(backward_arch.hidden_layers),
@@ -1351,7 +1571,9 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "locomotion_reward_weight": args.locomotion_reward_weight,
         "locomotion_reward_terms": MIMICLITE_LOCOMOTION_WEIGHTS,
         "locomotion_reward_scaling": "each weighted term is multiplied by the environment control dt",
-        "standalone_tracking_reward": "removed; linvel_exp and angvel_z_exp provide command tracking",
+        "linvel_exp_error_scale": LINVEL_EXP_ERROR_SCALE,
+        "linvel_exp_semantics": "signed improvement over the zero-speed baseline for nonzero planar commands",
+        "standalone_tracking_reward": "removed; baseline-normalized linvel_exp and angvel_z_exp provide command tracking",
         "termination": {
             "crash_contacts": list(env._env.config.robot.terminate_after_contacts_on),
             "fall_over_projected_gravity_xy_threshold": 0.9,
@@ -1365,6 +1587,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "global_num_envs": int(args.num_envs * world_size),
         "resume": str(Path(args.resume).resolve()) if args.resume else None,
         "resume_iteration": start_iteration,
+        "policy_optimizer_resume": policy_optimizer_resume,
         "ppo": {
             "epochs": args.ppo_epochs,
             "minibatch_size": args.minibatch_size,
@@ -1388,6 +1611,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             )
             env_reward_components_store: dict[str, list[torch.Tensor]] = {}
             locomotion_components_store = {name: [] for name in MIMICLITE_LOCOMOTION_WEIGHTS}
+            base_lin_vel_store, base_ang_vel_store = [], []
             for step in range(args.rollout_steps):
                 with torch.no_grad():
                     obs_t = _to_torch_obs(obs, device)
@@ -1402,6 +1626,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 done = torch.logical_or(terminated, truncated)
                 transition_core = _transition_core(env._env, info)
                 locomotion, locomotion_components = locomotion_reward_state.compute(transition_core, commands, action, done)
+                base_lin_vel_store.append(transition_core.base_lin_vel.detach())
+                base_ang_vel_store.append(transition_core.base_ang_vel.detach())
                 online_history.append(transition_core.dof_pos)
                 current_amp_feature = _online_amp_feature(transition_core, online_history, key_body_ids).detach()
 
@@ -1478,6 +1704,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 fall_over=torch.stack(fall_store),
                 timeout_values=torch.stack(timeout_values),
                 amp_features=torch.stack(amp_features),
+                base_lin_vel=torch.stack(base_lin_vel_store),
+                base_ang_vel=torch.stack(base_ang_vel_store),
             )
             fake_features = rollout.amp_features.reshape(-1, expert.feature_dim)
             expert_features = expert.sample(fake_features.shape[0], device)
@@ -1523,6 +1751,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 max_grad_norm=1.0,
                 target_kl=args.target_kl,
             )
+            tracking_metrics = command_tracking_metrics(rollout.commands, rollout.base_lin_vel, rollout.base_ang_vel)
             metrics = {
                 "iteration": iteration,
                 "reward": float(rewards.mean()),
@@ -1541,6 +1770,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 "discriminator_expert_score": float(discriminator_loss["expert_score"].detach()),
                 "discriminator_policy_score": float(discriminator_loss["policy_score"].detach()),
                 **ppo_metrics,
+                **tracking_metrics,
             }
             metrics.update(
                 {

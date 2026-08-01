@@ -69,7 +69,7 @@ forward/backward map、critic、observation normalizer 或第一阶段 replay bu
 9. 按 terminal/truncated 分离的 GAE 计算 PPO advantage/return；真实终止不 bootstrap，timeout 使用 terminal observation 的 value bootstrap。
 10. PPO 更新 command encoder/value head；按保存周期写 Stage2 checkpoint。
 
-默认 command 范围为 `[-0.5, -0.2, -0.8]` 到 `[1.2, 0.2, 0.8]`，每 `300` 步按 `0.75`
+默认 command 范围为 `[-0.2, -0.2, -0.8]` 到 `[0.8, 0.2, 0.8]`，每 `300` 步按 `0.75`
 概率重采样，前 `20` 步为 warmup，command smoothing 为 `0.1`，低速或 stand gate
 会生成零速度站立指令。
 
