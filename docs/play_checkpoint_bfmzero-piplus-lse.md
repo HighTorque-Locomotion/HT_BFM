@@ -139,3 +139,14 @@ ValueError: Invalid MuJoCo actuator mapping; missing actuators for DOFs: ...
 - ONNX 导出：通过
 - MuJoCo 环境启动：失败，缺少 actuator
 - Isaac Sim 完整播放：当前验证环境无可用 CUDA GPU，需在 GPU 环境执行上述命令确认
+
+## 导出 Stage2 command encoder ONNX
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python3 "/home/sunteng/Project/deployment/ROS2 Plugin/retarget/instinct_onboard/scripts/export_piplus_bfm_command_onnx.py" \
+  --checkpoint logs/amp_stage2_piplus_lse_4gpu_4096env_1m_20260801_klfix_sync_scratch/checkpoint_300.pt \
+  --output huiying/stage2_command_encoder.onnx
+```
