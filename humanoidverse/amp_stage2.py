@@ -983,10 +983,17 @@ def ppo_update(
             grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
             optimizer.step()
             approx_kl = (old_log_prob[indices] - log_prob).mean()
+            # Every rank must make the same early-stop decision. Otherwise one
+            # rank can leave the optimizer loop earlier and deadlock the next
+            # distributed gradient collective.
+            synced_kl = approx_kl.detach().clone()
+            if _distributed_ready():
+                torch.distributed.all_reduce(synced_kl, op=torch.distributed.ReduceOp.SUM)
+                synced_kl.div_(torch.distributed.get_world_size())
             metric_sums["policy_loss"] += float(policy_loss.detach())
             metric_sums["value_loss"] += float(value_loss.detach())
             metric_sums["entropy"] += float(entropy.detach())
-            metric_sums["approx_kl"] += float(approx_kl.detach())
+            metric_sums["approx_kl"] += float(synced_kl)
             metric_sums["clip_fraction"] += float((log_ratio.abs() > clip_ratio).float().mean().detach())
             metric_sums["ratio_mean"] += float(ratio.mean().detach())
             metric_sums["ratio_max"] += float(ratio.max().detach())
@@ -994,7 +1001,7 @@ def ppo_update(
             metric_sums["raw_z_norm"] += float(raw_z[indices].norm(dim=-1).mean().detach())
             update_count += 1
 
-            if target_kl is not None and target_kl > 0.0 and float(approx_kl.detach()) > 1.5 * target_kl:
+            if target_kl is not None and target_kl > 0.0 and float(synced_kl) > 1.5 * target_kl:
                 early_stop = True
                 break
         if early_stop:
