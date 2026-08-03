@@ -43,13 +43,20 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
+  --model-folder logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2 \
+  --checkpoint logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2/checkpoint_20200.pt \
   --simulator isaacsim \
   --device cuda:0 \
   --policy-device cpu \
-  --fixed-command 0.4 0.0 0.0
+  --fixed-command 0.4 0.0 0.0 \
+  --save-mp4 \
+  --show-viewer
 ```
+
+`--save-mp4` 使用 MuJoCo 离屏渲染当前 Isaac Sim 播放状态，默认写入
+`<model-folder>/stage2_playback/<checkpoint>_<timestamp>.mp4`；可用 `--output path/to/file.mp4` 指定文件名。
+录制 MP4 时脚本会自动跳过交互式 MuJoCo 窗口，避免同时创建窗口和离屏渲染上下文造成额外显存占用；`--headless` 仍可显式传入。
+需要边录边显示时追加 `--show-viewer`（会创建第二个渲染上下文并增加显存占用）。
 
 显存充足时可删除 `--policy-device cpu`。MuJoCo 后端用于快速调试；脚本会自动补充可碰撞平面，并复现位置目标 + PD 控制。
 
@@ -58,8 +65,8 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
+  --model-folder logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2 \
+  --checkpoint logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2/checkpoint_20200.pt \
   --simulator mujoco \
   --device auto \
   --fixed-command 0.4 0.0 0.0
@@ -73,13 +80,18 @@ python -m humanoidverse.amp_stage2_play \
 
 ```bash
 python -m humanoidverse.amp_stage2_play \
-  --model-folder logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801 \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
+  --model-folder logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2 \
+  --checkpoint logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2/checkpoint_20200.pt \
   --simulator isaacsim \
   --device cuda:0 \
   --policy-device cpu \
-  --gamepad
+  --gamepad \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad.mp4 \
+  --show-viewer
 ```
+
+录制期间仍可用手柄 button 1 退出；退出后脚本会关闭视频并打印保存路径。
 
 手柄输入与 `--fixed-command` 互斥。若手柄轴号不同，可用 `--axis-lx`、`--axis-ly`、`--axis-rx` 覆盖；用 `--gamepad-debug` 检查原始轴值。pygame 未安装时执行 `python -m pip install pygame`。
 
@@ -90,6 +102,6 @@ cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
 
 python3 "/home/sunteng/Project/deployment/ROS2 Plugin/retarget/instinct_onboard/scripts/export_piplus_bfm_command_onnx.py" \
-  --checkpoint logs/instinct_rl/amp_stage2/amp_stage2_piplus_lse_4gpu_4096env_1m_speed_contract_lr5e5_resume5600_20260801/checkpoint_6000.pt \
+  --checkpoint logs/amp_stage2_piplus_lse_4gpu_4096env_1m_amp006_stand_velrecover_resume16200_20260803_retry2/checkpoint_20200.pt \
   --output huiying/stage2_command_encoder.onnx
 ```

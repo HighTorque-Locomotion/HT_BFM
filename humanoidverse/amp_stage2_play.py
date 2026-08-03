@@ -432,6 +432,15 @@ def play(args: argparse.Namespace) -> None:
         disable_obs_noise=True,
         disable_domain_randomization=True,
     )
+    # Playback is intentionally single-environment.  Keep this check close to
+    # construction so a stale Hydra interpolation can fail before Isaac Sim
+    # allocates a training-sized scene on the GPU.
+    if int(env.num_envs) != 1:
+        env.close()
+        raise RuntimeError(
+            f"Stage2 playback requires exactly one environment, but the simulator created {env.num_envs}. "
+            "Check the playback Hydra overrides instead of starting a training-sized scene."
+        )
     bfm_model = load_model_from_checkpoint_dir(str(paths.bfm_checkpoint), device=bfm_load_device)
     bfm_model.eval()
     for parameter in bfm_model.parameters():
@@ -477,7 +486,21 @@ def play(args: argparse.Namespace) -> None:
             raise ValueError(f"--fixed-command must be within low={command_low.tolist()} high={command_high.tolist()}")
 
     initial_qpos, _ = env._get_qpos_qvel(to_numpy=True)
-    viewer = None if args.headless else PassivePolicyViewer(Path(robot_training.robot.xml_path), int(initial_qpos.shape[-1]))
+    # MP4 capture already creates an offscreen MuJoCo context.  Keep recording
+    # headless by default; an explicit --show-viewer opts into the second GLFW
+    # context when interactive display is needed.
+    if args.headless and args.show_viewer:
+        raise ValueError("--headless and --show-viewer are mutually exclusive")
+    show_viewer = args.show_viewer or (not args.headless and not args.save_mp4)
+    if args.save_mp4 and not show_viewer:
+        print("[INFO] --save-mp4 is running headless; add --show-viewer to open the interactive window.", flush=True)
+    if args.save_mp4 and args.show_viewer:
+        print("[WARN] --show-viewer + --save-mp4 creates two MuJoCo render contexts and uses more GPU memory.", flush=True)
+    viewer = (
+        PassivePolicyViewer(Path(robot_training.robot.xml_path), int(initial_qpos.shape[-1]))
+        if show_viewer
+        else None
+    )
     video_renderer = (
         MujocoQposRenderer(
             Path(robot_training.robot.xml_path),
@@ -641,10 +664,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-every-steps", type=int, default=50)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--save-mp4", action="store_true")
-    parser.add_argument("--output", type=Path, default=None, help="MP4 path; defaults to model-folder/stage2_playback/.")
-    parser.add_argument("--fps", type=float, default=50.0)
-    parser.add_argument("--render-size", type=int, default=720)
+    parser.add_argument(
+        "--show-viewer",
+        "--viewer",
+        dest="show_viewer",
+        action="store_true",
+        help="Open the interactive MuJoCo viewer; with --save-mp4 this uses an extra render context.",
+    )
+    parser.add_argument(
+        "--save-mp4",
+        action="store_true",
+        help="Record the playback to an offscreen MuJoCo-rendered MP4.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="MP4 output path; defaults to model-folder/stage2_playback/<checkpoint>_<timestamp>.mp4.",
+    )
+    parser.add_argument("--fps", type=float, default=50.0, help="Output video frame rate.")
+    parser.add_argument("--render-size", type=int, default=720, help="Output video width and height in pixels.")
     parser.add_argument("--camera-distance", type=float, default=3.0)
     parser.add_argument("--camera-azimuth", type=float, default=135.0)
     parser.add_argument("--camera-elevation", type=float, default=-18.0)
