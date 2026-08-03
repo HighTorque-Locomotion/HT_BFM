@@ -26,6 +26,7 @@ from humanoidverse.amp_stage2 import (
     load_command_encoder_policy_state,
     ppo_update,
     project_latent,
+    restore_discriminator_optimizer,
     restore_policy_optimizer,
 )
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
@@ -136,6 +137,15 @@ class AmpStage2Test(unittest.TestCase):
         self.assertEqual(status, "loaded_with_lr_override")
         self.assertTrue(all(group["lr"] == 1.0e-4 for group in optimizer.param_groups))
 
+    def test_discriminator_optimizer_resume_overrides_checkpoint_learning_rate(self):
+        discriminator = AMPDiscriminator(feature_dim=5, hidden_dims=(16, 8))
+        old_optimizer = torch.optim.Adam(discriminator.parameters(), lr=2.0e-4)
+        checkpoint = {"discriminator_optimizer": old_optimizer.state_dict()}
+        optimizer = torch.optim.Adam(discriminator.parameters(), lr=9.0e-4)
+        status = restore_discriminator_optimizer(optimizer, checkpoint, learning_rate=1.0e-4)
+        self.assertEqual(status, "loaded_with_lr_override")
+        self.assertTrue(all(group["lr"] == 1.0e-4 for group in optimizer.param_groups))
+
     def test_signed_linvel_reward_removes_zero_speed_baseline(self):
         commands = torch.tensor([[0.4, 0.0, 0.0], [0.4, 0.0, 0.0], [0.4, 0.0, 0.0]])
         achieved = torch.tensor([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]])
@@ -145,13 +155,16 @@ class AmpStage2Test(unittest.TestCase):
         self.assertLess(float(reward[2]), 0.0)
 
     def test_tracking_metrics_report_nonzero_response_slope(self):
-        commands = torch.tensor([[[0.2, 0.0, 0.0], [0.4, 0.0, 0.0], [0.6, 0.0, 0.0]]])
+        commands = torch.tensor([[[0.2, 0.0, -0.4], [0.4, 0.0, 0.2], [0.6, 0.0, 0.8]]])
         base_lin_vel = torch.tensor([[[0.1, 0.0, 0.0], [0.2, 0.0, 0.0], [0.3, 0.0, 0.0]]])
-        base_ang_vel = torch.zeros_like(base_lin_vel)
+        base_ang_vel = torch.tensor([[[0.0, 0.0, -0.2], [0.0, 0.0, 0.1], [0.0, 0.0, 0.4]]])
         metrics = command_tracking_metrics(commands, base_lin_vel, base_ang_vel)
         self.assertAlmostEqual(metrics["tracking/nonzero_vx_response_slope"], 0.5, places=6)
         self.assertAlmostEqual(metrics["tracking/nonzero_vx_command_correlation"], 1.0, places=6)
         self.assertAlmostEqual(metrics["tracking/nonzero_vx_mae"], 0.2, places=6)
+        self.assertAlmostEqual(metrics["tracking/nonzero_yaw_response_slope"], 0.5, places=6)
+        self.assertAlmostEqual(metrics["tracking/nonzero_yaw_command_correlation"], 1.0, places=6)
+        self.assertAlmostEqual(metrics["tracking/nonzero_yaw_rate_mae"], 0.2333333, places=6)
 
     def test_amp_discriminator_wgan_gp_is_finite(self):
         discriminator = AMPDiscriminator(feature_dim=12, hidden_dims=(32, 16))
@@ -294,6 +307,7 @@ class AmpStage2Test(unittest.TestCase):
             base_ang_vel=torch.zeros(1, 3),
             body_ang_vel=torch.zeros(1, 1, 3),
             contact_forces=torch.zeros(1, 2, 3),
+            body_pos=torch.tensor([[[0.0, 0.0, 0.35], [0.0, 0.0, 0.10]]]),
             body_rot=torch.tensor([[[0.0, 0.0, 0.0, 1.0]]]),
             torques=torch.zeros(1, 2),
             dof_vel=torch.zeros(1, 2),
@@ -305,11 +319,55 @@ class AmpStage2Test(unittest.TestCase):
         self.assertEqual(set(components), set(MIMICLITE_LOCOMOTION_WEIGHTS))
         self.assertTrue(torch.isfinite(reward).all())
 
+    def test_stand_still_reward_prefers_default_pose_and_is_command_gated(self):
+        state = MimicLiteLocomotionRewardState(
+            num_envs=1,
+            num_dof=2,
+            dt=0.02,
+            feet_indices=torch.tensor([0, 1]),
+            torso_index=0,
+            joint_vel_indices=torch.tensor([0]),
+            joint_deviation_indices=torch.tensor([0]),
+            device=torch.device("cpu"),
+        )
+        core = SimpleNamespace(
+            num_envs=1,
+            device=torch.device("cpu"),
+            base_lin_vel=torch.zeros(1, 3),
+            base_ang_vel=torch.zeros(1, 3),
+            body_ang_vel=torch.zeros(1, 1, 3),
+            contact_forces=torch.zeros(1, 2, 3),
+            body_pos=torch.tensor([[[0.0, 0.0, 0.35], [0.0, 0.0, 0.10]]]),
+            body_rot=torch.tensor([[[0.0, 0.0, 0.0, 1.0]]]),
+            torques=torch.zeros(1, 2),
+            dof_vel=torch.zeros(1, 2),
+            dof_pos=torch.zeros(1, 2),
+            default_dof_pos=torch.zeros(1, 2),
+            default_dof_pos_offset=torch.zeros(1, 2),
+        )
+        done = torch.zeros(1, dtype=torch.bool)
+        actions = torch.zeros(1, 2)
+        _, default_components = state.compute(core, torch.zeros(1, 3), actions, done)
+        core.dof_pos.fill_(0.4)
+        _, crooked_components = state.compute(core, torch.zeros(1, 3), actions, done)
+        _, moving_components = state.compute(core, torch.tensor([[0.4, 0.0, 0.0]]), actions, done)
+
+        self.assertEqual(default_components["stand_still"].item(), 0.0)
+        self.assertAlmostEqual(crooked_components["stand_still"].item(), -0.02 * 0.8 * 0.8)
+        self.assertEqual(moving_components["stand_still"].item(), 0.0)
+
     def test_command_sampler_supports_standing(self):
         low = torch.tensor([-0.5, -0.2, -0.8])
         high = torch.tensor([1.2, 0.2, 0.8])
         commands = _sample_commands(32, torch.device("cpu"), low, high, stand_prob=1.0)
         self.assertTrue(torch.equal(commands, torch.zeros_like(commands)))
+
+    def test_command_sampler_supports_turning_in_place(self):
+        low = torch.tensor([-0.8, -0.5, 0.5])
+        high = torch.tensor([0.8, 0.5, 0.5])
+        commands = _sample_commands(32, torch.device("cpu"), low, high, stand_prob=0.0, turn_prob=1.0)
+        self.assertTrue(torch.equal(commands[:, :2], torch.zeros_like(commands[:, :2])))
+        self.assertTrue(torch.equal(commands[:, 2], torch.full((32,), 0.5)))
 
     def test_torchrun_command_uses_standard_pytorch_launcher(self):
         command = _torchrun_command(4, ["--smoke", "--gpu-ids", "all"])

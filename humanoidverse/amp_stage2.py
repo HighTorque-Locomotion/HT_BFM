@@ -571,6 +571,23 @@ def restore_policy_optimizer(
     return status
 
 
+def restore_discriminator_optimizer(
+    optimizer: torch.optim.Optimizer,
+    checkpoint: Mapping[str, Any],
+    *,
+    learning_rate: float,
+) -> str:
+    """Restore discriminator Adam state while honoring the requested LR."""
+    if "discriminator_optimizer" in checkpoint:
+        optimizer.load_state_dict(checkpoint["discriminator_optimizer"])
+        status = "loaded_with_lr_override"
+    else:
+        status = "reset_missing_state"
+    for group in optimizer.param_groups:
+        group["lr"] = float(learning_rate)
+    return status
+
+
 def compute_gae(
     rewards: torch.Tensor,
     values: torch.Tensor,
@@ -740,13 +757,18 @@ def _sample_commands(
     high: torch.Tensor,
     *,
     stand_prob: float = 0.1,
+    turn_prob: float = 0.0,
 ) -> torch.Tensor:
     """Sample velocity targets with MimicLite Twist's stand-command gate."""
     if not 0.0 <= stand_prob <= 1.0:
         raise ValueError(f"stand_prob must be in [0, 1], got {stand_prob}")
+    if not 0.0 <= turn_prob <= 1.0:
+        raise ValueError(f"turn_prob must be in [0, 1], got {turn_prob}")
     commands = low + torch.rand(num_envs, 3, device=device) * (high - low)
+    turn_in_place = torch.rand(num_envs, device=device) < turn_prob
+    commands[turn_in_place, :2] = 0.0
     low_speed = commands[:, :2].norm(dim=-1) < 0.1
-    stand = low_speed | (torch.rand(num_envs, device=device) < stand_prob)
+    stand = (~turn_in_place & low_speed) | (torch.rand(num_envs, device=device) < stand_prob)
     return torch.where(stand.unsqueeze(-1), torch.zeros_like(commands), commands)
 
 
@@ -771,21 +793,34 @@ def _mimiclite_resample_mask(
 
 
 MIMICLITE_LOCOMOTION_WEIGHTS = {
-    "linvel_exp": 1.8,
+    # Keep direct planar tracking dominant while preserving a usable stability margin.
+    "linvel_exp": 2.8,
     # Give signed command alignment a slightly stronger gradient, including for reverse vx.
-    "linvel_projection": 0.6,
-    "angvel_z_exp": 1.2,
-    "single_foot_contact": 0.75,
-    "angvel_xy_l2": 0.02,
-    "body_upright": 1.0,
+    # Increase signed direction/yaw gradients after the widened command run
+    # plateaued while preserving the baseline-normalized reward semantics.
+    "linvel_projection": 1.1,
+    "angvel_z_exp": 2.2,
+    "single_foot_contact": 0.85,
+    "angvel_xy_l2": 0.035,
+    "body_upright": 1.1,
+    # Match HT_lab_pipeline's PiPlus locomotion stand_still term: its positive
+    # L1 pose error with weight -0.8 is represented here as a negative term.
+    "stand_still": 0.8,
     "feet_air_time": 2.0,
+    # Reward a single swing foot for clearing the ground without encouraging
+    # double-support jumps.  The simulator foot contact threshold is 0.07 m,
+    # so this target leaves a small but visible clearance margin.
+    "feet_clearance": 1.0,
     "energy_l1": 2.0e-4,
     "joint_acc_l2": 1.0e-7,
     "action_rate_l2": 0.005,
     "action_rate2_l2": 0.005,
     "joint_vel_l2": 1.0e-3,
-    "joint_deviation_l2": 0.1,
+    "joint_deviation_l2": 0.11,
 }
+
+FEET_CLEARANCE_TARGET = 0.10
+FEET_CLEARANCE_SIGMA = 0.04
 
 
 def baseline_normalized_linvel_reward(
@@ -801,6 +836,22 @@ def baseline_normalized_linvel_reward(
     zero_speed_score = torch.exp(-command_xy.square().sum(dim=-1) / error_scale)
     improvement = (tracking_score - zero_speed_score) / (1.0 - zero_speed_score).clamp_min(0.05)
     moving = command_xy.norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
+    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+
+
+def baseline_normalized_angvel_reward(
+    base_ang_vel_z: torch.Tensor,
+    commands: torch.Tensor,
+    *,
+    error_scale: float = 0.25,
+) -> torch.Tensor:
+    """Return signed yaw tracking improvement over the zero-yaw baseline."""
+    command_z = commands[..., 2]
+    tracking_error = (base_ang_vel_z - command_z).square()
+    tracking_score = torch.exp(-tracking_error / error_scale)
+    zero_yaw_score = torch.exp(-command_z.square() / error_scale)
+    improvement = (tracking_score - zero_yaw_score) / (1.0 - zero_yaw_score).clamp_min(0.05)
+    moving = command_z.abs() >= MOVING_COMMAND_THRESHOLD
     return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
 
 
@@ -825,6 +876,7 @@ def command_tracking_metrics(
     planar_error = torch.linalg.vector_norm(achieved_xy - command[:, :2], dim=-1)
     yaw_error = (achieved_yaw - command[:, 2]).abs()
     moving = command[:, :2].norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
+    turning = command[:, 2].abs() >= MOVING_COMMAND_THRESHOLD
 
     metrics: dict[str, float] = {}
 
@@ -839,6 +891,7 @@ def command_tracking_metrics(
     add_mean("tracking/vy_mae", vy_error)
     add_mean("tracking/planar_l2_mae", planar_error)
     add_mean("tracking/yaw_rate_mae", yaw_error)
+    add_mean("tracking/nonzero_yaw_rate_mae", yaw_error, turning)
     add_mean("tracking/nonzero_vx_mae", vx_error, moving)
     add_mean("tracking/nonzero_vy_mae", vy_error, moving)
     add_mean("tracking/nonzero_planar_l2_mae", planar_error, moving)
@@ -881,6 +934,32 @@ def command_tracking_metrics(
     metrics["tracking/nonzero_vx_response_slope"] = float(slope) if valid else 0.0
     metrics["tracking/nonzero_vx_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
     metrics["tracking/nonzero_achieved_vx_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
+
+    x = command[turning, 2]
+    y = achieved_yaw[turning]
+    response_sums = _global_tracking_sums(
+        torch.stack(
+            (
+                x.new_tensor(float(x.numel())),
+                x.sum(),
+                y.sum(),
+                x.square().sum(),
+                y.square().sum(),
+                (x * y).sum(),
+            )
+        )
+    )
+    count, sum_x, sum_y, sum_xx, sum_yy, sum_xy = response_sums
+    denominator = count.clamp_min(1.0)
+    variance_x = (sum_xx - sum_x.square() / denominator).clamp_min(0.0)
+    variance_y = (sum_yy - sum_y.square() / denominator).clamp_min(0.0)
+    covariance = sum_xy - sum_x * sum_y / denominator
+    slope = covariance / variance_x.clamp_min(1.0e-12)
+    correlation = covariance / (variance_x * variance_y).sqrt().clamp_min(1.0e-12)
+    valid = bool(count >= 2.0 and variance_x > 1.0e-12 and variance_y > 1.0e-12)
+    metrics["tracking/nonzero_yaw_response_slope"] = float(slope) if valid else 0.0
+    metrics["tracking/nonzero_yaw_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
+    metrics["tracking/nonzero_achieved_yaw_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
     return metrics
 
 
@@ -937,8 +1016,7 @@ class MimicLiteLocomotionRewardState:
         command_speed = commands[:, :2].norm(dim=-1)
         linvel_exp = baseline_normalized_linvel_reward(core.base_lin_vel, commands)
         linvel_projection = (core.base_lin_vel[:, :2] * commands[:, :2]).sum(dim=-1).clamp_max(command_speed)
-        yaw_error = (core.base_ang_vel[:, 2] - commands[:, 2]).square()
-        angvel_z_exp = torch.exp(-yaw_error / 0.25)
+        angvel_z_exp = baseline_normalized_angvel_reward(core.base_ang_vel[:, 2], commands)
 
         down = torch.zeros(core.num_envs, 3, device=core.device)
         down[:, 2] = -1.0
@@ -952,6 +1030,15 @@ class MimicLiteLocomotionRewardState:
         single_contact = torch.where(standing, torch.zeros_like(single_contact), single_contact)
         feet_air_time = ((last_air_time - 0.5).clamp_max(0.0) * first_contact).sum(dim=-1)
         feet_air_time = torch.where(standing, torch.zeros_like(feet_air_time), feet_air_time)
+        feet_height = core.body_pos[:, self.feet_indices, 2]
+        swing = ~contact
+        swing_count = swing.sum(dim=-1)
+        clearance_score = torch.exp(
+            -((feet_height - FEET_CLEARANCE_TARGET) / FEET_CLEARANCE_SIGMA).square()
+        )
+        feet_clearance = (clearance_score * swing).sum(dim=-1) / swing_count.clamp_min(1)
+        valid_swing = ((contact_time > 0.1).sum(dim=-1) == 1) & (swing_count == 1) & ~standing
+        feet_clearance = torch.where(valid_swing, feet_clearance, torch.zeros_like(feet_clearance))
 
         energy_l1 = -(core.torques * core.dof_vel).abs().sum(dim=-1)
         joint_acc_l2 = -((core.dof_vel - self.prev_dof_vel) / max(self.dt, 1.0e-6)).square().sum(dim=-1)
@@ -960,6 +1047,8 @@ class MimicLiteLocomotionRewardState:
         action_rate2_l2 = -(actions - 2.0 * self.prev_actions + self.prev_prev_actions).square().sum(dim=-1)
         joint_vel_l2 = -core.dof_vel[:, self.joint_vel_indices].square().sum(dim=-1)
         default_dof_pos = core.default_dof_pos + core.default_dof_pos_offset
+        stand_still = -(core.dof_pos - default_dof_pos).abs().sum(dim=-1)
+        stand_still = torch.where(standing, stand_still, torch.zeros_like(stand_still))
         joint_deviation_l2 = -(core.dof_pos[:, self.joint_deviation_indices] - default_dof_pos[:, self.joint_deviation_indices]).square().sum(dim=-1)
 
         components = {
@@ -969,7 +1058,9 @@ class MimicLiteLocomotionRewardState:
             "single_foot_contact": single_contact,
             "angvel_xy_l2": angvel_xy_l2,
             "body_upright": body_upright,
+            "stand_still": stand_still,
             "feet_air_time": feet_air_time,
+            "feet_clearance": feet_clearance,
             "energy_l1": energy_l1,
             "joint_acc_l2": joint_acc_l2,
             "action_rate_l2": action_rate_l2,
@@ -1057,6 +1148,10 @@ def build_piplus_locomotion_env(
     hydra_overrides = [
         "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
         f"simulator={simulator}",
+        # Keep playback/evaluation scenes independent of the training config's
+        # recorded env count (for example, a 4096-env run directory).
+        f"num_envs={num_envs}",
+        f"simulator.config.scene.num_envs={num_envs}",
         "env.config.resample_motion_when_training=False",
         "env.config.termination.terminate_when_motion_end=False",
         "env.config.termination.terminate_when_motion_far=False",
@@ -1069,6 +1164,9 @@ def build_piplus_locomotion_env(
         "env.config.lie_down_init=False",
         "+rewards.reward_scales.survival=2.0",
         "rewards.reward_scales.penalty_undesired_contact=-1.0",
+        # Keep the wider command curriculum from being paid for with overly
+        # abrupt policy changes on the hardware-facing action interface.
+        "rewards.reward_scales.penalty_action_rate=-0.55",
     ]
     env_config = HumanoidVerseIsaacConfig(
         name="humanoidverse_isaac",
@@ -1237,16 +1335,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--history-length", type=int, default=8)
     parser.add_argument("--command-resample-steps", type=int, default=300)
     parser.add_argument("--command-resample-prob", type=float, default=0.75)
-    parser.add_argument("--command-stand-prob", type=float, default=0.1)
+    parser.add_argument("--command-stand-prob", type=float, default=0.2)
+    parser.add_argument("--command-turn-prob", type=float, default=0.2)
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
-    parser.add_argument("--target-kl", type=float, default=0.0, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
+    parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
-    parser.add_argument("--amp-weight", type=float, default=0.04)
+    parser.add_argument("--amp-weight", type=float, default=0.06)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
     parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
@@ -1394,8 +1493,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     obs, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
     obs_t = _to_torch_obs(obs, device)
-    commands_low = torch.tensor([-0.2, -0.2, -0.8], device=device)
-    commands_high = torch.tensor([0.8, 0.2, 0.8], device=device)
+    commands_low = torch.tensor([-0.8, -0.5, -0.8], device=device)
+    commands_high = torch.tensor([0.8, 0.5, 0.8], device=device)
     if not 0.0 <= args.command_smoothing <= 1.0:
         raise ValueError(f"command_smoothing must be in [0, 1], got {args.command_smoothing}")
     commands = torch.zeros(args.num_envs, 3, device=device)
@@ -1465,6 +1564,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     reward_normalizer = MimicLiteRewardNormalizer().to(device)
     start_iteration = 0
     policy_optimizer_resume = "fresh"
+    discriminator_optimizer_resume = "fresh"
     legacy_input_migrated = False
     if args.resume:
         resume_path = Path(args.resume)
@@ -1479,7 +1579,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             learning_rate=args.learning_rate,
             reset_for_input_migration=legacy_input_migrated,
         )
-        discriminator_optimizer.load_state_dict(checkpoint["discriminator_optimizer"])
+        discriminator_optimizer_resume = restore_discriminator_optimizer(
+            discriminator_optimizer,
+            checkpoint,
+            learning_rate=args.discriminator_learning_rate,
+        )
         reward_normalizer.load_state_dict(checkpoint["amp_reward_normalizer"])
         start_iteration = int(checkpoint.get("iteration", 0))
         if start_iteration < 0 or start_iteration > args.iterations:
@@ -1493,6 +1597,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         "legacy_encoder_input_migrated": legacy_input_migrated,
                         "policy_optimizer_resume": policy_optimizer_resume,
                         "policy_learning_rate": args.learning_rate,
+                        "discriminator_optimizer_resume": discriminator_optimizer_resume,
+                        "discriminator_learning_rate": args.discriminator_learning_rate,
                     }
                 ),
                 flush=True,
@@ -1561,6 +1667,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "expert_motion_count": int(expert.motion_count),
         "command_range": {"low": commands_low.tolist(), "high": commands_high.tolist()},
         "command_stand_prob": args.command_stand_prob,
+        "command_turn_prob": args.command_turn_prob,
         "command_resample_prob": args.command_resample_prob,
         "command_resample_interval": args.command_resample_steps,
         "command_warmup_steps": args.command_warmup_steps,
@@ -1571,9 +1678,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "locomotion_reward_weight": args.locomotion_reward_weight,
         "locomotion_reward_terms": MIMICLITE_LOCOMOTION_WEIGHTS,
         "locomotion_reward_scaling": "each weighted term is multiplied by the environment control dt",
+        "stand_still_semantics": "HT_lab_pipeline-compatible zero-command negative L1 error from the default joint pose",
         "linvel_exp_error_scale": LINVEL_EXP_ERROR_SCALE,
         "linvel_exp_semantics": "signed improvement over the zero-speed baseline for nonzero planar commands",
-        "standalone_tracking_reward": "removed; baseline-normalized linvel_exp and angvel_z_exp provide command tracking",
+        "standalone_tracking_reward": "removed; baseline-normalized linvel_exp and signed baseline-normalized angvel_z_exp provide command tracking",
         "termination": {
             "crash_contacts": list(env._env.config.robot.terminate_after_contacts_on),
             "fall_over_projected_gravity_xy_threshold": 0.9,
@@ -1588,6 +1696,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "resume": str(Path(args.resume).resolve()) if args.resume else None,
         "resume_iteration": start_iteration,
         "policy_optimizer_resume": policy_optimizer_resume,
+        "discriminator_optimizer_resume": discriminator_optimizer_resume,
+        "discriminator_learning_rate": args.discriminator_learning_rate,
         "ppo": {
             "epochs": args.ppo_epochs,
             "minibatch_size": args.minibatch_size,
@@ -1686,6 +1796,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         commands_low,
                         commands_high,
                         stand_prob=args.command_stand_prob,
+                        turn_prob=args.command_turn_prob,
                     )
 
             rollout = Stage2Rollout(
@@ -1769,6 +1880,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 "discriminator_loss": float(discriminator_loss["loss"].detach()),
                 "discriminator_expert_score": float(discriminator_loss["expert_score"].detach()),
                 "discriminator_policy_score": float(discriminator_loss["policy_score"].detach()),
+                "discriminator_score_gap": float(
+                    (discriminator_loss["expert_score"] - discriminator_loss["policy_score"]).detach()
+                ),
+                "discriminator_gradient_penalty": float(discriminator_loss["gradient_penalty"].detach()),
+                "discriminator_gradient_norm": float(discriminator_loss["gradient_norm"].detach()),
                 **ppo_metrics,
                 **tracking_metrics,
             }

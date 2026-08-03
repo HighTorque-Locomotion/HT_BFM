@@ -69,7 +69,7 @@ forward/backward map、critic、observation normalizer 或第一阶段 replay bu
 9. 按 terminal/truncated 分离的 GAE 计算 PPO advantage/return；真实终止不 bootstrap，timeout 使用 terminal observation 的 value bootstrap。
 10. PPO 更新 command encoder/value head；按保存周期写 Stage2 checkpoint。
 
-默认 command 范围为 `[-0.2, -0.2, -0.8]` 到 `[0.8, 0.2, 0.8]`，每 `300` 步按 `0.75`
+当前调参 run 的 command 范围为 `[-0.8, -0.5, -0.8]` 到 `[0.8, 0.5, 0.8]`，每 `300` 步按 `0.75`
 概率重采样，前 `20` 步为 warmup，command smoothing 为 `0.1`，低速或 stand gate
 会生成零速度站立指令。
 
@@ -89,9 +89,9 @@ MimicLite reward 的最终每步贡献为 `dt * weight * raw_term`：
 
 | term | weight |
 | --- | ---: |
-| linvel_exp | 1.5 |
+| linvel_exp | 2.1 |
 | linvel_projection | 0.6 |
-| angvel_z_exp | 1.2 |
+| angvel_z_exp | 1.4 |
 | single_foot_contact | 0.75 |
 | angvel_xy_l2 | 0.02 |
 | body_upright | 1.0 |
@@ -103,6 +103,8 @@ MimicLite reward 的最终每步贡献为 `dt * weight * raw_term`：
 | joint_vel_l2 | 0.001 |
 | joint_deviation_l2 | 0.1 |
 
+偏航跟踪项 `angvel_z_exp` 使用相对零偏航基线的有符号改进奖励：非零偏航指令下原地不转的基线得分为 0，实际转向不足会产生负向信号，零偏航指令仍保留普通稳定性奖励。
+
 环境 reward 使用 `reward_bfm_zero` 的原有项，并在 Stage2 入口覆盖：
 
 ```text
@@ -112,6 +114,9 @@ penalty_undesired_contact = -1.0
 
 Stage2 不再使用 motion-end 或 motion-far termination。碰撞终止体来自 PiPlus
 配置中的 `terminate_after_contacts_on`，当前为 `waist_yaw/head/shoulder/hip`。
+
+为配合扩大的速度指令域，Stage2 入口将环境 `penalty_action_rate` 从 `-0.5`
+收紧到 `-0.55`，用于抑制硬件侧过快的动作跳变。
 
 ## 5. Noise、Delay 与 Domain Randomization
 
