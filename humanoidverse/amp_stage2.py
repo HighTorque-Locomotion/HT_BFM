@@ -794,12 +794,12 @@ def _mimiclite_resample_mask(
 
 MIMICLITE_LOCOMOTION_WEIGHTS = {
     # Keep direct planar tracking dominant while preserving a usable stability margin.
-    "linvel_exp": 2.8,
+    "linvel_exp": 3.1,
     # Give signed command alignment a slightly stronger gradient, including for reverse vx.
     # Increase signed direction/yaw gradients after the widened command run
     # plateaued while preserving the baseline-normalized reward semantics.
-    "linvel_projection": 1.1,
-    "angvel_z_exp": 2.2,
+    "linvel_projection": 1.5,
+    "angvel_z_exp": 2.6,
     "single_foot_contact": 0.85,
     "angvel_xy_l2": 0.035,
     "body_upright": 1.1,
