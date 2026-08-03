@@ -604,3 +604,5 @@
 - Files/commands: remote backup humanoidverse/amp_stage2.py.bak_20260804_piplusquad; remote backup humanoidverse/amp_stage2.py.bak_20260804_precompat; /tmp/amp_stage2_piplusquad_resume21200_20260804.log; local commit ee1b687.
 
 - Follow-up result through checkpoint_21700: the 21586-21685 window has lower latent MMD (0.2822 vs 0.2969) and better yaw MAE (0.2508 vs 0.2704), but vx MAE worsened (0.1937 vs 0.1826), planar MAE worsened (0.2711 vs 0.2604), and vx response slope fell (0.4495 vs 0.4737). Overall classification remains mixed/stable, not a sustained locomotion improvement.
+
+- Latest result through checkpoint_22200: speed tracking recovered in the 22086-22200 window (vx MAE 0.1639, planar MAE 0.2332, vx slope 0.6436 versus 0.178/0.236/0.4717 before the resume), while yaw remained weaker (yaw MAE 0.2622, yaw slope 0.8372 versus 0.241/0.9359). Termination stayed zero, but value loss rose to 2.38, so classify as partial speed improvement with critic-health risk, not an across-the-board improvement.
