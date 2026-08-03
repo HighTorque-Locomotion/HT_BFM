@@ -10,6 +10,7 @@ from humanoidverse.amp_stage2 import (
     AMPDiscriminator,
     CommandEncoderPolicy,
     MimicLiteLocomotionRewardState,
+    _latent_direction_prior,
     _load_piplus_robot_contract,
     _motion_qpos,
     _policy_dof_from_motion,
@@ -23,6 +24,7 @@ from humanoidverse.amp_stage2 import (
     compute_gae,
     encoder_input_scale,
     flatten_encoder_observation,
+    latent_manifold_metrics,
     load_command_encoder_policy_state,
     ppo_update,
     project_latent,
@@ -33,6 +35,32 @@ from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBas
 
 
 class AmpStage2Test(unittest.TestCase):
+    def test_latent_direction_prior_prefers_matching_expert_direction(self):
+        reference = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        projected = torch.tensor([[2.0, 0.0], [-1.0, 0.0]])
+        penalty, cosine = _latent_direction_prior(projected, reference)
+        self.assertAlmostEqual(float(cosine[0]), 1.0, places=6)
+        self.assertAlmostEqual(float(penalty[0]), 0.0, places=6)
+        self.assertAlmostEqual(float(cosine[1]), 0.0, places=6)
+        self.assertAlmostEqual(float(penalty[1]), 1.0, places=6)
+
+    def test_latent_manifold_metrics_include_command_bins(self):
+        projected = torch.tensor(
+            [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]]
+        )
+        commands = torch.tensor(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.5], [0.2, 0.0, 0.0], [0.4, 0.0, 0.0], [0.7, 0.0, 0.0], [0.0, 0.7, 0.0]]
+        )
+        metrics = latent_manifold_metrics(projected, commands, projected, max_samples=8)
+        for name in ("all", "stand", "turn", "slow", "medium", "fast"):
+            self.assertIn(f"latent/{name}_nearest_cosine", metrics)
+            self.assertIn(f"latent/{name}_mmd_rbf", metrics)
+        self.assertEqual(metrics["latent/stand_count"], 1.0)
+        self.assertEqual(metrics["latent/turn_count"], 1.0)
+        self.assertEqual(metrics["latent/slow_count"], 1.0)
+        self.assertEqual(metrics["latent/medium_count"], 1.0)
+        self.assertEqual(metrics["latent/fast_count"], 2.0)
+
     def test_piplus_robot_and_motion_joint_contract(self):
         contract = _load_piplus_robot_contract(
             "humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml"

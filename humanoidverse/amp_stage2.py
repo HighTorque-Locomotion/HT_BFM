@@ -390,6 +390,101 @@ def _latent_stats(values: torch.Tensor) -> dict[str, Any]:
     }
 
 
+def _latent_direction_prior(
+    projected_z: torch.Tensor,
+    reference_z: torch.Tensor,
+    *,
+    chunk_size: int = 1024,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return nearest-reference direction penalty and cosine similarity.
+
+    The BFM checkpoint only constrains the latent radius when ``norm_z`` is
+    enabled.  Comparing directions against backward-map latents supplies the
+    missing support constraint without changing the checkpoint architecture.
+    """
+    if projected_z.ndim != 2 or reference_z.ndim != 2 or projected_z.shape[-1] != reference_z.shape[-1]:
+        raise ValueError(
+            f"Latent direction shapes must be [N, D] and [M, D], got {tuple(projected_z.shape)} and {tuple(reference_z.shape)}"
+        )
+    if reference_z.shape[0] == 0:
+        raise ValueError("Latent direction reference bank is empty")
+    projected = F.normalize(projected_z.float(), dim=-1)
+    reference = F.normalize(reference_z.float(), dim=-1)
+    best_cosine: list[torch.Tensor] = []
+    for start in range(0, projected.shape[0], max(int(chunk_size), 1)):
+        similarity = projected[start : start + chunk_size] @ reference.T
+        best_cosine.append(similarity.max(dim=-1).values)
+    cosine = torch.cat(best_cosine, dim=0)
+    return 1.0 - cosine, cosine
+
+
+def _latent_mmd_rbf(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Compute a small unbiased-ish RBF MMD diagnostic on normalized latents."""
+    x = F.normalize(x.float(), dim=-1)
+    y = F.normalize(y.float(), dim=-1)
+    if x.shape[0] < 2 or y.shape[0] < 2:
+        return x.new_tensor(float("nan"))
+    joined = torch.cat((x, y), dim=0)
+    bandwidth = torch.cdist(joined, joined).square().flatten().median().clamp_min(1.0e-4)
+    k_xx = torch.exp(-torch.cdist(x, x).square() / bandwidth)
+    k_yy = torch.exp(-torch.cdist(y, y).square() / bandwidth)
+    k_xy = torch.exp(-torch.cdist(x, y).square() / bandwidth)
+    n_x, n_y = x.shape[0], y.shape[0]
+    xx = (k_xx.sum() - torch.diagonal(k_xx).sum()) / max(n_x * (n_x - 1), 1)
+    yy = (k_yy.sum() - torch.diagonal(k_yy).sum()) / max(n_y * (n_y - 1), 1)
+    return xx + yy - 2.0 * k_xy.mean()
+
+
+def latent_manifold_metrics(
+    projected_z: torch.Tensor,
+    commands: torch.Tensor,
+    reference_z: torch.Tensor,
+    *,
+    max_samples: int = 1024,
+) -> dict[str, float]:
+    """Compare Stage2 projected latents to expert latents globally and by command bin."""
+    projected_z = projected_z.reshape(-1, projected_z.shape[-1])
+    commands = commands.reshape(-1, commands.shape[-1])
+    if projected_z.shape[0] != commands.shape[0]:
+        raise ValueError("Projected latent and command sample counts must match")
+    generator = torch.Generator(device=projected_z.device)
+    generator.manual_seed(17)
+    reference = reference_z.to(projected_z.device)
+    if reference.shape[0] > max_samples:
+        reference = reference[torch.randperm(reference.shape[0], generator=generator, device=reference.device)[:max_samples]]
+
+    def sample_rows(values: torch.Tensor) -> torch.Tensor:
+        if values.shape[0] <= max_samples:
+            return values
+        indices = torch.randperm(values.shape[0], generator=generator, device=values.device)[:max_samples]
+        return values[indices]
+
+    masks = {
+        "all": torch.ones(projected_z.shape[0], dtype=torch.bool, device=projected_z.device),
+        "stand": (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() < 0.1),
+        "turn": (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() >= 0.1),
+        "slow": (commands[:, :2].norm(dim=-1) >= 0.1) & (commands[:, :2].norm(dim=-1) < 0.35),
+        "medium": (commands[:, :2].norm(dim=-1) >= 0.35) & (commands[:, :2].norm(dim=-1) < 0.65),
+        "fast": commands[:, :2].norm(dim=-1) >= 0.65,
+    }
+    metrics: dict[str, float] = {}
+    for name, mask in masks.items():
+        selected = sample_rows(projected_z[mask])
+        prefix = f"latent/{name}"
+        metrics[f"{prefix}_fraction"] = float(mask.float().mean())
+        metrics[f"{prefix}_count"] = float(mask.sum())
+        if selected.shape[0] < 2:
+            metrics[f"{prefix}_nearest_cosine"] = 0.0
+            metrics[f"{prefix}_knn_distance"] = 0.0
+            metrics[f"{prefix}_mmd_rbf"] = 0.0
+            continue
+        penalty, cosine = _latent_direction_prior(selected, reference)
+        metrics[f"{prefix}_nearest_cosine"] = float(cosine.mean())
+        metrics[f"{prefix}_knn_distance"] = float(penalty.mean())
+        metrics[f"{prefix}_mmd_rbf"] = float(_latent_mmd_rbf(selected, reference))
+    return metrics
+
+
 def _latent_stats_to_json(stats: dict[str, Any]) -> dict[str, Any]:
     def convert(value: Any) -> Any:
         if isinstance(value, torch.Tensor):
@@ -402,7 +497,7 @@ def _latent_stats_to_json(stats: dict[str, Any]) -> dict[str, Any]:
             return value.item()
         return value
 
-    return convert(stats)
+    return convert({key: value for key, value in stats.items() if not str(key).startswith("_")})
 
 
 def _collect_bfm_latent_stats(
@@ -441,6 +536,7 @@ def _collect_bfm_latent_stats(
         "frame_count": frame_count,
         "raw": _latent_stats(raw_z),
         "projected": _latent_stats(projected_z),
+        "_reference_projected": projected_z.detach().float(),
     }
 
 
@@ -464,10 +560,14 @@ def _validate_and_configure_latent_contract(
             raise ValueError(
                 f"Checkpoint norm_z=True but project_z norm is {projected_norm:.6f}, expected {expected_norm:.6f}"
             )
+        policy.configure_from_latent_stats(raw_stats["mean"], raw_stats["std"])
         return {
             "mode": "checkpoint_project_z",
             "expected_norm": expected_norm,
             "projected_norm_mean": projected_norm,
+            "raw_latent_norm_mean": float(raw_stats["norm_mean"]),
+            "raw_latent_norm_std": float(raw_stats["norm_std"]),
+            "direction_prior": "expert_projected_latent_bank",
         }
 
     policy.configure_from_latent_stats(raw_stats["mean"], raw_stats["std"])
@@ -1340,6 +1440,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
+    parser.add_argument(
+        "--latent-reference-size",
+        type=int,
+        default=1024,
+        help="Expert projected latent bank size used by the direction prior and manifold diagnostics.",
+    )
+    parser.add_argument(
+        "--latent-prior-weight",
+        type=float,
+        default=0.02,
+        help="Penalty weight for nearest-expert projected latent direction distance.",
+    )
+    parser.add_argument(
+        "--latent-diagnostic-samples",
+        type=int,
+        default=512,
+        help="Maximum generated/reference samples per command bin for latent diagnostics.",
+    )
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
@@ -1497,6 +1615,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     commands_high = torch.tensor([0.8, 0.5, 0.8], device=device)
     if not 0.0 <= args.command_smoothing <= 1.0:
         raise ValueError(f"command_smoothing must be in [0, 1], got {args.command_smoothing}")
+    if args.latent_reference_size <= 0:
+        raise ValueError(f"latent_reference_size must be positive, got {args.latent_reference_size}")
+    if args.latent_prior_weight < 0.0:
+        raise ValueError(f"latent_prior_weight must be non-negative, got {args.latent_prior_weight}")
+    if args.latent_diagnostic_samples <= 0:
+        raise ValueError(f"latent_diagnostic_samples must be positive, got {args.latent_diagnostic_samples}")
     commands = torch.zeros(args.num_envs, 3, device=device)
     command_targets = torch.zeros_like(commands)
     command_episode_steps = torch.zeros(args.num_envs, device=device, dtype=torch.long)
@@ -1528,6 +1652,14 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         bfm_model=bfm_model,
         latent_stats=latent_stats,
     )
+    latent_reference = latent_stats["_reference_projected"].to(device=device)
+    if latent_reference.shape[0] > args.latent_reference_size:
+        reference_generator = torch.Generator(device=device)
+        reference_generator.manual_seed(29)
+        reference_indices = torch.randperm(
+            latent_reference.shape[0], generator=reference_generator, device=device
+        )[: args.latent_reference_size]
+        latent_reference = latent_reference[reference_indices]
     if rank0:
         print(
             json.dumps(
@@ -1690,6 +1822,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "norm_z": bool(bfm_model.cfg.archi.norm_z),
         "latent_contract": latent_contract,
         "latent_stats": _latent_stats_to_json(latent_stats),
+        "latent_reference_size": int(latent_reference.shape[0]),
+        "latent_prior_weight": float(args.latent_prior_weight),
+        "latent_prior_metric": "1 - max_cosine(projected_z, expert_projected_latent_bank)",
+        "latent_diagnostic_samples": int(args.latent_diagnostic_samples),
         "distributed_rank": rank,
         "distributed_world_size": world_size,
         "global_num_envs": int(args.num_envs * world_size),
@@ -1818,6 +1954,16 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 base_lin_vel=torch.stack(base_lin_vel_store),
                 base_ang_vel=torch.stack(base_ang_vel_store),
             )
+            with torch.no_grad():
+                projected_rollout_z = bfm_model.project_z(
+                    rollout.raw_z.reshape(-1, int(bfm_model.cfg.archi.z_dim))
+                ).reshape(args.rollout_steps, args.num_envs, -1)
+                latent_prior_penalty, latent_prior_cosine = _latent_direction_prior(
+                    projected_rollout_z.reshape(-1, projected_rollout_z.shape[-1]),
+                    latent_reference,
+                )
+                latent_prior_penalty = latent_prior_penalty.reshape(args.rollout_steps, args.num_envs)
+                latent_prior_cosine = latent_prior_cosine.reshape(args.rollout_steps, args.num_envs)
             fake_features = rollout.amp_features.reshape(-1, expert.feature_dim)
             expert_features = expert.sample(fake_features.shape[0], device)
             discriminator_loss = discriminator.loss(expert_features, fake_features.detach())
@@ -1835,6 +1981,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     args.env_reward_weight * rollout.env_rewards
                     + args.locomotion_reward_weight * rollout.locomotion_rewards
                     + args.amp_weight * amp_reward
+                    - args.latent_prior_weight * latent_prior_penalty
                 )
                 next_input = flatten_encoder_observation(_to_torch_obs(obs, device), commands)
                 next_value = policy(next_input)[2]
@@ -1863,6 +2010,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 target_kl=args.target_kl,
             )
             tracking_metrics = command_tracking_metrics(rollout.commands, rollout.base_lin_vel, rollout.base_ang_vel)
+            latent_metrics = latent_manifold_metrics(
+                projected_rollout_z,
+                rollout.commands,
+                latent_reference,
+                max_samples=args.latent_diagnostic_samples,
+            )
             metrics = {
                 "iteration": iteration,
                 "reward": float(rewards.mean()),
@@ -1873,6 +2026,9 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 "amp_score": float(amp_score.mean()),
                 "amp_reward": float(amp_reward.mean()),
                 "amp_reward_contribution": float((args.amp_weight * amp_reward).mean()),
+                "latent_prior_penalty": float(latent_prior_penalty.mean()),
+                "latent_prior_cosine": float(latent_prior_cosine.mean()),
+                "latent_prior_contribution": float((-args.latent_prior_weight * latent_prior_penalty).mean()),
                 "termination_rate": float(rollout.terminated.float().mean()),
                 "termination_crash_rate": float(rollout.crash.float().mean()),
                 "termination_fall_over_rate": float(rollout.fall_over.float().mean()),
@@ -1887,6 +2043,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 "discriminator_gradient_norm": float(discriminator_loss["gradient_norm"].detach()),
                 **ppo_metrics,
                 **tracking_metrics,
+                **latent_metrics,
             }
             metrics.update(
                 {
