@@ -19,6 +19,7 @@ from humanoidverse.amp_stage2 import (
     _stage2_update_reset_buf,
     _torchrun_command,
     _transition_core,
+    amp_quadratic_reward,
     baseline_normalized_linvel_reward,
     command_tracking_metrics,
     compute_gae,
@@ -174,13 +175,21 @@ class AmpStage2Test(unittest.TestCase):
         self.assertEqual(status, "loaded_with_lr_override")
         self.assertTrue(all(group["lr"] == 1.0e-4 for group in optimizer.param_groups))
 
-    def test_signed_linvel_reward_removes_zero_speed_baseline(self):
+    def test_tracking_rewards_are_positive_and_dense(self):
         commands = torch.tensor([[0.4, 0.0, 0.0], [0.4, 0.0, 0.0], [0.4, 0.0, 0.0]])
         achieved = torch.tensor([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]])
         reward = baseline_normalized_linvel_reward(achieved, commands)
-        self.assertAlmostEqual(float(reward[0]), 0.0, places=6)
+        self.assertGreater(float(reward[0]), 0.0)
         self.assertAlmostEqual(float(reward[1]), 1.0, places=6)
-        self.assertLess(float(reward[2]), 0.0)
+        self.assertGreater(float(reward[2]), 0.0)
+
+    def test_amp_quadratic_reward_is_positive_and_bounded(self):
+        reward = amp_quadratic_reward(torch.tensor([-1.0, 1.0, 3.0]))
+        self.assertTrue(torch.all(reward >= 0.0))
+        self.assertTrue(torch.all(reward <= 1.0))
+        self.assertAlmostEqual(float(reward[1]), 1.0, places=6)
+        self.assertAlmostEqual(float(reward[0]), 0.0, places=6)
+        self.assertAlmostEqual(float(reward[2]), 0.0, places=6)
 
     def test_tracking_metrics_report_nonzero_response_slope(self):
         commands = torch.tensor([[[0.2, 0.0, -0.4], [0.4, 0.0, 0.2], [0.6, 0.0, 0.8]]])

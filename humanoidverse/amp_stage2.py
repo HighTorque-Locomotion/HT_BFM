@@ -5,7 +5,7 @@ The trainable policy is a stochastic command encoder:
     velocity command + BFM actor observations -> z -> frozen BFM actor -> action
 
 Only the command encoder and its value head are optimized.  The discriminator
-is trained with a MimicLite-style WGAN-GP objective on PiPlus motion features.
+is trained with the PiPlus MSELoss plus gradient-penalty objective on motion features.
 """
 
 from __future__ import annotations
@@ -244,10 +244,13 @@ class PiPlusAMPExpertDataset:
         return self.features[indices].to(device)
 
 
-class AMPDiscriminator(nn.Module):
-    """MimicLite-style WGAN-GP discriminator."""
+AMP_DISCRIMINATOR_OBJECTIVE = "mse_quad_v1"
 
-    def __init__(self, feature_dim: int, hidden_dims: tuple[int, int] = (512, 256), grad_penalty_weight: float = 10.0):
+
+class AMPDiscriminator(nn.Module):
+    """PiPlus AMP discriminator with MSE logits and quadratic reward mapping."""
+
+    def __init__(self, feature_dim: int, hidden_dims: tuple[int, int] = (1024, 512), grad_penalty_weight: float = 5.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feature_dim, hidden_dims[0]),
@@ -276,7 +279,9 @@ class AMPDiscriminator(nn.Module):
         )[0]
         gradient_norm = gradients.reshape(gradients.shape[0], -1).norm(2, dim=1)
         gradient_penalty = (gradient_norm - 1.0).square().mean()
-        total = policy_score.mean() - expert_score.mean() + self.grad_penalty_weight * gradient_penalty
+        expert_loss = F.mse_loss(expert_score, torch.ones_like(expert_score))
+        policy_loss = F.mse_loss(policy_score, torch.zeros_like(policy_score))
+        total = expert_loss + policy_loss + self.grad_penalty_weight * gradient_penalty
         return {
             "loss": total,
             "gradient_penalty": gradient_penalty,
@@ -287,11 +292,13 @@ class AMPDiscriminator(nn.Module):
 
     @torch.no_grad()
     def reward(self, policy_features: torch.Tensor) -> torch.Tensor:
+        # Keep this method as the raw score accessor; the caller applies the
+        # configured reward mapping exactly once before PPO/GAE.
         return self(policy_features)
 
 
 class MimicLiteRewardNormalizer(nn.Module):
-    """Running scalar normalizer matching MimicLite's ``VecNorm(input_shape=(1,))``."""
+    """Legacy running scalar normalizer kept for checkpoint compatibility."""
 
     def __init__(self, decay: float = 0.999, eps: float = 1.0e-5):
         super().__init__()
@@ -929,14 +936,16 @@ def baseline_normalized_linvel_reward(
     *,
     error_scale: float = LINVEL_EXP_ERROR_SCALE,
 ) -> torch.Tensor:
-    """Return a signed tracking reward whose moving-command zero-speed baseline is zero."""
+    """Return the positive exponential tracking reward used by ``piplus_walk``.
+
+    Stage2 cannot optimize actions directly, so subtracting a zero-speed baseline
+    creates a high-variance signed signal for the latent encoder. Keep the helper
+    name for checkpoint/test compatibility while restoring the dense positive
+    locomotion objective.
+    """
     command_xy = commands[..., :2]
     tracking_error = (base_lin_vel[..., :2] - command_xy).square().sum(dim=-1)
-    tracking_score = torch.exp(-tracking_error / error_scale)
-    zero_speed_score = torch.exp(-command_xy.square().sum(dim=-1) / error_scale)
-    improvement = (tracking_score - zero_speed_score) / (1.0 - zero_speed_score).clamp_min(0.05)
-    moving = command_xy.norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
-    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+    return torch.exp(-tracking_error / error_scale)
 
 
 def baseline_normalized_angvel_reward(
@@ -945,14 +954,15 @@ def baseline_normalized_angvel_reward(
     *,
     error_scale: float = 0.25,
 ) -> torch.Tensor:
-    """Return signed yaw tracking improvement over the zero-yaw baseline."""
+    """Return the positive exponential yaw tracking reward used by ``piplus_walk``."""
     command_z = commands[..., 2]
     tracking_error = (base_ang_vel_z - command_z).square()
-    tracking_score = torch.exp(-tracking_error / error_scale)
-    zero_yaw_score = torch.exp(-command_z.square() / error_scale)
-    improvement = (tracking_score - zero_yaw_score) / (1.0 - zero_yaw_score).clamp_min(0.05)
-    moving = command_z.abs() >= MOVING_COMMAND_THRESHOLD
-    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+    return torch.exp(-tracking_error / error_scale)
+
+
+def amp_quadratic_reward(discriminator_score: torch.Tensor) -> torch.Tensor:
+    """Match ``piplus_walk``'s positive quadratic discriminator reward."""
+    return (1.0 - (discriminator_score - 1.0).square()).clamp_min(0.0)
 
 
 def _global_tracking_sums(values: torch.Tensor) -> torch.Tensor:
@@ -1435,10 +1445,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--history-length", type=int, default=8)
     parser.add_argument("--command-resample-steps", type=int, default=300)
     parser.add_argument("--command-resample-prob", type=float, default=0.75)
-    parser.add_argument("--command-stand-prob", type=float, default=0.2)
-    parser.add_argument("--command-turn-prob", type=float, default=0.2)
+    parser.add_argument("--command-stand-prob", type=float, default=0.05)
+    parser.add_argument("--command-turn-prob", type=float, default=0.05)
     parser.add_argument("--command-warmup-steps", type=int, default=20)
-    parser.add_argument("--command-smoothing", type=float, default=0.1)
+    parser.add_argument("--command-smoothing", type=float, default=0.02)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
     parser.add_argument(
         "--latent-reference-size",
@@ -1458,12 +1468,13 @@ def _parse_args() -> argparse.Namespace:
         default=512,
         help="Maximum generated/reference samples per command bin for latent diagnostics.",
     )
-    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--ppo-epochs", type=int, default=5)
     parser.add_argument("--minibatch-size", type=int, default=1024)
-    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
-    parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
-    parser.add_argument("--amp-weight", type=float, default=0.06)
+    parser.add_argument("--discriminator-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--amp-weight", type=float, default=0.25)
+    parser.add_argument("--entropy-coef", type=float, default=0.003)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
     parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
@@ -1611,8 +1622,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     obs, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
     obs_t = _to_torch_obs(obs, device)
-    commands_low = torch.tensor([-0.8, -0.5, -0.8], device=device)
-    commands_high = torch.tensor([0.8, 0.5, 0.8], device=device)
+    commands_low = torch.tensor([-0.5, -0.5, -1.0], device=device)
+    commands_high = torch.tensor([1.0, 0.5, 1.0], device=device)
     if not 0.0 <= args.command_smoothing <= 1.0:
         raise ValueError(f"command_smoothing must be in [0, 1], got {args.command_smoothing}")
     if args.latent_reference_size <= 0:
@@ -1704,18 +1715,34 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
-        discriminator.load_state_dict(checkpoint["discriminator"])
+        checkpoint_discriminator = checkpoint.get("discriminator")
+        discriminator_architecture_compatible = True
+        if checkpoint_discriminator is not None:
+            try:
+                discriminator.load_state_dict(checkpoint_discriminator)
+            except RuntimeError:
+                # PiPlus uses the wider 1024/512 MSE discriminator. The old
+                # Stage2 WGAN checkpoint is still valid for the encoder, but
+                # its discriminator tensors cannot be loaded into this net.
+                discriminator_architecture_compatible = False
         policy_optimizer_resume = restore_policy_optimizer(
             policy_optimizer,
             checkpoint,
             learning_rate=args.learning_rate,
             reset_for_input_migration=legacy_input_migrated,
         )
-        discriminator_optimizer_resume = restore_discriminator_optimizer(
-            discriminator_optimizer,
-            checkpoint,
-            learning_rate=args.discriminator_learning_rate,
-        )
+        checkpoint_objective = checkpoint.get("metadata", {}).get("amp_discriminator_objective")
+        if discriminator_architecture_compatible and checkpoint_objective == AMP_DISCRIMINATOR_OBJECTIVE:
+            discriminator_optimizer_resume = restore_discriminator_optimizer(
+                discriminator_optimizer,
+                checkpoint,
+                learning_rate=args.discriminator_learning_rate,
+            )
+        else:
+            # Do not carry WGAN-GP optimizer moments into the PiPlus MSE/quad objective.
+            discriminator_optimizer_resume = (
+                "reset_for_architecture_change" if not discriminator_architecture_compatible else "reset_for_objective_change"
+            )
         reward_normalizer.load_state_dict(checkpoint["amp_reward_normalizer"])
         start_iteration = int(checkpoint.get("iteration", 0))
         if start_iteration < 0 or start_iteration > args.iterations:
@@ -1804,7 +1831,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "command_resample_interval": args.command_resample_steps,
         "command_warmup_steps": args.command_warmup_steps,
         "command_smoothing": args.command_smoothing,
-        "amp_reward_mapping": "raw_discriminator_score -> MimicLiteRewardNormalizer -> amp_weight",
+        "amp_reward_mapping": "quad(discriminator_score) -> amp_weight",
+        "amp_discriminator_objective": AMP_DISCRIMINATOR_OBJECTIVE,
         "amp_reward_weight": args.amp_weight,
         "env_reward_weight": args.env_reward_weight,
         "locomotion_reward_weight": args.locomotion_reward_weight,
@@ -1841,7 +1869,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             "target_kl": args.target_kl,
             "clip_ratio": 0.2,
             "value_coef": 0.5,
-            "entropy_coef": 0.001,
+            "entropy_coef": args.entropy_coef,
         },
     }
     if rank0:
@@ -1975,8 +2003,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
             with torch.no_grad():
                 amp_score = discriminator.reward(fake_features)
-                amp_reward = reward_normalizer(amp_score).reshape(args.rollout_steps, args.num_envs)
-                sync_floating_buffers(reward_normalizer)
+                amp_reward = amp_quadratic_reward(amp_score).reshape(args.rollout_steps, args.num_envs)
                 rewards = (
                     args.env_reward_weight * rollout.env_rewards
                     + args.locomotion_reward_weight * rollout.locomotion_rewards
@@ -2004,7 +2031,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 minibatch_size=args.minibatch_size,
                 clip_ratio=0.2,
                 value_coef=0.5,
-                entropy_coef=0.001,
+                entropy_coef=args.entropy_coef,
                 optimizer=policy_optimizer,
                 max_grad_norm=1.0,
                 target_kl=args.target_kl,
