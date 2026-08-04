@@ -26,14 +26,14 @@ target:
 | UFO Stage2 contract | HT_BFM implementation |
 | --- | --- |
 | Frozen BFM actor | `FBcprAuxModel` loaded from `checkpoint/model` |
-| BFM actor observation | `state + last_action + history_actor` from `HumanoidVerseIsaacVectorEnv` |
+| Command encoder observation | Chen Jianhong teacher's normalized 78-D `[base_ang_vel, projected_gravity, command, joint_pos, joint_vel, last_action]`; BFM actor still receives `state + last_action + history_actor` |
 | Latent | checkpoint `cfg.archi.z_dim` (the supplied model is 256) |
 | Latent projection | checkpoint `FBModel.project_z()`; no second normalization |
-| Action | checkpoint action dimension; supplied PiPlus model and environment both use 23 |
+| Action | checkpoint action dimension; supplied PiPlus model and environment both use 23; teacher output is name-mapped into Stage2 order |
 | Online environment | existing PiPlus `HumanoidVerseIsaacConfig` / IsaacLab backend |
 | AMP expert data | `dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl` |
 | AMP feature | local root velocity (3), five local key-body positions (15), eight-frame joint history (184), total 202; key bodies are ankles, elbows, and head pitch because Isaac merges fixed wrist links into elbows |
-| Trainable modules | command encoder, PPO value head, WGAN-GP discriminator, AMP reward normalizer |
+| Trainable modules | command encoder, PPO value head, teacher-action distillation loss, WGAN-GP discriminator, AMP reward normalizer |
 | Frozen modules | BFM actor, backward/forward maps, critics, observation normalizers |
 
 ## Deliberate target adaptations
