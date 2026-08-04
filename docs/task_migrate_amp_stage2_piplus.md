@@ -31,7 +31,7 @@ target:
 | Latent projection | checkpoint `FBModel.project_z()`; no second normalization |
 | Action | checkpoint action dimension; supplied PiPlus model and environment both use 23 |
 | Online environment | existing PiPlus `HumanoidVerseIsaacConfig` / IsaacLab backend |
-| AMP expert data | `dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl` |
+| AMP expert data | `dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl` |
 | AMP feature | local root velocity (3), five local key-body positions (15), eight-frame joint history (184), total 202; key bodies are ankles, elbows, and head pitch because Isaac merges fixed wrist links into elbows |
 | Trainable modules | command encoder, PPO value head, WGAN-GP discriminator, AMP reward normalizer |
 | Frozen modules | BFM actor, backward/forward maps, critics, observation normalizers |
@@ -79,7 +79,7 @@ scalar metric reduction.
 ```bash
 python -m humanoidverse.amp_stage2 \
   --bfm-checkpoint huiying/bfmzero-piplus-lse-isaac-20260715_143758\(1\)/checkpoint \
-  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
   --robot-config humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml \
   --device cuda --gpu-ids all \
   --num-envs 1024 --iterations 10000 --rollout-steps 32 \

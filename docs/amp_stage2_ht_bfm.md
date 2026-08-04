@@ -84,7 +84,7 @@ humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml
 默认专家数据：
 
 ```text
-dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl
+dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl
 ```
 
 当前训练 contract：
@@ -93,7 +93,7 @@ dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl
 PiPlus policy DoF       23
 BFM action dimension   23
 latent z dimension     256
-expert motions         148
+expert motions         153
 AMP feature dimension  202
 history length         8
 ```
@@ -178,6 +178,8 @@ locomotion 配置一致。为避免偏航 MAE 被零指令稀释，
 linvel_exp             2.8
 linvel_projection      1.1
 angvel_z_exp           2.6
+backward_velocity_progress 0.9
+turn_rate_progress      0.65
 single_foot_contact    0.85
 angvel_xy_l2           0.035
 body_upright           1.1

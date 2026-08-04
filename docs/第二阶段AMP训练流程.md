@@ -31,7 +31,7 @@ BFM Stage1 checkpoint:
   huiying/bfmzero-piplus-lse-isaac-20260715_143758(1)/checkpoint
 
 AMP expert dataset:
-  dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl
+  dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl
 
 PiPlus robot config:
   humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml
@@ -50,8 +50,8 @@ forward/backward map、critic、observation normalizer 或第一阶段 replay bu
 - latent dimension: `256`
 - `norm_z`: `true`
 - AMP feature dimension: `202`
-- motion count: `148`
-- valid AMP windows: `43364`
+- motion count: `153`
+- valid AMP windows: `44635`
 - projected latent norm: `sqrt(256)=16`
 
 ## 3. 单步训练链路
@@ -92,6 +92,8 @@ MimicLite reward 的最终每步贡献为 `dt * weight * raw_term`：
 | linvel_exp | 2.1 |
 | linvel_projection | 0.6 |
 | angvel_z_exp | 1.4 |
+| backward_velocity_progress | 0.9 |
+| turn_rate_progress | 0.65 |
 | single_foot_contact | 0.75 |
 | angvel_xy_l2 | 0.02 |
 | body_upright | 1.0 |
@@ -178,7 +180,7 @@ rank 0 保存 checkpoint。每卡的 `--num-envs` 是本卡环境数，全局 ba
 ```bash
 python -m humanoidverse.amp_stage2 \
   --bfm-checkpoint huiying/bfmzero-piplus-lse-isaac-20260715_143758\(1\)/checkpoint \
-  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
   --robot-config humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml \
   --device cuda --gpu-ids all \
   --num-envs 1024 --iterations 10000 --rollout-steps 32 \

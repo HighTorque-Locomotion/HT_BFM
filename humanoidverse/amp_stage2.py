@@ -42,7 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BFM_CHECKPOINT = str(
     PROJECT_ROOT / "huiying" / "bfmzero-piplus-lse-isaac-20260715_143758(1)" / "checkpoint"
 )
-DEFAULT_EXPERT_DATASET = str(PROJECT_ROOT / "dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl")
+DEFAULT_EXPERT_DATASET = str(PROJECT_ROOT / "dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl")
 DEFAULT_ROBOT_CONFIG = str(PROJECT_ROOT / "humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml")
 DEFAULT_KEY_BODIES = (
     "l_ankle_roll_link",
@@ -906,18 +906,24 @@ MIMICLITE_LOCOMOTION_WEIGHTS = {
     # Increase signed direction/yaw gradients after the widened command run
     # plateaued while preserving the baseline-normalized reward semantics.
     "linvel_projection": 1.5,
-    "angvel_z_exp": 2.6,
+    # Pure yaw commands are sampled explicitly, so make their tracking signal
+    # strong enough to produce a visible turning response at playback time.
+    "angvel_z_exp": 3.4,
+    # These bounded, signed progress terms retain a useful gradient while the
+    # exponential tracking terms are near zero for initially wrong-way motion.
+    "backward_velocity_progress": 0.9,
+    "turn_rate_progress": 0.65,
     "single_foot_contact": 0.85,
     "angvel_xy_l2": 0.035,
     "body_upright": 1.1,
     # Match HT_lab_pipeline's PiPlus locomotion stand_still term: its positive
     # L1 pose error with weight -0.8 is represented here as a negative term.
     "stand_still": 0.8,
-    "feet_air_time": 2.0,
+    "feet_air_time": 2.5,
     # Reward a single swing foot for clearing the ground without encouraging
     # double-support jumps.  The simulator foot contact threshold is 0.07 m,
     # so this target leaves a small but visible clearance margin.
-    "feet_clearance": 1.0,
+    "feet_clearance": 2.0,
     "energy_l1": 2.0e-4,
     "joint_acc_l2": 1.0e-7,
     "action_rate_l2": 0.005,
@@ -926,8 +932,10 @@ MIMICLITE_LOCOMOTION_WEIGHTS = {
     "joint_deviation_l2": 0.11,
 }
 
-FEET_CLEARANCE_TARGET = 0.10
-FEET_CLEARANCE_SIGMA = 0.04
+FEET_CLEARANCE_TARGET = 0.13
+FEET_CLEARANCE_SIGMA = 0.05
+BACKWARD_COMMAND_THRESHOLD = -0.05
+TURN_COMMAND_THRESHOLD = 0.1
 
 
 def baseline_normalized_linvel_reward(
@@ -958,6 +966,19 @@ def baseline_normalized_angvel_reward(
     command_z = commands[..., 2]
     tracking_error = (base_ang_vel_z - command_z).square()
     return torch.exp(-tracking_error / error_scale)
+
+
+def directional_progress_reward(
+    achieved: torch.Tensor,
+    commands: torch.Tensor,
+    *,
+    minimum_target: float,
+    active: torch.Tensor,
+) -> torch.Tensor:
+    """Return bounded signed command progress only where the command is active."""
+    target_magnitude = commands.abs().clamp_min(minimum_target)
+    progress = (achieved * commands.sign() / target_magnitude).clamp(-1.0, 1.0)
+    return torch.where(active, progress, torch.zeros_like(progress))
 
 
 def amp_quadratic_reward(discriminator_score: torch.Tensor) -> torch.Tensor:
@@ -1127,6 +1148,18 @@ class MimicLiteLocomotionRewardState:
         linvel_exp = baseline_normalized_linvel_reward(core.base_lin_vel, commands)
         linvel_projection = (core.base_lin_vel[:, :2] * commands[:, :2]).sum(dim=-1).clamp_max(command_speed)
         angvel_z_exp = baseline_normalized_angvel_reward(core.base_ang_vel[:, 2], commands)
+        backward_velocity_progress = directional_progress_reward(
+            core.base_lin_vel[:, 0],
+            commands[:, 0],
+            minimum_target=0.15,
+            active=commands[:, 0] < BACKWARD_COMMAND_THRESHOLD,
+        )
+        turn_rate_progress = directional_progress_reward(
+            core.base_ang_vel[:, 2],
+            commands[:, 2],
+            minimum_target=0.15,
+            active=commands[:, 2].abs() >= TURN_COMMAND_THRESHOLD,
+        )
 
         down = torch.zeros(core.num_envs, 3, device=core.device)
         down[:, 2] = -1.0
@@ -1165,6 +1198,8 @@ class MimicLiteLocomotionRewardState:
             "linvel_exp": linvel_exp,
             "linvel_projection": linvel_projection,
             "angvel_z_exp": angvel_z_exp,
+            "backward_velocity_progress": backward_velocity_progress,
+            "turn_rate_progress": turn_rate_progress,
             "single_foot_contact": single_contact,
             "angvel_xy_l2": angvel_xy_l2,
             "body_upright": body_upright,
@@ -1446,7 +1481,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-resample-steps", type=int, default=300)
     parser.add_argument("--command-resample-prob", type=float, default=0.75)
     parser.add_argument("--command-stand-prob", type=float, default=0.05)
-    parser.add_argument("--command-turn-prob", type=float, default=0.05)
+    parser.add_argument("--command-turn-prob", type=float, default=0.20)
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.02)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")

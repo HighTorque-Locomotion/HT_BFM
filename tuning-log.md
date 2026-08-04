@@ -606,3 +606,12 @@
 - Follow-up result through checkpoint_21700: the 21586-21685 window has lower latent MMD (0.2822 vs 0.2969) and better yaw MAE (0.2508 vs 0.2704), but vx MAE worsened (0.1937 vs 0.1826), planar MAE worsened (0.2711 vs 0.2604), and vx response slope fell (0.4495 vs 0.4737). Overall classification remains mixed/stable, not a sustained locomotion improvement.
 
 - Latest result through checkpoint_22200: speed tracking recovered in the 22086-22200 window (vx MAE 0.1639, planar MAE 0.2332, vx slope 0.6436 versus 0.178/0.236/0.4717 before the resume), while yaw remained weaker (yaw MAE 0.2622, yaw slope 0.8372 versus 0.241/0.9359). Termination stayed zero, but value loss rose to 2.38, so classify as partial speed improvement with critic-health risk, not an across-the-board improvement.
+
+## 2026-08-04 22:20:00 CST - Add dense backward and turn progress rewards
+
+- Context: GPU11 Stage2 run `amp_stage2_piplus_lse_2gpu_4096env_1m_yaw_footclearance_resume18700_20260804`; best stable window was around iterations 19000-20000, followed by yaw and velocity tracking regression after 20500. Latest observed window had nonzero yaw MAE about 0.261, yaw correlation 0.813, yaw slope 0.879, and termination/fall/crash rates near zero.
+- Analysis: Existing exponential tracking terms become weak when the policy initially moves in the wrong direction, especially for negative `vx`; the existing projection term is not normalized by target magnitude. Stability and PPO health do not justify changing termination or optimizer settings.
+- Adjustment: Added bounded signed `backward_velocity_progress` (weight 0.9, active for `vx < -0.05`) and `turn_rate_progress` (weight 0.65, active for `|wz| >= 0.1`). Both normalize achieved signed speed by target magnitude and clamp to `[-1, 1]`; existing exponential, projection, AMP, and stability terms are unchanged.
+- Rationale: Supply a dense gradient for reverse-direction and yaw response while keeping the maximum added contribution small (`dt * weight`) and preserving checkpoint tensor compatibility.
+- Expected effect: Lower `tracking/vx_bin_backward_mae` and `tracking/nonzero_yaw_rate_mae`, raise yaw command correlation/response slope, with termination/fall/crash rates remaining near zero.
+- Planned action: Upload `humanoidverse/amp_stage2.py` and the current merged expert dataset to GPU11, stop the current lineage, and resume from the stable `checkpoint_19500.pt` on GPUs 0 and 1.
