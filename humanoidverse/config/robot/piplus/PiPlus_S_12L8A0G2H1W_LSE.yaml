@@ -235,12 +235,14 @@ robot:
       upper_arm: 2.0
       elbow: 2.0
     action_scale: 0.25
-    action_clip_value: 5.0
+    # Match the deployed BFM policy configuration.  Actor outputs are in
+    # [-1, 1] and must be expanded to the training-time action range.
+    action_clip_value: 32.0
     action_rescale: True
     clip_torques: True
     normalize_action: True
     normalize_action_from: 1.0
-    normalize_action_to: 5.0
+    normalize_action_to: 32.0
 
   asset:
     collapse_fixed_joints: True
@@ -261,6 +263,22 @@ robot:
     self_collisions: 0
     default_dof_drive_mode: 3
     fix_base_link: False
+
+  # These virtual points are z-encoder features, not robot joints.  Keep them
+  # out of motion.extend_config so MotionLib remains 23-DOF.
+  bfm_encoder_extend_config:
+    - joint_name: r_hand_link
+      parent_name: r_elbow_link
+      pos: [0.0, 0.0, -0.129]
+      rot: [1.0, 0.0, 0.0, 0.0]
+    - joint_name: l_hand_link
+      parent_name: l_elbow_link
+      pos: [0.0, 0.0, -0.129]
+      rot: [1.0, 0.0, 0.0, 0.0]
+    - joint_name: head_link
+      parent_name: head_pitch_link
+      pos: [0.01, 0.0, 0.06]
+      rot: [1.0, 0.0, 0.0, 0.0]
 
   motion:
     motion_file: 'data/lafan_tail.pkl'
@@ -319,6 +337,7 @@ robot:
     left_foot_name: 'l_ankle_roll_link'
     nums_extend_bodies: 0
     extend_config: []
+
     motion_tracking_link: ['head_pitch_link']
     lower_body_link: [
       'base_link', 'l_hip_pitch_link', 'l_hip_roll_link', 'l_thigh_link', 'l_calf_link',

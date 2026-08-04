@@ -37,6 +37,7 @@ class MuJoCo(BaseSimulator):
         self.model = mujoco.MjModel.from_xml_path(self.model_path)
         self.data = mujoco.MjData(self.model)
         self.dof_ctrl_ids = self._build_dof_ctrl_ids()
+        self._apply_robot_dynamics()
         self.sim_substeps = self.simulator_config.sim.substeps
         self.sim_dt = 1 / self.simulator_config.sim.fps  # MuJoCo timestep from the model options.
 
@@ -57,6 +58,37 @@ class MuJoCo(BaseSimulator):
             self.viewer = None
 
         self.episodic_domain_randomization(None)
+
+    def _apply_robot_dynamics(self):
+        """Apply configured joint armature and friction to the loaded MJCF.
+
+        The PiPlus source XML contains the kinematics but does not carry the
+        Isaac/Orin motor parameters.  Keep those parameters in the robot YAML
+        and apply them by joint name so XML joint ordering cannot silently
+        change the control model.
+        """
+        configured = (
+            ("dof_armature_list", self.model.dof_armature),
+            ("dof_joint_friction_list", self.model.dof_frictionloss),
+        )
+        for config_name, model_values in configured:
+            values = getattr(self.robot_cfg, config_name, None)
+            if values is None:
+                continue
+            values = list(values)
+            if len(values) != len(self.robot_cfg.dof_names):
+                raise ValueError(
+                    f"{config_name} has {len(values)} values, expected "
+                    f"{len(self.robot_cfg.dof_names)}"
+                )
+            for dof_name, value in zip(self.robot_cfg.dof_names, values):
+                joint_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_JOINT, str(dof_name)
+                )
+                if joint_id < 0:
+                    raise ValueError(f"Configured DOF joint not found in MuJoCo XML: {dof_name}")
+                dof_adr = int(self.model.jnt_dofadr[joint_id])
+                model_values[dof_adr] = float(value)
 
     def _build_dof_ctrl_ids(self):
         joint_name_to_ctrl_ids = {}
@@ -210,15 +242,17 @@ class MuJoCo(BaseSimulator):
 
         if "23" in self.model_path:
             for b in range(self.model.nbody):
-                if "wrist" in mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b) or "hand" in mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b):
-                    self.body_names.remove(mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b))
+                body_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b)
+                if ("wrist" in body_name or "hand" in body_name) and body_name not in self.robot_cfg.body_names:
+                    self.body_names.remove(body_name)
                     self.num_bodies -= 1
                     self.body_id = np.delete(self.body_id, np.where(self.body_id == b))
 
         if "29" in self.model_path:
             for b in range(self.model.nbody):
-                if "hand" in mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b):
-                    self.body_names.remove(mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b))
+                body_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, b)
+                if "hand" in body_name and body_name not in self.robot_cfg.body_names:
+                    self.body_names.remove(body_name)
                     self.num_bodies -= 1
                     self.body_id = np.delete(self.body_id, np.where(self.body_id == b))
         
@@ -298,11 +332,7 @@ class MuJoCo(BaseSimulator):
         # import ipdb;
         # ipdb.set_trace()
         mujoco.mj_step(self.model, self.data)
-        # if self.viewer is not None:
-        #     mujoco.viewer.sync(self.viewer, self.model, self.data)
         self.refresh_sim_tensors()
-        if self.viewer is not None:
-            self.viewer.sync()
 
     def get_dof_properties(self, model):
         """ Retrieves the DOF properties for a robot in a MuJoCo simulation.

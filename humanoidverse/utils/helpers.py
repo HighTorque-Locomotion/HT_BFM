@@ -156,7 +156,7 @@ class PolicyExporterLSTM(torch.nn.Module):
 
 
 def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, velocity_multiplier: float = 1.0) -> torch.Tensor:
-    from humanoidverse.utils.torch_utils import quat_rotate_inverse
+    from humanoidverse.utils.torch_utils import quat_apply, quat_mul, quat_rotate_inverse
     from humanoidverse.envs.legged_robot_motions.legged_robot_motions import compute_humanoid_observations_max, compute_humanoid_observations_max_with_contact
     
     motion_times = torch.arange(int(np.ceil((env._motion_lib._motion_lengths[motion_id]/env.dt).cpu()))).to(env.device) * env.dt
@@ -171,11 +171,147 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
     ref_dof_pos = motion_state["dof_pos"] - env.default_dof_pos[0]
     ref_dof_vel = motion_state["dof_vel"] * velocity_multiplier
 
+    # The deployed PiPlus BFM encoder was generated from qpos with MuJoCo FK
+    # using the 260424 robot model.  MotionLib uses the 260611 skeleton, whose
+    # link frames are not identical.  Reconstruct the encoder bodies with the
+    # deployed FK model so the ONNX encoder sees its training-time geometry.
+    encoder_fk_xml = env.config.robot.get("bfm_encoder_fk_xml_file", None)
+    fk_encoder_body_names = None
+    if encoder_fk_xml:
+        import mujoco
+
+        print(f"BFM z encoder FK XML: {encoder_fk_xml}")
+        fk_model = mujoco.MjModel.from_xml_path(str(encoder_fk_xml))
+        fk_data = mujoco.MjData(fk_model)
+        fk_encoder_body_names = list(env.config.robot.isaacsim_body_names)
+        dof_names = list(env.config.robot.dof_names)
+        body_ids = []
+        qpos_addresses = []
+        for body_name in fk_encoder_body_names:
+            body_id = mujoco.mj_name2id(fk_model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body_id < 0:
+                raise ValueError(f"BFM FK XML is missing body {body_name!r}")
+            body_ids.append(body_id)
+        for dof_name in dof_names:
+            joint_id = mujoco.mj_name2id(fk_model, mujoco.mjtObj.mjOBJ_JOINT, dof_name)
+            if joint_id < 0:
+                raise ValueError(f"BFM FK XML is missing joint {dof_name!r}")
+            qpos_addresses.append(int(fk_model.jnt_qposadr[joint_id]))
+
+        motion_dof = motion_state["dof_pos"].detach().cpu().numpy()
+        root_pos = motion_state["rg_pos_t"][:, 0].detach().cpu().numpy()
+        root_rot = motion_state["rg_rot_t"][:, 0].detach().cpu().numpy()  # xyzw
+        frame_count = motion_dof.shape[0]
+        body_pos_np = np.empty((frame_count, len(body_ids), 3), dtype=np.float32)
+        body_rot_np = np.empty((frame_count, len(body_ids), 4), dtype=np.float32)
+        for frame_index in range(frame_count):
+            fk_data.qpos[:] = 0.0
+            fk_data.qvel[:] = 0.0
+            fk_data.qpos[:3] = root_pos[frame_index]
+            fk_data.qpos[3:7] = root_rot[frame_index, [3, 0, 1, 2]]  # xyzw -> wxyz
+            fk_data.qpos[qpos_addresses] = motion_dof[frame_index]
+            mujoco.mj_kinematics(fk_model, fk_data)
+            body_pos_np[frame_index] = fk_data.xpos[body_ids]
+            body_rot_np[frame_index] = fk_data.xquat[body_ids][:, [1, 2, 3, 0]]
+
+        # Match the onboard converter: frame zero is stationary and following
+        # velocities are backward finite differences at the control rate.
+        dt = float(env.dt)
+        dof_vel_np = np.zeros_like(motion_dof, dtype=np.float32)
+        body_vel_np = np.zeros_like(body_pos_np, dtype=np.float32)
+        body_ang_vel_np = np.zeros_like(body_pos_np, dtype=np.float32)
+        if frame_count > 1:
+            dof_vel_np[1:] = (motion_dof[1:] - motion_dof[:-1]) / dt
+            body_vel_np[1:] = (body_pos_np[1:] - body_pos_np[:-1]) / dt
+            previous_conjugate = body_rot_np[:-1].copy()
+            previous_conjugate[..., :3] *= -1.0
+            delta_rot = quat_mul(
+                torch.from_numpy(body_rot_np[1:]).reshape(-1, 4),
+                torch.from_numpy(previous_conjugate).reshape(-1, 4),
+                w_last=True,
+            ).view(frame_count - 1, len(body_ids), 4).numpy()
+            delta_xyz = delta_rot[..., :3]
+            delta_w = np.clip(delta_rot[..., 3], -1.0, 1.0)
+            angle = 2.0 * np.arctan2(np.linalg.norm(delta_xyz, axis=-1), delta_w)
+            axis = delta_xyz / np.maximum(np.linalg.norm(delta_xyz, axis=-1, keepdims=True), 1e-8)
+            body_ang_vel_np[1:] = axis * angle[..., None] / dt
+
+        ref_body_pos = torch.from_numpy(body_pos_np).to(env.device)
+        ref_body_rots = torch.from_numpy(body_rot_np).to(env.device)
+        ref_body_vels = torch.from_numpy(body_vel_np * velocity_multiplier).to(env.device)
+        ref_body_angular_vels = torch.from_numpy(body_ang_vel_np * velocity_multiplier).to(env.device)
+        ref_dof_vel = torch.from_numpy(dof_vel_np * velocity_multiplier).to(env.device)
+
     if getattr(env, "motion_body_ids", None) is not None:
-        ref_body_pos = ref_body_pos[:, env.motion_body_ids]
-        ref_body_rots = ref_body_rots[:, env.motion_body_ids]
-        ref_body_vels = ref_body_vels[:, env.motion_body_ids]
-        ref_body_angular_vels = ref_body_angular_vels[:, env.motion_body_ids]
+        # The deployed PiPlus z encoder consumes the Isaac body set plus three
+        # virtual hand/head points.  They are encoder features, not MotionLib
+        # joints, so derive them from their physical parent body states.
+        encoder_body_names = list(env.config.robot.isaacsim_body_names)
+        if fk_encoder_body_names is None:
+            motion_body_names = list(env._motion_lib.mesh_parsers.body_names)
+            missing_bodies = [name for name in encoder_body_names if name not in motion_body_names]
+            if missing_bodies:
+                raise ValueError(
+                    "Motion data is missing bodies required by the BFM z encoder: "
+                    f"{missing_bodies}"
+                )
+            encoder_body_ids = torch.tensor(
+                [motion_body_names.index(name) for name in encoder_body_names],
+                device=env.device,
+                dtype=torch.long,
+            )
+            ref_body_pos = ref_body_pos[:, encoder_body_ids]
+            ref_body_rots = ref_body_rots[:, encoder_body_ids]
+            ref_body_vels = ref_body_vels[:, encoder_body_ids]
+            ref_body_angular_vels = ref_body_angular_vels[:, encoder_body_ids]
+
+        encoder_extensions = env.config.robot.get("bfm_encoder_extend_config", [])
+        if encoder_extensions:
+            parent_ids = []
+            local_positions = []
+            local_rotations = []
+            for extension in encoder_extensions:
+                parent_name = str(extension["parent_name"])
+                if parent_name not in encoder_body_names:
+                    raise ValueError(
+                        f"BFM z encoder extension parent is not an Isaac body: {parent_name}"
+                    )
+                parent_ids.append(encoder_body_names.index(parent_name))
+                local_positions.append(extension["pos"])
+                # Config rotations are wxyz; HumanoidVerse tensors are xyzw.
+                local_rotations.append(extension["rot"][1:] + extension["rot"][:1])
+
+            parent_ids = torch.tensor(parent_ids, device=env.device, dtype=torch.long)
+            local_positions = torch.tensor(
+                local_positions, device=env.device, dtype=ref_body_pos.dtype
+            ).unsqueeze(0).expand(ref_body_pos.shape[0], -1, -1)
+            local_rotations = torch.tensor(
+                local_rotations, device=env.device, dtype=ref_body_rots.dtype
+            ).unsqueeze(0).expand(ref_body_rots.shape[0], -1, -1)
+            parent_pos = ref_body_pos[:, parent_ids]
+            parent_rot = ref_body_rots[:, parent_ids]
+            parent_vel = ref_body_vels[:, parent_ids]
+            parent_ang_vel = ref_body_angular_vels[:, parent_ids]
+            world_offsets = quat_apply(
+                parent_rot.reshape(-1, 4), local_positions.reshape(-1, 3), w_last=True
+            ).view_as(local_positions)
+            extension_pos = parent_pos + world_offsets
+            extension_rot = quat_mul(
+                parent_rot.reshape(-1, 4), local_rotations.reshape(-1, 4), w_last=True
+            ).view_as(local_rotations)
+            extension_vel = parent_vel + torch.cross(parent_ang_vel, world_offsets, dim=-1)
+            ref_body_pos = torch.cat([ref_body_pos, extension_pos], dim=1)
+            ref_body_rots = torch.cat([ref_body_rots, extension_rot], dim=1)
+            ref_body_vels = torch.cat([ref_body_vels, extension_vel], dim=1)
+            ref_body_angular_vels = torch.cat([ref_body_angular_vels, parent_ang_vel], dim=1)
+            encoder_body_names.extend(str(extension["joint_name"]) for extension in encoder_extensions)
+
+        print(
+            "BFM z encoder bodies: "
+            f"physical={len(env.config.robot.isaacsim_body_names)}, "
+            f"extended={len(encoder_body_names) - len(env.config.robot.isaacsim_body_names)}, "
+            f"total={len(encoder_body_names)}"
+        )
 
     # construct observation
     if env.use_contact_in_obs_max:
@@ -199,12 +335,13 @@ def get_backward_observation(env, motion_id, use_root_height_obs: bool = False, 
             root_height_obs=use_root_height_obs,
         )
     max_local_self_obs = torch.cat([v for v in obs_dict.values()], dim=-1)
+    print(f"BFM z encoder observation: state=52, privileged={max_local_self_obs.shape[-1]}")
 
     if env.config.obs.use_obs_filter:
         imu_body_idx = 0
         imu_body_name = env.config.robot.get("imu_body_name", None)
         if imu_body_name is not None:
-            motion_body_names = getattr(env, "motion_body_names", None)
+            motion_body_names = encoder_body_names if getattr(env, "motion_body_ids", None) is not None else getattr(env, "motion_body_names", None)
             if motion_body_names is None:
                 motion_body_names = env._motion_lib.mesh_parsers.body_names
             imu_body_idx = motion_body_names.index(imu_body_name)

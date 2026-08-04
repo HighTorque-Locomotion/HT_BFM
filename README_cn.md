@@ -145,3 +145,43 @@ python -m humanoidverse.tracking_inference \
     --motion-list 0 --robot PiPlus_S_12L8A0G2H1W_LSE
 ``` 
 
+```bash
+conda activate HT_BFM
+python -m humanoidverse.tracking_inference \
+    --model_folder results/bfmzero-piplus-lse-isaac-20260715_143758 \
+    --data_path humanoidverse/data/piplus_lse_lafan.pkl \
+    --simulator mujoco \
+    --no-headless \
+    --onnx \
+    --motion-list 10 \
+    --robot PiPlus_S_12L8A0G2H1W_LSE
+```
+
+```bash
+#接入motionbricks
+source /opt/ros/humble/setup.bash
+python -m humanoidverse.tracking_inference \
+    --model_folder results/bfmzero-piplus-lse-isaac-20260715_143758 \
+    --data_path humanoidverse/data/piplus_lse_lafan.pkl \
+    --simulator mujoco \
+    --no-headless \
+    --onnx \
+    --ros-z-topic /bfm_z_realtime \
+    --ros-z-timeout 0.5 \
+    --motion-list 0 \
+    --robot PiPlus_S_12L8A0G2H1W_LSE
+```
+
+
+python -m humanoidverse.tracking_inference \
+    --model_folder results/bfmzero-piplus-lse-isaac-20260715_143758 \
+    --data_path humanoidverse/data/piplus_lse_lafan.pkl \
+    --simulator mujoco \
+    --no-headless \
+    --onnx \
+    --ros-z-topic /bfm_z_realtime \
+    --ros-z-timeout 0.5 \
+    --joint-topic /bfm_joint_realtime \
+    --joint-timeout 0.5 \
+    --motion-list 0 \
+    --robot PiPlus_S_12L8A0G2H1W_LSE
