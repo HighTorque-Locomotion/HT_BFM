@@ -1511,7 +1511,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--amp-weight", type=float, default=0.25)
     parser.add_argument("--entropy-coef", type=float, default=0.003)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
-    parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
+    parser.add_argument("--locomotion-reward-weight", type=float, default=0.0)
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-every", type=int, default=100)
