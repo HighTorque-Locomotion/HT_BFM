@@ -297,7 +297,15 @@ class LeggedRobotBase(BaseTask):
                     os._exit(0)
                     
     def _physics_step(self):
-        self.render()
+        # Rendering is visualization, not control. Respect the configured
+        # interval so a slow passive viewer cannot block every policy step.
+        render_interval = max(
+            1, int(self.config.simulator.config.sim.get("render_interval", 1))
+        )
+        render_control_step = getattr(self, "_render_control_step", 0)
+        if render_control_step % render_interval == 0:
+            self.render()
+        self._render_control_step = render_control_step + 1
         for _ in range(self.config.simulator.config.sim.control_decimation):
             self._apply_force_in_physics_step()
             self.simulator.simulate_at_each_physics_step()

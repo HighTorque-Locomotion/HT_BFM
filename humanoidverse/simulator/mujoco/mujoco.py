@@ -1,4 +1,7 @@
 import os
+import atexit
+import multiprocessing as mp
+import signal
 import numpy as np
 import torch
 from loguru import logger
@@ -9,6 +12,38 @@ import mujoco.viewer
 from humanoidverse.utils.torch_utils import *
 from humanoidverse.utils.asset_paths import resolve_asset_path
 from humanoidverse.simulator.base_simulator.base_simulator import BaseSimulator
+
+
+def _run_passive_viewer(model_path, shared_state, state_ready, viewer_ready, stop_requested):
+    """Render snapshots in another process so GUI work cannot stall control."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+    viewer_model = mujoco.MjModel.from_xml_path(model_path)
+    viewer_data = mujoco.MjData(viewer_model)
+    nq = viewer_model.nq
+    nv = viewer_model.nv
+    shared_view = np.frombuffer(shared_state.get_obj(), dtype=np.float64)
+
+    try:
+        with mujoco.viewer.launch_passive(viewer_model, viewer_data) as viewer:
+            viewer_ready.set()
+            while not stop_requested.is_set() and viewer.is_running():
+                if not state_ready.wait(timeout=0.1):
+                    continue
+                state_ready.clear()
+                with shared_state.get_lock():
+                    latest_state = shared_view.copy()
+                viewer_data.qpos[:] = latest_state[:nq]
+                viewer_data.qvel[:] = latest_state[nq:nq + nv]
+                viewer_data.time = latest_state[-1]
+                mujoco.mj_forward(viewer_model, viewer_data)
+                viewer.sync()
+    except KeyboardInterrupt:
+        pass
+
 
 # Assume BaseSimulator is defined elsewhere.
 class MuJoCo(BaseSimulator):
@@ -459,8 +494,52 @@ class MuJoCo(BaseSimulator):
         """
         Sets up a viewer for visualizing the simulation, allowing keyboard interactions.
         """
-        # self.viewer = mujoco.viewer.launch_passive(self.mj_model, self.mj_data)
-        self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        # MuJoCo's passive viewer can hold the Python GIL while synchronizing.
+        # Publish only qpos/qvel/time to a spawned process so rendering cannot
+        # steal time from the 50 Hz control loop.
+        context = mp.get_context("spawn")
+        state_size = self.model.nq + self.model.nv + 1
+        self._viewer_state = context.Array("d", state_size, lock=True)
+        self._viewer_state_ready = context.Event()
+        self._viewer_ready = context.Event()
+        self._viewer_stop_requested = context.Event()
+        shared_view = np.frombuffer(self._viewer_state.get_obj(), dtype=np.float64)
+        with self._viewer_state.get_lock():
+            shared_view[:self.model.nq] = self.data.qpos
+            shared_view[self.model.nq:self.model.nq + self.model.nv] = self.data.qvel
+            shared_view[-1] = float(self.data.time)
+
+        self._viewer_process = context.Process(
+            target=_run_passive_viewer,
+            args=(
+                self.model_path,
+                self._viewer_state,
+                self._viewer_state_ready,
+                self._viewer_ready,
+                self._viewer_stop_requested,
+            ),
+            name="mujoco-viewer",
+            daemon=True,
+        )
+        self._viewer_process.start()
+        self.viewer = self._viewer_process
+        self._viewer_state_ready.set()
+        if not self._viewer_ready.wait(timeout=10.0):
+            raise RuntimeError("MuJoCo viewer process did not become ready within 10 seconds")
+        atexit.register(self.close_viewer)
+
+    def close_viewer(self):
+        """Stop the external viewer without leaving a GUI child process behind."""
+        viewer_process = getattr(self, "_viewer_process", None)
+        if viewer_process is None:
+            return
+        self._viewer_stop_requested.set()
+        self._viewer_state_ready.set()
+        viewer_process.join(timeout=2.0)
+        if viewer_process.is_alive():
+            viewer_process.terminate()
+            viewer_process.join(timeout=1.0)
+        self.viewer = None
     
     def render(self, sync_frame_time=True):
         """
@@ -470,7 +549,13 @@ class MuJoCo(BaseSimulator):
             sync_frame_time (bool): Whether to synchronize the frame time.
         """
         if self.viewer is not None:
-            self.viewer.sync()
+            if self._viewer_process.is_alive():
+                shared_view = np.frombuffer(self._viewer_state.get_obj(), dtype=np.float64)
+                with self._viewer_state.get_lock():
+                    shared_view[:self.model.nq] = self.data.qpos
+                    shared_view[self.model.nq:self.model.nq + self.model.nv] = self.data.qvel
+                    shared_view[-1] = float(self.data.time)
+                self._viewer_state_ready.set()
             return None
         return self.render_frame()
 

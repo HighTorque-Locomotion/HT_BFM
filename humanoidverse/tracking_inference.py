@@ -552,6 +552,9 @@ def main(
     mujoco_xml_path: Path | None = None,
     ros_z_topic: str | None = None,
     ros_z_timeout: float = 0.5,
+    realtime_control_hz: float | None = None,
+    render_interval: int | None = None,
+    control_timing_window: int = 200,
     joint_topic: str | None = None,
     joint_timeout: float = 0.5,
 ):
@@ -568,6 +571,16 @@ def main(
     onnx_mode = onnx or onnx_model_folder is not None or onnx_policy_path is not None or onnx_z_encoder_path is not None
     if ros_z_topic is not None and not onnx_mode:
         raise ValueError("--ros-z-topic requires --onnx because the realtime z is consumed by the ONNX actor")
+    if realtime_control_hz is not None and realtime_control_hz <= 0.0:
+        raise ValueError(
+            f"--realtime-control-hz must be positive, got {realtime_control_hz}"
+        )
+    if render_interval is not None and render_interval < 1:
+        raise ValueError(f"--render-interval must be at least 1, got {render_interval}")
+    if control_timing_window < 10:
+        raise ValueError(
+            f"--control-timing-window must be at least 10, got {control_timing_window}"
+        )
     if onnx_model_folder is not None:
         onnx_model_folder = _resolve_path(onnx_model_folder)
     inference_model_folder = onnx_model_folder or model_folder
@@ -636,6 +649,11 @@ def main(
     _append_or_replace_hydra_override(hydra_overrides, "env.config.max_episode_length_s=10000")
     _append_or_replace_hydra_override(hydra_overrides, f"env.config.headless={headless}")
     _append_or_replace_hydra_override(hydra_overrides, f"simulator={simulator}")
+    if render_interval is not None:
+        _append_or_replace_hydra_override(
+            hydra_overrides,
+            f"simulator.config.sim.render_interval={render_interval}",
+        )
     if simulator == "mujoco":
         if robot in (None, "g1"):
             xml_override = mujoco_xml_path or Path("g1/scene_29dof_freebase_mujoco.xml")
@@ -815,12 +833,35 @@ def main(
             expert_video = rgb_renderer.from_qpos(expert_qpos[: 1 + current_episode_len])
             frames = [rgb_renderer.render(wrapped_env._env, 0)[0]]
 
+        control_period = None
+        if ros_z_source is not None:
+            target_control_hz = realtime_control_hz
+            if target_control_hz is None:
+                sim_cfg = env.config.simulator.config.sim
+                target_control_hz = float(sim_cfg.fps) / float(sim_cfg.control_decimation)
+            control_period = 1.0 / target_control_hz
+            print(
+                "Realtime control pacing: "
+                f"target={target_control_hz:.2f} Hz, "
+                f"period={control_period * 1000.0:.2f} ms, "
+                f"render_interval={env.config.simulator.config.sim.get('render_interval', 1)}, "
+                f"timing_window={control_timing_window}"
+            )
+
         print(f"Running tracking inference for motion {MOTION_ID} for {current_episode_len} steps")
         joint_errs: list[np.ndarray] = []
         joint_target_log: list[np.ndarray] = []
         joint_sim_log: list[np.ndarray] = []
+        timing_compute_ms: list[float] = []
+        timing_actor_ms: list[float] = []
+        timing_env_ms: list[float] = []
+        timing_loop_ms: list[float] = []
+        timing_overruns = 0
+        timing_window_started_at = time.perf_counter()
+        next_control_deadline = timing_window_started_at
         try:
             for i in range(current_episode_len):
+                loop_started_at = time.perf_counter()
                 if ros_z_source is not None:
                     latest_z, received_count = ros_z_source.latest()
                     rollout_z = latest_z.to(env.device).repeat(num_envs, 1)
@@ -838,6 +879,7 @@ def main(
                     except RuntimeError:
                         pass  # target temporarily unavailable; skip this comparison step
 
+                actor_started_at = time.perf_counter()
                 if onnx_mode:
                     action = onnx_policy.act(observation, rollout_z)
                 else:
@@ -848,7 +890,10 @@ def main(
                         f"min={action.min().item():.4f}, max={action.max().item():.4f}, "
                         f"mean_abs={action.abs().mean().item():.4f}"
                     )
+                actor_finished_at = time.perf_counter()
+                env_started_at = actor_finished_at
                 observation, reward, terminated, truncated, info = wrapped_env.step(action, to_numpy=False)
+                env_finished_at = time.perf_counter()
                 joint_pos.append(wrapped_env._env.simulator.dof_state[..., 0].clone().cpu().numpy())
                 if i == 0 or (i + 1) % 50 == 0:
                     dof_delta = (
@@ -876,6 +921,50 @@ def main(
                         )
                 if save_mp4:
                     frames.append(rgb_renderer.render(wrapped_env._env, 0)[0])
+
+                compute_finished_at = time.perf_counter()
+                if control_period is not None:
+                    next_control_deadline += control_period
+                    sleep_duration = next_control_deadline - compute_finished_at
+                    if sleep_duration > 0.0:
+                        time.sleep(sleep_duration)
+                    else:
+                        timing_overruns += 1
+                        # A debugger pause or long external stall should not
+                        # force the loop to replay a large deadline backlog.
+                        if -sleep_duration > 4.0 * control_period:
+                            next_control_deadline = compute_finished_at
+
+                loop_finished_at = time.perf_counter()
+                timing_actor_ms.append((actor_finished_at - actor_started_at) * 1000.0)
+                timing_env_ms.append((env_finished_at - env_started_at) * 1000.0)
+                timing_compute_ms.append((compute_finished_at - loop_started_at) * 1000.0)
+                timing_loop_ms.append((loop_finished_at - loop_started_at) * 1000.0)
+
+                if len(timing_loop_ms) >= control_timing_window:
+                    timing_finished_at = time.perf_counter()
+                    timing_elapsed = timing_finished_at - timing_window_started_at
+                    actual_hz = len(timing_loop_ms) / max(timing_elapsed, 1e-9)
+                    print(
+                        "control_timing: "
+                        f"actual_hz={actual_hz:.2f}, "
+                        f"compute_ms={np.mean(timing_compute_ms):.2f}/"
+                        f"{np.percentile(timing_compute_ms, 95):.2f}/"
+                        f"{np.max(timing_compute_ms):.2f}, "
+                        f"actor_ms={np.mean(timing_actor_ms):.3f}/"
+                        f"{np.percentile(timing_actor_ms, 95):.3f}, "
+                        f"env_ms={np.mean(timing_env_ms):.2f}/"
+                        f"{np.percentile(timing_env_ms, 95):.2f}, "
+                        f"loop_ms={np.mean(timing_loop_ms):.2f}/"
+                        f"{np.percentile(timing_loop_ms, 95):.2f}, "
+                        f"overruns={timing_overruns}/{len(timing_loop_ms)}"
+                    )
+                    timing_compute_ms.clear()
+                    timing_actor_ms.clear()
+                    timing_env_ms.clear()
+                    timing_loop_ms.clear()
+                    timing_overruns = 0
+                    timing_window_started_at = timing_finished_at
         except KeyboardInterrupt:
             print(
                 "\nInterrupted by Ctrl+C; flushing joint tracking data "
