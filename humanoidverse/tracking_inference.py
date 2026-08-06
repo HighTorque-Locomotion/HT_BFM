@@ -37,6 +37,28 @@ ROBOT_CONFIG_OVERRIDES = {
     "piplus_lse": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
 }
 
+TIMING_LABEL_PREFIX = "bfm_timing_v1:"
+
+
+def _timing_delta_ms(timing: dict, start_key: str, end_key: str) -> float | None:
+    try:
+        start_ns = int(timing.get(start_key, 0))
+        end_ns = int(timing.get(end_key, 0))
+    except (TypeError, ValueError):
+        return None
+    if start_ns <= 0 or end_ns < start_ns:
+        return None
+    return (end_ns - start_ns) / 1_000_000.0
+
+
+def _format_ms(values: list[float]) -> str:
+    if not values:
+        return "n/a"
+    return (
+        f"{np.mean(values):.2f}/{np.percentile(values, 95):.2f}/"
+        f"{np.max(values):.2f}"
+    )
+
 
 class OnnxTrackingPolicy:
     """Run the deployed actor and realtime z encoder with ONNX Runtime."""
@@ -176,6 +198,15 @@ class RosZSource:
     """Keep the newest 256-D z received from a ROS2 Float32MultiArray topic."""
 
     def __init__(self, topic: str, expected_dim: int, timeout: float = 0.5):
+        self.topic = topic
+        self.expected_dim = int(expected_dim)
+        self.timeout = float(timeout)
+        self._lock = threading.Lock()
+        self._latest: np.ndarray | None = None
+        self._latest_timing: dict = {}
+        self._received_at = 0.0
+        self._received_count = 0
+        self._last_warning_at = 0.0
         try:
             import rclpy
             from rclpy.node import Node
@@ -201,24 +232,9 @@ class RosZSource:
             )
             self._bridge_mode = True
             self._start_bridge_reader()
-            self.topic = topic
-            self.expected_dim = int(expected_dim)
-            self.timeout = float(timeout)
-            self._lock = threading.Lock()
-            self._latest = None
-            self._received_at = 0.0
-            self._received_count = 0
-            self._last_warning_at = 0.0
             return
 
-        self.topic = topic
-        self.expected_dim = int(expected_dim)
-        self.timeout = float(timeout)
-        self._lock = threading.Lock()
-        self._latest: np.ndarray | None = None
-        self._received_at = 0.0
-        self._received_count = 0
-        self._last_warning_at = 0.0
+        self._bridge_mode = False
         self._rclpy = rclpy
 
         if not rclpy.ok():
@@ -245,8 +261,11 @@ class RosZSource:
                         throttle_duration_sec=1.0,
                     )
                     return
+                timing = source._timing_from_layout(msg)
+                timing["ros_source_received_ns"] = time.monotonic_ns()
                 with source._lock:
                     source._latest = value.copy()
+                    source._latest_timing = timing
                     source._received_at = time.monotonic()
                     source._received_count += 1
 
@@ -256,16 +275,41 @@ class RosZSource:
         )
         self._spin_thread.start()
 
+    @staticmethod
+    def _timing_from_layout(message) -> dict:
+        for dimension in message.layout.dim:
+            label = dimension.label
+            if not label.startswith(TIMING_LABEL_PREFIX):
+                continue
+            try:
+                timing = json.loads(label[len(TIMING_LABEL_PREFIX):])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {}
+            return timing if isinstance(timing, dict) else {}
+        return {}
+
     def _start_bridge_reader(self) -> None:
         def reader() -> None:
             assert self._process.stdout is not None
             for line in self._process.stdout:
                 try:
-                    value = np.asarray(json.loads(line), dtype=np.float32).reshape(-1)
+                    payload = json.loads(line)
+                    if isinstance(payload, dict):
+                        raw_value = payload.get("data", [])
+                        timing = payload.get("timing", {})
+                        if not isinstance(timing, dict):
+                            timing = {}
+                    else:
+                        # Backward compatibility with the original bridge.
+                        raw_value = payload
+                        timing = {}
+                    value = np.asarray(raw_value, dtype=np.float32).reshape(-1)
                     if value.shape != (self.expected_dim,) or not np.isfinite(value).all():
                         continue
+                    timing["ros_source_received_ns"] = time.monotonic_ns()
                     with self._lock:
                         self._latest = value.copy()
+                        self._latest_timing = timing
                         self._received_at = time.monotonic()
                         self._received_count += 1
                 except (ValueError, TypeError, json.JSONDecodeError):
@@ -292,7 +336,7 @@ class RosZSource:
                 )
             time.sleep(0.005)
 
-    def latest(self) -> tuple[torch.Tensor, int]:
+    def latest(self) -> tuple[torch.Tensor, int, dict]:
         with self._lock:
             if self._latest is None:
                 raise RuntimeError(f"No z received yet on ROS topic {self.topic!r}")
@@ -313,7 +357,11 @@ class RosZSource:
                         f"WARNING: ROS z topic {self.topic!r} stale for {age:.2f}s "
                         f"(timeout={self.timeout:.2f}s); reusing last z"
                     )
-            return torch.from_numpy(self._latest.copy()), self._received_count
+            return (
+                torch.from_numpy(self._latest.copy()),
+                self._received_count,
+                dict(self._latest_timing),
+            )
 
     def close(self) -> None:
         if getattr(self, "_bridge_mode", False):
@@ -857,14 +905,82 @@ def main(
         timing_env_ms: list[float] = []
         timing_loop_ms: list[float] = []
         timing_overruns = 0
+        timing_motion_to_z_ms: list[float] = []
+        timing_z_encode_ms: list[float] = []
+        timing_z_to_sim_ms: list[float] = []
+        timing_motion_to_sim_ms: list[float] = []
+        timing_joy_to_command_ms: list[float] = []
+        timing_command_to_request_ms: list[float] = []
+        timing_planner_ms: list[float] = []
+        timing_complete_to_reference_ms: list[float] = []
+        timing_command_to_sim_ms: list[float] = []
+        timing_stale_versions: list[float] = []
+        timing_last_source_sequence = -1
+        timing_seen_plan_commands: set[int] = set()
         timing_window_started_at = time.perf_counter()
         next_control_deadline = timing_window_started_at
         try:
             for i in range(current_episode_len):
                 loop_started_at = time.perf_counter()
                 if ros_z_source is not None:
-                    latest_z, received_count = ros_z_source.latest()
+                    latest_z, received_count, z_timing = ros_z_source.latest()
+                    z_timing["sim_consumed_ns"] = time.monotonic_ns()
                     rollout_z = latest_z.to(env.device).repeat(num_envs, 1)
+
+                    source_sequence = int(z_timing.get("source_sequence", -1))
+                    if source_sequence != timing_last_source_sequence:
+                        timing_last_source_sequence = source_sequence
+                        transport_metrics = (
+                            (timing_motion_to_z_ms, "motion_published_ns", "z_received_ns"),
+                            (timing_z_encode_ms, "z_received_ns", "z_encoded_ns"),
+                            (timing_z_to_sim_ms, "z_published_ns", "sim_consumed_ns"),
+                            (timing_motion_to_sim_ms, "motion_published_ns", "sim_consumed_ns"),
+                        )
+                        for values, start_key, end_key in transport_metrics:
+                            delta_ms = _timing_delta_ms(z_timing, start_key, end_key)
+                            if delta_ms is not None:
+                                values.append(delta_ms)
+
+                        request_id = int(z_timing.get("planner_request_id", 0))
+                        plan_command_version = int(
+                            z_timing.get("plan_command_version", 0)
+                        )
+                        reference_effective = bool(
+                            z_timing.get("reference_effective", False)
+                        )
+                        if (
+                            request_id > 0
+                            and plan_command_version > 0
+                            and reference_effective
+                            and plan_command_version not in timing_seen_plan_commands
+                        ):
+                            timing_seen_plan_commands.add(plan_command_version)
+                            command_to_sim_ms = _timing_delta_ms(
+                                z_timing, "plan_command_changed_ns", "sim_consumed_ns"
+                            )
+                            # A sim process can attach to a plan that became
+                            # active long before startup.  Mark its version as
+                            # seen, but exclude it from transition statistics.
+                            if (
+                                command_to_sim_ms is not None
+                                and command_to_sim_ms <= 5_000.0
+                            ):
+                                transition_metrics = (
+                                    (timing_joy_to_command_ms, "plan_joy_received_ns", "plan_command_changed_ns"),
+                                    (timing_command_to_request_ms, "plan_command_changed_ns", "planner_requested_ns"),
+                                    (timing_planner_ms, "planner_requested_ns", "planner_completed_ns"),
+                                    (timing_complete_to_reference_ms, "planner_completed_ns", "motion_published_ns"),
+                                )
+                                for values, start_key, end_key in transition_metrics:
+                                    delta_ms = _timing_delta_ms(z_timing, start_key, end_key)
+                                    if delta_ms is not None:
+                                        values.append(delta_ms)
+                                timing_command_to_sim_ms.append(command_to_sim_ms)
+                                stale_versions = (
+                                    int(z_timing.get("current_command_version", 0))
+                                    - int(z_timing.get("plan_command_version", 0))
+                                )
+                                timing_stale_versions.append(float(max(0, stale_versions)))
                 else:
                     rollout_z = z[i % len(z)].repeat(num_envs, 1)
 
@@ -959,10 +1075,41 @@ def main(
                         f"{np.percentile(timing_loop_ms, 95):.2f}, "
                         f"overruns={timing_overruns}/{len(timing_loop_ms)}"
                     )
+                    if timing_motion_to_sim_ms:
+                        print(
+                            "e2e_transport_ms mean/p95/max: "
+                            f"motion_to_z={_format_ms(timing_motion_to_z_ms)}, "
+                            f"z_encode={_format_ms(timing_z_encode_ms)}, "
+                            f"z_to_sim={_format_ms(timing_z_to_sim_ms)}, "
+                            f"motion_to_sim={_format_ms(timing_motion_to_sim_ms)}, "
+                            f"samples={len(timing_motion_to_sim_ms)}"
+                        )
+                    if timing_planner_ms:
+                        print(
+                            "e2e_transition_ms mean/p95/max: "
+                            f"joy_to_command={_format_ms(timing_joy_to_command_ms)}, "
+                            f"command_to_request={_format_ms(timing_command_to_request_ms)}, "
+                            f"planner={_format_ms(timing_planner_ms)}, "
+                            f"complete_to_reference={_format_ms(timing_complete_to_reference_ms)}, "
+                            f"command_to_sim={_format_ms(timing_command_to_sim_ms)}, "
+                            f"stale_versions={np.mean(timing_stale_versions):.1f}/"
+                            f"{np.max(timing_stale_versions):.0f}, "
+                            f"transitions={len(timing_planner_ms)}"
+                        )
                     timing_compute_ms.clear()
                     timing_actor_ms.clear()
                     timing_env_ms.clear()
                     timing_loop_ms.clear()
+                    timing_motion_to_z_ms.clear()
+                    timing_z_encode_ms.clear()
+                    timing_z_to_sim_ms.clear()
+                    timing_motion_to_sim_ms.clear()
+                    timing_joy_to_command_ms.clear()
+                    timing_command_to_request_ms.clear()
+                    timing_planner_ms.clear()
+                    timing_complete_to_reference_ms.clear()
+                    timing_command_to_sim_ms.clear()
+                    timing_stale_versions.clear()
                     timing_overruns = 0
                     timing_window_started_at = timing_finished_at
         except KeyboardInterrupt:

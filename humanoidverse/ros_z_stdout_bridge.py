@@ -2,12 +2,16 @@
 
 import json
 import sys
+import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float32MultiArray, String
+
+
+TIMING_LABEL_PREFIX = "bfm_timing_v1:"
 
 
 class ZBridge(Node):
@@ -34,7 +38,19 @@ class ZBridge(Node):
         if isinstance(message, String):
             sys.stdout.write(message.data + "\n")
         else:
-            sys.stdout.write(json.dumps(list(message.data), separators=(",", ":")) + "\n")
+            timing = {}
+            for dimension in message.layout.dim:
+                if dimension.label.startswith(TIMING_LABEL_PREFIX):
+                    try:
+                        timing = json.loads(
+                            dimension.label[len(TIMING_LABEL_PREFIX):]
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        timing = {}
+                    break
+            timing["bridge_received_ns"] = time.monotonic_ns()
+            payload = {"data": list(message.data), "timing": timing}
+            sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
 
