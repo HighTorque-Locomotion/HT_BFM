@@ -201,6 +201,8 @@ cython_debug/
 #.idea/
 
 # Project wise
+#  pip install 输出被误重定向产生的 `=版本号` 垃圾文件
+=*
 build/
 .DS_Store
 .vscode/

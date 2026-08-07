@@ -240,21 +240,46 @@ def get_enabled_dr_dynamics_obs_names(env: LeggedRobotMotions) -> list[str]:
 
 
 class IsaacRendererWithMuJoco:
-    """Renders Isaac state via MuJoCo. Only 29 DOF (36-D qpos: 7 free + 29 joints) is supported."""
+    """Renders Isaac state via MuJoCo.
 
-    def __init__(self, render_size: int = 512):
-        from humanoidverse.utils.g1_env_config import G1EnvConfig
+    Supports both the legacy G1 (29 DOF / 36-D qpos) via ``model=None`` and
+    arbitrary robots (e.g. PiPlus 23 DOF / 30-D qpos) by passing the current
+    simulator's ``mujoco.MjModel``.
+    """
 
-        self.mujoco_env, _ = G1EnvConfig(render_height=render_size, render_width=render_size).build(num_envs=1)
+    def __init__(self, render_size: int = 512, model=None):
+        self._render_size = render_size
+        if model is None:
+            # Legacy G1 path.
+            from humanoidverse.utils.g1_env_config import G1EnvConfig
+
+            self.mujoco_env, _ = G1EnvConfig(render_height=render_size, render_width=render_size).build(num_envs=1)
+            self._model = None
+            return
+        import mujoco
+
+        self._model = model
+        self._mj = mujoco
+        self._data = mujoco.MjData(model)
+        self._renderer = mujoco.Renderer(model, render_size, render_size)
+        # A fixed camera looking at the robot, similar to the MuJoCo viewer.
+        self._camera = mujoco.MjvCamera()
+        mujoco.mjv_defaultFreeCamera(model, self._camera)
+        self._camera.lookat = model.stat.center.copy()
+        self._camera.distance = 3.5
+        self._camera.azimuth = 90.0
+        self._camera.elevation = -20.0
+
+    def _render_qpos(self, qpos) -> np.ndarray:
+        """Set ``qpos`` on an independent MuJoCo data and render offscreen."""
+        self._data.qpos = np.asarray(qpos).ravel()
+        self._mj.mj_forward(self._model, self._data)
+        self._renderer.update_scene(self._data, camera=self._camera)
+        return self._renderer.render().copy()
 
     def render(self, hv_env: "HumanoidVerseVectorEnv", env_idxs: list[int] | None = None):
         base_pos = hv_env.simulator.robot_root_states[:, [0, 1, 2, 6, 3, 4, 5]].clone().detach().cpu().numpy()
         joint_pos = hv_env.simulator.dof_pos.clone().detach().cpu().numpy()
-        if joint_pos.shape[1] != 29:
-            raise ValueError(
-                f"Isaac dof_pos must be 29-D (codebase is 29 DOF only), got {joint_pos.shape[1]}."
-            )
-        mujoco_qpos = np.concatenate([base_pos, joint_pos], axis=1)  # (n_envs, 36)
 
         all_images = []
         if env_idxs is None:
@@ -262,27 +287,40 @@ class IsaacRendererWithMuJoco:
         elif not isinstance(env_idxs, (list, tuple)):
             env_idxs = [int(env_idxs)]  # e.g. render(env, 0) -> render env 0 only
         for env_idx in env_idxs:
-            qvel = self.mujoco_env.unwrapped._mj_data.qvel.copy()
-            self.mujoco_env.reset(options={"qpos": mujoco_qpos[env_idx], "qvel": qvel})
-            all_images.append(self.mujoco_env.render())
+            if self._model is None:
+                # Legacy G1 path.
+                if joint_pos.shape[1] != 29:
+                    raise ValueError(
+                        f"Isaac dof_pos must be 29-D (codebase is 29 DOF only), got {joint_pos.shape[1]}."
+                    )
+                mujoco_qpos = np.concatenate([base_pos, joint_pos], axis=1)  # (n_envs, 36)
+                qvel = self.mujoco_env.unwrapped._mj_data.qvel.copy()
+                self.mujoco_env.reset(options={"qpos": mujoco_qpos[env_idx], "qvel": qvel})
+                all_images.append(self.mujoco_env.render())
+            else:
+                qpos = np.concatenate([base_pos[env_idx], joint_pos[env_idx]])
+                all_images.append(self._render_qpos(qpos))
 
         return all_images
-    
+
     def from_qpos(self, qpos):
-        """Render frames for each qpos. Only 36-D qpos (7 free + 29 joints) is supported."""
+        """Render frames for each qpos (7 free + N joints)."""
         frames = []
         n = len(qpos)
         for i, q in enumerate(qpos):
             if (i + 1) % 50 == 0 or i == 0 or i == n - 1:
                 print(f"  Rendering expert frame {i + 1}/{n}")
             q = np.asarray(q).ravel()
-            if q.size != 36:
-                raise ValueError(
-                    f"from_qpos expects 36-D qpos (7 free + 29 joints), got shape {q.shape}. "
-                    "23-DOF / 30-D qpos is not supported."
-                )
-            self.mujoco_env.reset(options={"qpos": q})
-            frames.append(self.mujoco_env.render())
+            if self._model is None:
+                if q.size != 36:
+                    raise ValueError(
+                        f"from_qpos expects 36-D qpos (7 free + 29 joints), got shape {q.shape}. "
+                        "23-DOF / 30-D qpos is not supported."
+                    )
+                self.mujoco_env.reset(options={"qpos": q})
+                frames.append(self.mujoco_env.render())
+            else:
+                frames.append(self._render_qpos(q))
         return frames
 
 

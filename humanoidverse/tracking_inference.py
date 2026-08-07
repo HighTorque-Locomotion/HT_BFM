@@ -35,7 +35,98 @@ ROBOT_CONFIG_OVERRIDES = {
     "g1": "robot=g1/g1_29dof_hard_waist",
     "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
     "piplus_lse": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    "PiPlus_S_12L8A0G2H0W": "robot=piplus/PiPlus_S_12L8A0G2H0W",
 }
+
+
+def _find_motion_msgs_python_path() -> str | None:
+    """Locate the Python bindings for the custom motion_target_msgs package.
+
+    The ROS2 system Python (3.10) only finds them when the instinct_onboard
+    colcon workspace is sourced; probe the known workspace layouts instead so
+    the bridge can import ``motion_target_msgs`` without manual sourcing.
+    """
+    import glob
+
+    base_dirs = [
+        "~/project/test/ws_instinct_onboard",
+        "~/project/test/instinct_onboard",
+        "~/WorkSpace/instinct_onboard",
+        "~/桌面/instinct_onboard-b",
+        "~/WorkSpace/instinct_onboard-ht_jump1",
+    ]
+    patterns = []
+    for base in base_dirs:
+        expanded = os.path.expanduser(base)
+        patterns.append(os.path.join(expanded, "install", "*", "local", "lib", "python3*", "dist-packages"))
+        patterns.append(os.path.join(expanded, "install", "*", "lib", "python3*", "site-packages"))
+    for pattern in patterns:
+        for candidate in glob.glob(pattern):
+            if os.path.isdir(os.path.join(candidate, "motion_target_msgs")):
+                return candidate
+    return None
+
+
+def _build_bridge_env() -> dict:
+    """Environment for the stdout ROS bridge: source the ROS Humble setup so
+    the system Python can load rclpy (LD_LIBRARY_PATH etc.) and add the
+    motion_target_msgs bindings to PYTHONPATH."""
+    env = os.environ.copy()
+    setup_script = "/opt/ros/humble/setup.bash"
+    if os.path.exists(setup_script):
+        try:
+            proc = subprocess.run(
+                ["bash", "-c", f"source {setup_script} >/dev/null 2>&1 && env"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if proc.returncode == 0:
+                ros_env = {}
+                for line in proc.stdout.splitlines():
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        ros_env[key] = value
+                for key in (
+                    "PATH",
+                    "LD_LIBRARY_PATH",
+                    "PYTHONPATH",
+                    "AMENT_PREFIX_PATH",
+                    "CMAKE_PREFIX_PATH",
+                    "PKG_CONFIG_PATH",
+                    "RMW_IMPLEMENTATION",
+                    "COLCON_PREFIX_PATH",
+                    "ROS_DISTRO",
+                    "ROS_VERSION",
+                    "CYCLONEDDS_URI",
+                ):
+                    if key in ros_env:
+                        env[key] = ros_env[key]
+        except Exception:
+            pass  # fall through to the manual PYTHONPATH handling below
+    else:
+        # Manual fallback without setup.bash: the two known ROS Python dirs.
+        for ros_site in (
+            "/opt/ros/humble/lib/python3.10/site-packages",
+            "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        ):
+            if os.path.isdir(ros_site) and ros_site not in env.get("PYTHONPATH", ""):
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = ros_site + (os.pathsep + existing if existing else "")
+    motion_msgs_path = _find_motion_msgs_python_path()
+    if motion_msgs_path is not None:
+        if motion_msgs_path not in env.get("PYTHONPATH", ""):
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = motion_msgs_path + (os.pathsep + existing if existing else "")
+        # The rosidl type-support shared libraries live in .../motion_target_msgs/lib.
+        lib_dir = os.path.abspath(
+            os.path.join(motion_msgs_path, "..", "..", "..", "..", "lib")
+        )
+        if os.path.isdir(lib_dir):
+            existing_ld = env.get("LD_LIBRARY_PATH", "")
+            if lib_dir not in existing_ld:
+                env["LD_LIBRARY_PATH"] = lib_dir + (os.pathsep + existing_ld if existing_ld else "")
+    return env
 
 
 class OnnxTrackingPolicy:
@@ -175,7 +266,7 @@ class OnnxTrackingPolicy:
 class RosZSource:
     """Keep the newest 256-D z received from a ROS2 Float32MultiArray topic."""
 
-    def __init__(self, topic: str, expected_dim: int, timeout: float = 0.5):
+    def __init__(self, topic: str, expected_dim: int, timeout: float = 0.5, msg_type: str = "bfm_z"):
         try:
             import rclpy
             from rclpy.node import Node
@@ -190,14 +281,14 @@ class RosZSource:
             if not Path(system_python).exists():
                 raise ImportError("ROS2 Python is unavailable in this environment") from None
             self._process = subprocess.Popen(
-                [system_python, str(bridge), topic, "float_array"],
+                [system_python, str(bridge), topic, msg_type],
                 stdout=subprocess.PIPE,
                 stderr=None,
                 text=True,
                 bufsize=1,
-                # Inherit the sourced ROS setup environment.  Replacing
-                # PYTHONPATH here hides Humble's Python-3.10 rclpy package.
-                env=os.environ.copy(),
+                # Inherit the sourced ROS setup environment plus the located
+                # motion_target_msgs bindings.
+                env=_build_bridge_env(),
             )
             self._bridge_mode = True
             self._start_bridge_reader()
@@ -341,9 +432,9 @@ class RosJointTargetSource:
             stderr=None,
             text=True,
             bufsize=1,
-            # Inherit the sourced ROS setup environment.  Replacing
-            # PYTHONPATH here hides Humble's Python-3.10 rclpy package.
-            env=os.environ.copy(),
+            # Inherit the sourced ROS setup environment plus the located
+            # motion_target_msgs bindings.
+            env=_build_bridge_env(),
         )
         self.topic = topic
         self.expected_dim = int(expected_dim)
@@ -537,6 +628,8 @@ def main(
     device="cuda",
     simulator: str = "isaacsim",
     save_mp4: bool = False,
+    video_name: str | None = None,
+    video_fps: int = 50,
     disable_dr: bool = False,
     disable_obs_noise: bool = False,
     motion_list: list[int] = [25],
@@ -552,6 +645,7 @@ def main(
     mujoco_xml_path: Path | None = None,
     ros_z_topic: str | None = None,
     ros_z_timeout: float = 0.5,
+    ros_z_msg_type: str = "bfm_z",
     joint_topic: str | None = None,
     joint_timeout: float = 0.5,
 ):
@@ -672,6 +766,22 @@ def main(
                 "robot.bfm_encoder_fk_xml_file="
                 f"{_resolve_path(HUMANOIDVERSE_DIR / 'data/robots/piplus/mjcf/PiPlus_S_12L8A0G2H1W_LSE_260424.xml')}",
             )
+        elif robot in ("PiPlus_S_12L8A0G2H0W", "piplus_h0w"):
+            # The H0W model's config.yaml already points at the with_armature
+            # XML inside ht_urdf (asset_root=package://ht_urdf/...), where the
+            # relative ../meshes/ directory resolves correctly.  MuJoCo uses
+            # that XML (22 torque motors + 6 floating-base drives) as-is.
+            # Clear motion.extend_config: with it non-empty the motion lib
+            # emits dof_pos of size num_bodies-1 (26) instead of the 22
+            # actuated joints, which no longer matches the robot DOFs.
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                "robot.motion.nums_extend_bodies=0",
+            )
+            _append_or_replace_hydra_override(
+                hydra_overrides,
+                "robot.motion.extend_config=[]",
+            )
     config["env"]["device"] = env_device
     config["env"]["disable_domain_randomization"] = disable_dr
     config["env"]["disable_obs_noise"] = disable_obs_noise
@@ -714,7 +824,11 @@ def main(
     print("-"*80)
     
     output_dir = model_folder / "tracking_inference"
-    ros_z_source = RosZSource(ros_z_topic, onnx_policy.z_dim, ros_z_timeout) if ros_z_topic else None
+    ros_z_source = (
+        RosZSource(ros_z_topic, onnx_policy.z_dim, ros_z_timeout, ros_z_msg_type)
+        if ros_z_topic
+        else None
+    )
     if ros_z_source is not None:
         print(
             f"Waiting for realtime z on {ros_z_topic} "
@@ -803,16 +917,31 @@ def main(
             raise RuntimeError("MuJoCo reset did not apply the requested reference joint state")
         joint_pos = [wrapped_env._env.simulator.dof_state[..., 0].clone().cpu().numpy()]
         # episode_len=500
-        current_episode_len = episode_len if episode_len is not None else (10**9 if ros_z_source else z.shape[0])
+        if episode_len is not None:
+            current_episode_len = episode_len
+        elif ros_z_source is not None and save_mp4:
+            # Realtime-ROS mode with --save-mp4: stop when the reference
+            # motion finishes so the video has a bounded length.
+            current_episode_len = obs_dict["dof_pos"].shape[0]
+            print(
+                f"ROS z mode with --save-mp4: recording {current_episode_len} steps "
+                "(reference motion length)"
+            )
+        elif ros_z_source is not None:
+            current_episode_len = 10**9
+        else:
+            current_episode_len = z.shape[0]
         if ros_z_source is None and current_episode_len > z.shape[0]:
             print(f"Requested {current_episode_len} steps; cycling {z.shape[0]} inferred latent steps")
-        if ros_z_source is not None and save_mp4:
-            raise ValueError("--save-mp4 is not supported with an unbounded realtime ROS z stream")
         print(f"Saving video for tracking ({current_episode_len} steps)")
         if save_mp4:
-            rgb_renderer = IsaacRendererWithMuJoco(render_size=256)
-            # Only render 1 + episode_len frames (same as frames list), not the full motion
-            expert_video = rgb_renderer.from_qpos(expert_qpos[: 1 + current_episode_len])
+            rgb_renderer = IsaacRendererWithMuJoco(
+                render_size=256,
+                model=wrapped_env._env.simulator.model,
+            )
+            if ros_z_source is None:
+                # Reference motion frames, only shown in the non-ROS comparison video.
+                expert_video = rgb_renderer.from_qpos(expert_qpos[: 1 + current_episode_len])
             frames = [rgb_renderer.render(wrapped_env._env, 0)[0]]
 
         print(f"Running tracking inference for motion {MOTION_ID} for {current_episode_len} steps")
@@ -878,8 +1007,8 @@ def main(
                     frames.append(rgb_renderer.render(wrapped_env._env, 0)[0])
         except KeyboardInterrupt:
             print(
-                "\nInterrupted by Ctrl+C; flushing joint tracking data "
-                "accumulated so far"
+                "\nInterrupted by Ctrl+C; ending recording and saving "
+                "data/video accumulated so far"
             )
         finally:
             if joint_source is not None and joint_errs:
@@ -891,19 +1020,32 @@ def main(
                     output_dir,
                     MOTION_ID,
                 )
+            if save_mp4:
+                if ros_z_source is None:
+                    # Comparison video: reference (left) + sim (right).
+                    new_frames = [
+                        np.concatenate([a, b], axis=1) for a, b in zip(expert_video, frames)
+                    ]
+                else:
+                    # Realtime-ROS mode: record only the model-driven sim frames.
+                    new_frames = frames
+                video_name_resolved = video_name or f"tracking_{MOTION_ID}.mp4"
+                if not video_name_resolved.lower().endswith(".mp4"):
+                    video_name_resolved += ".mp4"
+                video_path = output_dir / video_name_resolved
+                media.write_video(str(video_path), new_frames, fps=video_fps)
+                print(
+                    f"Saved video for tracking: {video_path} "
+                    f"({len(new_frames)} frames at {video_fps} fps = "
+                    f"{len(new_frames) / video_fps:.1f}s; sim control dt "
+                    f"{1 / (env.config.simulator.config.sim.fps / env.config.simulator.config.sim.control_decimation):.4f}s)"
+                )
 
         joint_pos = np.stack(joint_pos, axis=0).squeeze(1)
         stats = {}
 
         # breakpoint()  # use PYTHONBREAKPOINT=0 to disable, or install ipdb for a nicer debugger
 
-        if save_mp4:
-            new_frames = []
-            for a, b in zip(expert_video, frames):
-                new_frames.append(np.concatenate([a, b], axis=1))
-            video_path = output_dir / f"tracking_{MOTION_ID}.mp4"
-            media.write_video(str(video_path), new_frames, fps=50)
-            print(f"Saved video for tracking: {video_path}")
     finally:
         if ros_z_source is not None:
             ros_z_source.close()

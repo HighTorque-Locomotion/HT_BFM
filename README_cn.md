@@ -103,6 +103,7 @@ python data_process/convert_gmr_lafan.py --robot g1 --output-dir ~/HT_BFM/humano
 # pi_plus
 python data_process/convert_gmr_lafan.py --robot piplus_lse --output-dir ~/HT_BFM/humanoidverse/data/pi_LSE_lafan_dataset_20260617 --overwrite
 
+
 ``` 
 ### 数据可视化
 ```bash
@@ -169,9 +170,10 @@ python -m humanoidverse.tracking_inference \
     --ros-z-topic /bfm_z_realtime \
     --ros-z-timeout 0.5 \
     --motion-list 0 \
-    --robot PiPlus_S_12L8A0G2H1W_LSE
+    --robot PiPlus_S_12L8A0G2H1W_LSE \
+    --save-mp4 \
+    --video-name dance1_subject2
 ```
-
 
 python -m humanoidverse.tracking_inference \
     --model_folder results/bfmzero-piplus-lse-isaac-20260715_143758 \
@@ -185,3 +187,19 @@ python -m humanoidverse.tracking_inference \
     --joint-timeout 0.5 \
     --motion-list 0 \
     --robot PiPlus_S_12L8A0G2H1W_LSE
+
+python data_process/convert_gmr_lafan.py \
+    --robot piplus_lse \
+    --output-dir /home/ht123/project/HT_BFM/humanoidverse/data/BroadJumpAndInPlaceJump_pkl \
+    --overwrite \
+    --input-dir /home/ht123/project/HT_BFM/humanoidverse/data/BroadJumpAndInPlaceJump_pkl \
+    --robot-xml /home/ht123/WorkSpace/ht_urdf/ht_urdf/PiPlus_S_12L8A0G2H0W/xml/PiPlus_S_12L8A0G2H0W.xml
+
+python -m humanoidverse.tracking_inference \
+    --model_folder /home/ht123/project/HT_BFM/results/bfmzero-piplus-h0w-isaac-20260804_123511\
+    --data_path /home/ht123/project/HT_BFM/humanoidverse/data/BroadJumpAndInPlaceJump_H0W.pkl\
+    --onnx \
+    --simulator mujoco \
+    --motion-list 0 --robot PiPlus_S_12L8A0G2H0W --save-mp4 --disable-obs-noise \
+    --disable-dr
+
