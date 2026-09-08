@@ -57,6 +57,7 @@ ENCODER_COMMAND_SCALE = (1.25, 5.0, 1.25)
 ENCODER_DOF_VEL_SCALE = 0.05
 LINVEL_EXP_ERROR_SCALE = 0.16
 MOVING_COMMAND_THRESHOLD = 0.1
+AMP_COMMAND_CATEGORIES = ("stand", "forward", "backward", "lateral", "turn")
 
 
 def _distributed_ready() -> bool:
@@ -160,7 +161,15 @@ def _motion_qpos(
 class PiPlusAMPExpertDataset:
     """Precomputed PiPlus AMP features with an eight-frame joint history."""
 
-    def __init__(self, features: np.ndarray, *, history_length: int, feature_dim: int, motion_count: int) -> None:
+    def __init__(
+        self,
+        features: np.ndarray,
+        *,
+        history_length: int,
+        feature_dim: int,
+        motion_count: int,
+        category_features: Mapping[str, np.ndarray] | None = None,
+    ) -> None:
         if features.ndim != 2 or features.shape[1] != feature_dim:
             raise ValueError(f"AMP expert features must have shape [N, {feature_dim}], got {features.shape}")
         if not np.isfinite(features).all():
@@ -169,6 +178,11 @@ class PiPlusAMPExpertDataset:
         self.history_length = int(history_length)
         self.feature_dim = int(feature_dim)
         self.motion_count = int(motion_count)
+        self.category_features = {
+            str(name): torch.as_tensor(value, dtype=torch.float32)
+            for name, value in (category_features or {}).items()
+            if value.ndim == 2 and value.shape[0] > 0
+        }
 
     @classmethod
     def from_pkl(
@@ -198,7 +212,8 @@ class PiPlusAMPExpertDataset:
             raise ValueError(f"Could not resolve PiPlus AMP key bodies: base={base_body}, keys={key_bodies}")
 
         feature_rows: list[np.ndarray] = []
-        for motion in data.values():
+        category_rows: dict[str, list[np.ndarray]] = {}
+        for motion_name, motion in data.items():
             root_pos = np.asarray(motion["root_trans_offset"], dtype=np.float64)
             root_rot = np.asarray(motion["root_rot"], dtype=np.float64)
             dof = _policy_dof_from_motion(motion, policy_joint_names)
@@ -222,6 +237,7 @@ class PiPlusAMPExpertDataset:
 
             if frame_count < history_length:
                 continue
+            motion_rows: list[np.ndarray] = []
             for frame_index in range(history_length - 1, frame_count):
                 joint_history = dof[frame_index - history_length + 1 : frame_index + 1].reshape(-1)
                 row = np.concatenate(
@@ -231,17 +247,89 @@ class PiPlusAMPExpertDataset:
                         joint_history,
                     ]
                 )
-                feature_rows.append(row.astype(np.float32, copy=False))
+                motion_rows.append(row.astype(np.float32, copy=False))
+            if motion_rows:
+                feature_rows.extend(motion_rows)
+                category = _expert_motion_category(str(motion_name), motion)
+                category_rows.setdefault(category, []).extend(motion_rows)
 
         feature_dim = 3 + len(key_bodies) * 3 + history_length * len(policy_joint_names)
         features = np.stack(feature_rows, axis=0) if feature_rows else np.zeros((0, feature_dim), dtype=np.float32)
-        return cls(features, history_length=history_length, feature_dim=feature_dim, motion_count=len(data))
+        category_features = {
+            name: np.stack(rows, axis=0).astype(np.float32, copy=False)
+            for name, rows in category_rows.items()
+        }
+        return cls(
+            features,
+            history_length=history_length,
+            feature_dim=feature_dim,
+            motion_count=len(data),
+            category_features=category_features,
+        )
 
-    def sample(self, batch_size: int, device: torch.device) -> torch.Tensor:
+    def sample(
+        self,
+        batch_size: int,
+        device: torch.device,
+        commands: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if self.features.shape[0] == 0:
             raise ValueError("AMP expert dataset contains no valid history windows")
-        indices = torch.randint(self.features.shape[0], (int(batch_size),))
-        return self.features[indices].to(device)
+        if commands is None or not self.category_features:
+            indices = torch.randint(self.features.shape[0], (int(batch_size),))
+            return self.features[indices].to(device)
+        commands = commands.reshape(-1, 3)
+        if commands.shape[0] != int(batch_size):
+            raise ValueError(f"Expected {batch_size} command rows, got {commands.shape[0]}")
+        category_ids = _command_category_ids(commands)
+        sampled = torch.empty((int(batch_size), self.feature_dim), device=device)
+        fallback = self.features
+        for category_id, category_name in enumerate(AMP_COMMAND_CATEGORIES):
+            mask = category_ids == category_id
+            if not torch.any(mask):
+                continue
+            pool = self.category_features.get(category_name, fallback)
+            indices = torch.randint(pool.shape[0], (int(mask.sum()),))
+            sampled[mask] = pool[indices].to(device)
+        return sampled
+
+
+def _command_category_ids(commands: torch.Tensor) -> torch.Tensor:
+    """Map body-frame velocity commands to AMP expert categories."""
+    commands = commands.reshape(-1, 3)
+    if commands.shape[-1] != 3:
+        raise ValueError(f"Expected commands [B, 3], got {tuple(commands.shape)}")
+    planar = commands[:, :2].norm(dim=-1)
+    yaw = commands[:, 2].abs()
+    category = torch.full((commands.shape[0],), 1, dtype=torch.long, device=commands.device)  # forward
+    stand = (planar < MOVING_COMMAND_THRESHOLD) & (yaw < MOVING_COMMAND_THRESHOLD)
+    category[stand] = 0
+    turning = (~stand) & (yaw >= MOVING_COMMAND_THRESHOLD) & (planar < 0.15)
+    category[turning] = 4
+    lateral = (~stand) & (~turning) & (commands[:, 1].abs() > commands[:, 0].abs())
+    category[lateral] = 3
+    category[(~stand) & (~turning) & (~lateral) & (commands[:, 0] < -0.05)] = 2
+    return category
+
+
+def _expert_motion_category(name: str, motion: Mapping[str, Any]) -> str:
+    """Infer a stable AMP category from motion name and optional command metadata."""
+    lower = name.lower()
+    if "stand" in lower or "default_pose" in lower:
+        return "stand"
+    if "lateral" in lower or "side" in lower:
+        return "lateral"
+    if "yaw" in lower or "turn" in lower or "rotate" in lower:
+        return "turn"
+    if "backward" in lower or "backwards" in lower or "reverse" in lower:
+        return "backward"
+    command = motion.get("command_vel")
+    if command is not None:
+        values = np.asarray(command, dtype=np.float64).reshape(-1, 3)
+        if values.size:
+            category = int(_command_category_ids(torch.as_tensor(values[:1], dtype=torch.float32))[0])
+            return AMP_COMMAND_CATEGORIES[category]
+    return "forward"
 
 
 class AMPDiscriminator(nn.Module):
@@ -479,13 +567,21 @@ def _validate_and_configure_latent_contract(
     }
 
 
-def encoder_input_scale(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
+def encoder_input_scale(
+    obs: Mapping[str, torch.Tensor],
+    commands: torch.Tensor,
+    *,
+    command_scale: tuple[float, float, float] | None = None,
+) -> torch.Tensor:
     """Build field-wise scales without changing the Stage2 checkpoint input shape."""
     state = obs["state"]
     last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
-    command_scale = commands.new_tensor(ENCODER_COMMAND_SCALE)
-    if commands.shape[-1] != command_scale.numel():
-        raise ValueError(f"Expected {command_scale.numel()} commands, got {commands.shape[-1]}")
+    selected_command_scale = ENCODER_COMMAND_SCALE if command_scale is None else tuple(float(value) for value in command_scale)
+    if len(selected_command_scale) != 3 or any(value <= 0.0 for value in selected_command_scale):
+        raise ValueError(f"command_scale must contain three positive values, got {selected_command_scale}")
+    command_scale_tensor = commands.new_tensor(selected_command_scale)
+    if commands.shape[-1] != command_scale_tensor.numel():
+        raise ValueError(f"Expected {command_scale_tensor.numel()} commands, got {commands.shape[-1]}")
 
     state_scale = torch.ones(state.shape[-1], device=state.device, dtype=state.dtype)
     dof_dim = int(last_action.shape[-1])
@@ -495,7 +591,7 @@ def encoder_input_scale(obs: Mapping[str, torch.Tensor], commands: torch.Tensor)
             raise ValueError(f"Expected PiPlus state dim {expected_state_dim}, got {state.shape[-1]}")
         state_scale[dof_dim : 2 * dof_dim] = ENCODER_DOF_VEL_SCALE
 
-    pieces = [command_scale, state_scale, torch.ones(last_action.shape[-1], device=state.device, dtype=state.dtype)]
+    pieces = [command_scale_tensor, state_scale, torch.ones(last_action.shape[-1], device=state.device, dtype=state.dtype)]
     history = obs.get("history_actor")
     if history is not None:
         history_scale = torch.ones(history.shape[-1], device=history.device, dtype=history.dtype)
@@ -514,15 +610,28 @@ def encoder_input_scale(obs: Mapping[str, torch.Tensor], commands: torch.Tensor)
     return torch.cat(pieces)
 
 
-def flatten_encoder_observation(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
+def flatten_encoder_observation(
+    obs: Mapping[str, torch.Tensor],
+    commands: torch.Tensor,
+    *,
+    command_scale: tuple[float, float, float] | None = None,
+    backward_command_scale: float | None = None,
+) -> torch.Tensor:
     state = obs["state"]
     last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
-    pieces = [commands, state, last_action]
+    command_features = commands
+    if backward_command_scale is not None:
+        if backward_command_scale <= 0.0:
+            raise ValueError(f"backward_command_scale must be positive, got {backward_command_scale}")
+        command_features = commands.clone()
+        backward = command_features[..., 0] < -0.05
+        command_features[backward, 0] *= backward_command_scale
+    pieces = [command_features, state, last_action]
     history = obs.get("history_actor")
     if history is not None:
         pieces.append(history)
     features = torch.cat(pieces, dim=-1)
-    return features * encoder_input_scale(obs, commands)
+    return features * encoder_input_scale(obs, commands, command_scale=command_scale)
 
 
 @torch.no_grad()
@@ -758,17 +867,24 @@ def _sample_commands(
     *,
     stand_prob: float = 0.1,
     turn_prob: float = 0.0,
+    lateral_prob: float = 0.0,
 ) -> torch.Tensor:
     """Sample velocity targets with MimicLite Twist's stand-command gate."""
     if not 0.0 <= stand_prob <= 1.0:
         raise ValueError(f"stand_prob must be in [0, 1], got {stand_prob}")
     if not 0.0 <= turn_prob <= 1.0:
         raise ValueError(f"turn_prob must be in [0, 1], got {turn_prob}")
+    if not 0.0 <= lateral_prob <= 1.0:
+        raise ValueError(f"lateral_prob must be in [0, 1], got {lateral_prob}")
     commands = low + torch.rand(num_envs, 3, device=device) * (high - low)
     turn_in_place = torch.rand(num_envs, device=device) < turn_prob
     commands[turn_in_place, :2] = 0.0
+    lateral_only = (~turn_in_place) & (torch.rand(num_envs, device=device) < lateral_prob)
+    commands[lateral_only, 0] = 0.0
+    commands[lateral_only, 2] = 0.0
     low_speed = commands[:, :2].norm(dim=-1) < 0.1
-    stand = (~turn_in_place & low_speed) | (torch.rand(num_envs, device=device) < stand_prob)
+    stand = ((~turn_in_place & ~lateral_only & low_speed) |
+             ((torch.rand(num_envs, device=device) < stand_prob) & ~turn_in_place & ~lateral_only))
     return torch.where(stand.unsqueeze(-1), torch.zeros_like(commands), commands)
 
 
@@ -817,6 +933,9 @@ MIMICLITE_LOCOMOTION_WEIGHTS = {
     "action_rate2_l2": 0.005,
     "joint_vel_l2": 1.0e-3,
     "joint_deviation_l2": 0.11,
+    # Disabled by default; enabled only for the cross-axis challenger after
+    # Isaac screens exposed command bleed.
+    "cross_axis_velocity_l2": 0.0,
 }
 
 FEET_CLEARANCE_TARGET = 0.10
@@ -896,6 +1015,14 @@ def command_tracking_metrics(
     add_mean("tracking/nonzero_vy_mae", vy_error, moving)
     add_mean("tracking/nonzero_planar_l2_mae", planar_error, moving)
 
+    standing = (~moving) & (command[:, 2].abs() < MOVING_COMMAND_THRESHOLD)
+    stand_planar_speed = torch.linalg.vector_norm(achieved_xy, dim=-1)
+    stand_yaw_speed = achieved_yaw.abs()
+    add_mean("tracking/stand_base_planar_speed_mean", stand_planar_speed, standing)
+    add_mean("tracking/stand_base_yaw_rate_abs_mean", stand_yaw_speed, standing)
+    add_mean("tracking/stand_base_planar_speed_rms", stand_planar_speed.square(), standing)
+    metrics["tracking/stand_base_planar_speed_rms"] = metrics["tracking/stand_base_planar_speed_rms"] ** 0.5
+
     bin_masks = {
         "backward": moving & (command[:, 0] < -0.05),
         "near_zero": moving & (command[:, 0].abs() <= 0.05),
@@ -934,6 +1061,42 @@ def command_tracking_metrics(
     metrics["tracking/nonzero_vx_response_slope"] = float(slope) if valid else 0.0
     metrics["tracking/nonzero_vx_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
     metrics["tracking/nonzero_achieved_vx_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
+
+    # Keep a separate lateral response diagnostic.  Aggregate planar MAE can
+    # hide a policy that tracks forward speed while ignoring +/-vy commands.
+    response_mask = moving & (command[:, 1].abs() > 0.05)
+    x = command[response_mask, 1]
+    y = achieved_xy[response_mask, 1]
+    response_sums = _global_tracking_sums(
+        torch.stack(
+            (
+                x.new_tensor(float(x.numel())),
+                x.sum(),
+                y.sum(),
+                x.square().sum(),
+                y.square().sum(),
+                (x * y).sum(),
+            )
+        )
+    )
+    count, sum_x, sum_y, sum_xx, sum_yy, sum_xy = response_sums
+    denominator = count.clamp_min(1.0)
+    variance_x = (sum_xx - sum_x.square() / denominator).clamp_min(0.0)
+    variance_y = (sum_yy - sum_y.square() / denominator).clamp_min(0.0)
+    covariance = sum_xy - sum_x * sum_y / denominator
+    slope = covariance / variance_x.clamp_min(1.0e-12)
+    correlation = covariance / (variance_x * variance_y).sqrt().clamp_min(1.0e-12)
+    valid = bool(count >= 2.0 and variance_x > 1.0e-12 and variance_y > 1.0e-12)
+    metrics["tracking/nonzero_vy_response_slope"] = float(slope) if valid else 0.0
+    metrics["tracking/nonzero_vy_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
+    metrics["tracking/nonzero_achieved_vy_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
+
+    lateral_bins = {
+        "left": moving & (command[:, 1] > 0.05),
+        "right": moving & (command[:, 1] < -0.05),
+    }
+    for name, mask in lateral_bins.items():
+        add_mean(f"tracking/vy_bin_{name}_mae", vy_error, mask)
 
     x = command[turning, 2]
     y = achieved_yaw[turning]
@@ -976,8 +1139,12 @@ class MimicLiteLocomotionRewardState:
         joint_vel_indices: torch.Tensor,
         joint_deviation_indices: torch.Tensor,
         device: torch.device,
+        cross_axis_velocity_weight: float = 0.0,
     ) -> None:
         self.dt = float(dt)
+        self.cross_axis_velocity_weight = float(cross_axis_velocity_weight)
+        if self.cross_axis_velocity_weight < 0.0:
+            raise ValueError("cross_axis_velocity_weight must be non-negative")
         self.feet_indices = feet_indices.to(device=device, dtype=torch.long)
         self.torso_index = int(torso_index)
         self.joint_vel_indices = joint_vel_indices.to(device=device, dtype=torch.long)
@@ -1017,6 +1184,24 @@ class MimicLiteLocomotionRewardState:
         linvel_exp = baseline_normalized_linvel_reward(core.base_lin_vel, commands)
         linvel_projection = (core.base_lin_vel[:, :2] * commands[:, :2]).sum(dim=-1).clamp_max(command_speed)
         angvel_z_exp = baseline_normalized_angvel_reward(core.base_ang_vel[:, 2], commands)
+
+        planar_velocity = core.base_lin_vel[:, :2]
+        command_xy = commands[:, :2]
+        command_norm_sq = command_xy.square().sum(dim=-1)
+        parallel_velocity = (
+            (planar_velocity * command_xy).sum(dim=-1, keepdim=True)
+            / command_norm_sq.clamp_min(1.0e-6).unsqueeze(-1)
+        ) * command_xy
+        orthogonal_velocity = planar_velocity - parallel_velocity
+        cross_axis_velocity_l2 = -orthogonal_velocity.square().sum(dim=-1)
+        moving_or_turning = (command_speed >= MOVING_COMMAND_THRESHOLD) | (
+            commands[:, 2].abs() >= MOVING_COMMAND_THRESHOLD
+        )
+        cross_axis_velocity_l2 = torch.where(
+            moving_or_turning,
+            cross_axis_velocity_l2,
+            torch.zeros_like(cross_axis_velocity_l2),
+        )
 
         down = torch.zeros(core.num_envs, 3, device=core.device)
         down[:, 2] = -1.0
@@ -1067,13 +1252,15 @@ class MimicLiteLocomotionRewardState:
             "action_rate2_l2": action_rate2_l2,
             "joint_vel_l2": joint_vel_l2,
             "joint_deviation_l2": joint_deviation_l2,
+            "cross_axis_velocity_l2": cross_axis_velocity_l2,
         }
         # MimicLite scales the complete task reward by the control timestep.
         # Keep these values in their final, weighted form so logs expose the
         # actual PPO contribution of every copied reward term.
-        weighted_components = {
-            name: self.dt * MIMICLITE_LOCOMOTION_WEIGHTS[name] * value for name, value in components.items()
-        }
+        weights = dict(MIMICLITE_LOCOMOTION_WEIGHTS)
+        if self.cross_axis_velocity_weight > 0.0:
+            weights["cross_axis_velocity_l2"] = self.cross_axis_velocity_weight
+        weighted_components = {name: self.dt * weights[name] * value for name, value in components.items()}
         reward = sum(weighted_components.values())
 
         self.prev_prev_actions = self.prev_actions.clone()
@@ -1337,6 +1524,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-resample-prob", type=float, default=0.75)
     parser.add_argument("--command-stand-prob", type=float, default=0.2)
     parser.add_argument("--command-turn-prob", type=float, default=0.2)
+    parser.add_argument("--command-lateral-prob", type=float, default=0.0)
+    parser.add_argument(
+        "--command-lateral-scale",
+        type=float,
+        default=ENCODER_COMMAND_SCALE[1],
+        help="Encoder preprocessing scale for the lateral velocity command; preserves the 3-D input shape.",
+    )
+    parser.add_argument(
+        "--command-backward-scale",
+        type=float,
+        default=1.0,
+        help="Additional encoder scale applied only to negative vx commands; preserves the 3-D input shape.",
+    )
+    parser.add_argument(
+        "--cross-axis-velocity-weight",
+        type=float,
+        default=0.0,
+        help="Penalty weight for velocity orthogonal to the commanded planar direction; 0 disables it.",
+    )
     parser.add_argument("--command-warmup-steps", type=int, default=20)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
@@ -1346,6 +1552,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
     parser.add_argument("--amp-weight", type=float, default=0.06)
+    parser.add_argument(
+        "--amp-command-matched",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Sample AMP expert windows from the same command category as each rollout window.",
+    )
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
     parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
@@ -1459,6 +1671,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         args.minibatch_size = min(args.minibatch_size, args.num_envs * args.rollout_steps)
     if args.latent_stat_max_frames < 0:
         raise ValueError("latent_stat_max_frames must be >= 0")
+    if args.command_lateral_scale <= 0.0:
+        raise ValueError("command_lateral_scale must be positive")
+    if args.command_backward_scale <= 0.0:
+        raise ValueError("command_backward_scale must be positive")
+    if args.cross_axis_velocity_weight < 0.0:
+        raise ValueError("cross_axis_velocity_weight must be non-negative")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -1500,8 +1718,14 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     commands = torch.zeros(args.num_envs, 3, device=device)
     command_targets = torch.zeros_like(commands)
     command_episode_steps = torch.zeros(args.num_envs, device=device, dtype=torch.long)
-    encoder_input = flatten_encoder_observation(obs_t, commands)
-    input_scale = encoder_input_scale(obs_t, commands)
+    command_input_scale = (ENCODER_COMMAND_SCALE[0], args.command_lateral_scale, ENCODER_COMMAND_SCALE[2])
+    encoder_input = flatten_encoder_observation(
+        obs_t,
+        commands,
+        command_scale=command_input_scale,
+        backward_command_scale=args.command_backward_scale,
+    )
+    input_scale = encoder_input_scale(obs_t, commands, command_scale=command_input_scale)
     backward_arch = bfm_model.cfg.archi.b
     policy = CommandEncoderPolicy(
         encoder_input.shape[-1],
@@ -1632,6 +1856,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         joint_vel_indices=joint_vel_indices,
         joint_deviation_indices=joint_deviation_indices,
         device=device,
+        cross_axis_velocity_weight=args.cross_axis_velocity_weight,
     )
 
     metadata = {
@@ -1654,7 +1879,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         ],
         "encoder_input_transform": {
             "version": ENCODER_INPUT_TRANSFORM_VERSION,
-            "command_scale": list(ENCODER_COMMAND_SCALE),
+            "command_scale": list(command_input_scale),
             "dof_vel_scale": ENCODER_DOF_VEL_SCALE,
             "legacy_checkpoint_first_layer_migrated": legacy_input_migrated,
         },
@@ -1668,12 +1893,17 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "command_range": {"low": commands_low.tolist(), "high": commands_high.tolist()},
         "command_stand_prob": args.command_stand_prob,
         "command_turn_prob": args.command_turn_prob,
+        "command_lateral_prob": args.command_lateral_prob,
+        "command_lateral_scale": args.command_lateral_scale,
+        "command_backward_scale": args.command_backward_scale,
+        "cross_axis_velocity_weight": args.cross_axis_velocity_weight,
         "command_resample_prob": args.command_resample_prob,
         "command_resample_interval": args.command_resample_steps,
         "command_warmup_steps": args.command_warmup_steps,
         "command_smoothing": args.command_smoothing,
         "amp_reward_mapping": "raw_discriminator_score -> MimicLiteRewardNormalizer -> amp_weight",
         "amp_reward_weight": args.amp_weight,
+        "amp_command_matched": bool(args.amp_command_matched),
         "env_reward_weight": args.env_reward_weight,
         "locomotion_reward_weight": args.locomotion_reward_weight,
         "locomotion_reward_terms": MIMICLITE_LOCOMOTION_WEIGHTS,
@@ -1725,7 +1955,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             for step in range(args.rollout_steps):
                 with torch.no_grad():
                     obs_t = _to_torch_obs(obs, device)
-                    encoder_input = flatten_encoder_observation(obs_t, commands)
+                    encoder_input = flatten_encoder_observation(
+                        obs_t,
+                        commands,
+                        command_scale=command_input_scale,
+                        backward_command_scale=args.command_backward_scale,
+                    )
                     raw_z, old_log_prob, value = policy.sample(encoder_input)
                     # Reuse the first-stage FBModel.project_z(); it reads norm_z from the checkpoint config.
                     z = bfm_model.project_z(raw_z)
@@ -1746,7 +1981,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     terminal_obs = info.get("terminal_observation")
                     if terminal_obs is None:
                         raise RuntimeError("A truncated transition is missing its pre-reset terminal observation")
-                    terminal_input = flatten_encoder_observation(_to_torch_obs(terminal_obs, device), commands)
+                    terminal_input = flatten_encoder_observation(
+                        _to_torch_obs(terminal_obs, device),
+                        commands,
+                        command_scale=command_input_scale,
+                        backward_command_scale=args.command_backward_scale,
+                    )
                     with torch.no_grad():
                         timeout_value[truncated] = policy(terminal_input)[2][truncated]
                 if torch.any(done):
@@ -1797,6 +2037,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         commands_high,
                         stand_prob=args.command_stand_prob,
                         turn_prob=args.command_turn_prob,
+                        lateral_prob=args.command_lateral_prob,
                     )
 
             rollout = Stage2Rollout(
@@ -1819,7 +2060,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 base_ang_vel=torch.stack(base_ang_vel_store),
             )
             fake_features = rollout.amp_features.reshape(-1, expert.feature_dim)
-            expert_features = expert.sample(fake_features.shape[0], device)
+            expert_features = expert.sample(
+                fake_features.shape[0],
+                device,
+                commands=rollout.commands.reshape(-1, 3) if args.amp_command_matched else None,
+            )
             discriminator_loss = discriminator.loss(expert_features, fake_features.detach())
             discriminator_optimizer.zero_grad(set_to_none=True)
             discriminator_loss["loss"].backward()
@@ -1836,7 +2081,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     + args.locomotion_reward_weight * rollout.locomotion_rewards
                     + args.amp_weight * amp_reward
                 )
-                next_input = flatten_encoder_observation(_to_torch_obs(obs, device), commands)
+                next_input = flatten_encoder_observation(
+                    _to_torch_obs(obs, device),
+                    commands,
+                    command_scale=command_input_scale,
+                    backward_command_scale=args.command_backward_scale,
+                )
                 next_value = policy(next_input)[2]
                 advantages, returns = compute_gae(
                     rewards,

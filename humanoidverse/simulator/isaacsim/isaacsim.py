@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 from loguru import logger
 import torch
 from humanoidverse.utils.torch_utils import to_torch, torch_rand_float
@@ -38,6 +39,9 @@ from humanoidverse.simulator.isaacsim.isaacsim_articulation_cfg import ARTICULAT
 from humanoidverse.utils.asset_paths import resolve_asset_path
 
 from humanoidverse.simulator.isaacsim.event_cfg import EventCfg
+from humanoidverse.simulator.isaacsim.external_mesh_terrain import ExternalStlTerrainCfg
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 from isaaclab.managers import EventManager
 
@@ -540,8 +544,13 @@ class IsaacSim(BaseSimulator):
                 articulation_props=articulation_props,
             )
         else:
+            usd_cache_dir = Path(
+                os.environ.get("BFMZERO_ASSET_CACHE_DIR", str(Path.cwd() / ".cache" / "IsaacLab"))
+            ).expanduser().resolve()
+            usd_cache_dir.mkdir(parents=True, exist_ok=True)
             spawn = sim_utils.UrdfFileCfg(
                 asset_path=asset_abs_path,
+                usd_dir=str(usd_cache_dir),
                 fix_base=bool(self.robot_config.asset.fix_base_link),
                 merge_fixed_joints=bool(self.robot_config.asset.collapse_fixed_joints),
                 replace_cylinders_with_capsules=bool(self.robot_config.asset.replace_cylinder_with_capsule),
@@ -639,6 +648,18 @@ class IsaacSim(BaseSimulator):
                     elif terrain_type == "low_obst":
                         sub_terrains[terrain_type] = terrain_gen.MeshRandomGridTerrainCfg(
                             proportion=proportion, grid_width=0.45, grid_height_range=(0.05, 0.2), platform_width=2.0
+                        )
+                    elif terrain_type.startswith("external_stl") or terrain_type.startswith("external_obj"):
+                        mesh_path = self.terrain_config.external_stl_files.get(terrain_type)
+                        if not mesh_path:
+                            raise ValueError(f"Missing terrain.external_stl_files entry for {terrain_type!r}")
+                        mesh_path = Path(mesh_path).expanduser()
+                        if not mesh_path.is_absolute():
+                            mesh_path = (REPO_ROOT / mesh_path).resolve()
+                        sub_terrains[terrain_type] = ExternalStlTerrainCfg(
+                            proportion=proportion,
+                            mesh_path=str(mesh_path),
+                            origin_z=0.0,
                         )
 
             terrain_generator_config = TerrainGeneratorCfg(

@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - exercised only when --gamepad is reque
 
 from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
 from humanoidverse.amp_stage2 import (
+    ENCODER_COMMAND_SCALE,
     CommandEncoderPolicy,
     _bfm_action,
     _ensure_runtime_cache,
@@ -412,6 +413,24 @@ def play(args: argparse.Namespace) -> None:
     if args.render_size <= 0:
         raise ValueError("--render-size must be positive")
 
+    transform = metadata.get("encoder_input_transform", {})
+    recorded_scale = transform.get("command_scale", ENCODER_COMMAND_SCALE) if isinstance(transform, Mapping) else ENCODER_COMMAND_SCALE
+    command_scale = tuple(float(value) for value in recorded_scale)
+    if args.command_lateral_scale is not None:
+        command_scale = (command_scale[0], float(args.command_lateral_scale), command_scale[2])
+    recorded_backward_scale = (
+        float(transform.get("command_backward_scale", 1.0)) if isinstance(transform, Mapping) else 1.0
+    )
+    backward_command_scale = (
+        float(args.command_backward_scale)
+        if args.command_backward_scale is not None
+        else recorded_backward_scale
+    )
+    if len(command_scale) != 3 or any(value <= 0.0 for value in command_scale):
+        raise ValueError(f"command scale must contain three positive values, got {command_scale}")
+    if backward_command_scale <= 0.0:
+        raise ValueError(f"command backward scale must be positive, got {backward_command_scale}")
+
     device = resolve_play_device(args.device)
     policy_device = resolve_play_device(args.policy_device or str(device))
     if device.type == "cuda":
@@ -449,7 +468,12 @@ def play(args: argparse.Namespace) -> None:
     observation, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
     observation_t = _to_torch_obs(observation, policy_device)
     commands = torch.zeros(1, 3, device=policy_device)
-    encoder_input = flatten_encoder_observation(observation_t, commands)
+    encoder_input = flatten_encoder_observation(
+        observation_t,
+        commands,
+        command_scale=command_scale,
+        backward_command_scale=backward_command_scale,
+    )
     policy = CommandEncoderPolicy(
         encoder_input.shape[-1],
         int(metadata["z_dim"]),
@@ -457,7 +481,11 @@ def play(args: argparse.Namespace) -> None:
         hidden_layers=int(metadata["command_encoder_hidden_layers"]),
     ).to(policy_device)
     checkpoint = torch.load(paths.checkpoint, map_location=policy_device, weights_only=False)
-    load_command_encoder_policy_state(policy, checkpoint, encoder_input_scale(observation_t, commands))
+    load_command_encoder_policy_state(
+        policy,
+        checkpoint,
+        encoder_input_scale(observation_t, commands, command_scale=command_scale),
+    )
     policy.eval()
 
     command_low = np.asarray(metadata["command_range"]["low"], dtype=np.float32)
@@ -579,7 +607,12 @@ def play(args: argparse.Namespace) -> None:
 
             with torch.inference_mode():
                 observation_t = _to_torch_obs(observation, policy_device)
-                encoder_input = flatten_encoder_observation(observation_t, commands)
+                encoder_input = flatten_encoder_observation(
+                    observation_t,
+                    commands,
+                    command_scale=command_scale,
+                    backward_command_scale=backward_command_scale,
+                )
                 raw_z = policy.deterministic_z(encoder_input)
                 action = _bfm_action(bfm_model, observation_t, bfm_model.project_z(raw_z)).to(device)
             observation, _reward, terminated, truncated, _info = env.step(action, to_numpy=False)
@@ -659,6 +692,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quit-button", type=int, default=1, help="Xbox B / PlayStation Circle by default.")
     parser.add_argument("--fixed-command", type=float, nargs=3, metavar=("VX", "VY", "WZ"), default=None)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
+    parser.add_argument(
+        "--command-lateral-scale",
+        type=float,
+        default=None,
+        help="Override the lateral command preprocessing scale recorded in the checkpoint metadata.",
+    )
+    parser.add_argument(
+        "--command-backward-scale",
+        type=float,
+        default=None,
+        help="Override the negative-vx command preprocessing scale recorded in the checkpoint metadata.",
+    )
     parser.add_argument("--max-episode-length-s", type=float, default=10000.0)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--log-every-steps", type=int, default=50)
