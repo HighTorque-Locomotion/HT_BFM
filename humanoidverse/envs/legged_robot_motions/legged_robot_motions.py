@@ -220,6 +220,8 @@ class LeggedRobotMotions(LeggedRobotBase):
             self.motion_start_times[env_ids] = torch.zeros(len(env_ids), dtype=torch.float32, device=self.device)
         else:
             self.motion_start_times[env_ids] = self._motion_lib.sample_time(self.motion_ids[env_ids])
+        if self.config.get("motion_start_at_zero", False):
+            self.motion_start_times[env_ids] = 0.0
             
         # self.motion_start_times[env_ids] = self._motion_lib.sample_time(self.motion_ids[env_ids])
         # offset = self.env_origins
@@ -552,11 +554,15 @@ class LeggedRobotMotions(LeggedRobotBase):
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        if self.custom_origins: # trimesh
-            self.target_robot_root_states[env_ids, :3] = target_state[..., 0]
-            self.target_robot_root_states[env_ids, 3:7] = target_state[..., 1]
-            self.target_robot_root_states[env_ids, 7:10] = target_state[..., 2]
-            self.target_robot_root_states[env_ids, 10:13] = target_state[..., 3]
+        if self.custom_origins and target_state is not None: # trimesh evaluation target already includes local motion state
+            # Evaluation passes one flat root state per environment as
+            # [position(3), quaternion(4), velocity(3), angular_velocity(3)].
+            # The old ellipsis indexing selected one scalar per field and
+            # failed when Isaac evaluation reset a batch of target states.
+            self.target_robot_root_states[env_ids, :3] = target_state[:, :3]
+            self.target_robot_root_states[env_ids, 3:7] = target_state[:, 3:7]
+            self.target_robot_root_states[env_ids, 7:10] = target_state[:, 7:10]
+            self.target_robot_root_states[env_ids, 10:13] = target_state[:, 10:13]
         elif target_state is not None:
             # Same logic as in legged_robot_base (reset to this target state)
             self.target_robot_root_states[env_ids] = target_state

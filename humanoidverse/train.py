@@ -32,8 +32,12 @@ import gymnasium
 import numpy as np
 import pydantic
 import torch  # better to use scoped import if we use processes
-import tyro
+try:
+    import tyro  # noqa: F401  # optional compatibility dependency; the entrypoint uses argparse below
+except ImportError:
+    tyro = None  # type: ignore[assignment]
 import wandb
+import safetensors.torch
 from packaging.version import Version
 from torch.utils._pytree import tree_map
 from tqdm import tqdm
@@ -99,6 +103,7 @@ class TrainConfig(BaseConfig):
 
     work_dir: str = pydantic.Field(default_factory=lambda: get_local_workdir("g1mujoco_train"))
     resume_from: str | None = None
+    warm_start_model_from: str | None = None
 
     seed: int = 0
     online_parallel_envs: int = 50
@@ -145,8 +150,10 @@ class TrainConfig(BaseConfig):
 
     tags: dict = pydantic.Field(default_factory=lambda: {})
 
-    # exca
-    infra: xk.TaskInfra = xk.TaskInfra(version="1")
+    # exca is only used by the optional cluster launcher.  Recent exca releases
+    # reject an unattached default TaskInfra when this module is run directly;
+    # keep the field optional because the standalone trainer never consumes it.
+    infra: xk.TaskInfra | None = None
 
     def model_post_init(self, context):
         # TODO prioritization needs tracking eval to work, but this is bit hacky to check for it
@@ -207,6 +214,29 @@ def create_agent_or_load_checkpoint(work_dir: Path, cfg: TrainConfig, agent_buil
         print(f"Loading the agent at time {checkpoint_time} from {checkpoint_dir}")
         agent = cfg.agent.object_class.load(checkpoint_dir, device=cfg.agent.model.device)
         resume_checkpoint_dir = checkpoint_dir
+    elif cfg.warm_start_model_from:
+        source = Path(cfg.warm_start_model_from).expanduser()
+        source_checkpoint = source / CHECKPOINT_DIR_NAME if (source / CHECKPOINT_DIR_NAME).is_dir() else source
+        model_path = source_checkpoint / "model" / "model.safetensors"
+        source_init_kwargs = source_checkpoint / "model" / "init_kwargs.json"
+        if not model_path.is_file():
+            raise FileNotFoundError(f"Warm-start model file does not exist: {model_path}")
+        if source_init_kwargs.is_file():
+            with source_init_kwargs.open() as f:
+                source_action_dim = int(json.load(f).get("action_dim", -1))
+            if source_action_dim != int(agent_build_kwargs["action_dim"]):
+                raise ValueError(
+                    f"Warm-start action_dim={source_action_dim} does not match current action_dim={agent_build_kwargs['action_dim']}"
+                )
+        agent = cfg.agent.build(**agent_build_kwargs)
+        safetensors.torch.load_model(
+            agent._model,
+            model_path,
+            device=cfg.agent.model.device,
+            strict=True,
+        )
+        print(f"Warm-started model weights from {model_path}; optimizer and replay buffer start fresh")
+        resume_checkpoint_dir = None
     else:
         agent = cfg.agent.build(**agent_build_kwargs)
         resume_checkpoint_dir = None
@@ -716,7 +746,15 @@ def _get_robot_training_settings(robot: str) -> dict[str, tp.Any]:
     raise ValueError(f"Unsupported robot '{robot}'. Choose one of: {', '.join(SUPPORTED_ROBOTS)}")
 
 
-def train_bfm_zero(robot: str = ROBOT_G1, resume_from: str | None = None, resume_replay_buffer: bool = True):
+def train_bfm_zero(
+    robot: str = ROBOT_G1,
+    resume_from: str | None = None,
+    resume_replay_buffer: bool = True,
+    warm_start_model_from: str | None = None,
+    box_climb: bool = False,
+    work_dir: str | None = None,
+    use_wandb: bool = True,
+):
     from humanoidverse.agents.fb_cpr_aux.model import FBcprAuxModelArchiConfig, FBcprAuxModelConfig
     from humanoidverse.agents.fb_cpr_aux.agent import FBcprAuxAgentTrainConfig
     from humanoidverse.agents.nn_models import ForwardArchiConfig, BackwardArchiConfig, ActorArchiConfig, DiscriminatorArchiConfig, RewardNormalizerConfig
@@ -724,6 +762,18 @@ def train_bfm_zero(robot: str = ROBOT_G1, resume_from: str | None = None, resume
     from humanoidverse.agents.nn_filters import DictInputFilterConfig
 
     robot_settings = _get_robot_training_settings(robot)
+    if box_climb:
+        if robot != ROBOT_PIPLUS_H0W:
+            raise ValueError("--box_climb is currently supported only for PiPlus H0W")
+        robot_settings = dict(robot_settings)
+        robot_settings.update(
+            {
+                "relative_config_path": "exp/bfm_zero_piplus/bfm_zero_piplus_h0w_box",
+                "lafan_tail_path": "dataset/limb_20_z_scale_1.0_piplus_mapping/piplus_h0w_box_bfm.pkl",
+                "hydra_overrides": ["robot=piplus/PiPlus_S_12L8A0G2H0W"],
+                "work_dir_prefix": "bfmzero-piplus-h0w-box-isaac",
+            }
+        )
     aux_rewards = ['penalty_torques', 'penalty_action_rate', 'limits_dof_pos', 'limits_torque', 'penalty_undesired_contact', 'penalty_feet_ori', 'penalty_ankle_roll', 'penalty_slippage']
     aux_rewards_scaling = {'penalty_action_rate': -0.001, 'penalty_feet_ori': -0.4, 'penalty_ankle_roll': -4.0, 'limits_dof_pos': -10.0, 'penalty_slippage': -20.0, 'penalty_undesired_contact': -1.0, 'penalty_torques': 0.0, 'limits_torque': 0.0}
     if robot in (ROBOT_PIPLUS_LSE, ROBOT_PIPLUS_LSE_40V, ROBOT_PIPLUS_H0W, ROBOT_H1_260402):
@@ -834,17 +884,21 @@ def train_bfm_zero(robot: str = ROBOT_G1, resume_from: str | None = None, resume
             make_config_g1env_compatible=False,
             root_height_obs=True
         ),
-        work_dir=f"results/{robot_settings['work_dir_prefix']}-{time.strftime('%Y%m%d_%H%M%S')}",
+        work_dir=work_dir or f"results/{robot_settings['work_dir_prefix']}-{time.strftime('%Y%m%d_%H%M%S')}",
         resume_from=resume_from,
+        warm_start_model_from=warm_start_model_from,
         seed=4728,
-        online_parallel_envs=1024,
+        online_parallel_envs=(4096 if box_climb else 1024),
         log_every_updates=102400,
         num_env_steps=384000000,
         update_agent_every=1024,
         num_seed_steps=10240,
         num_agent_updates=16,
         checkpoint_every_steps=296960,
-        checkpoint_buffer=True,
+        # The fixed box bootstrap uses a fresh replay buffer and does not need
+        # multi-gigabyte replay snapshots; keeping them would exhaust the
+        # remote volume before the next model checkpoint.
+        checkpoint_buffer=not box_climb,
         resume_replay_buffer=resume_replay_buffer,
         prioritization=True,
         prioritization_min_val=0.5,
@@ -853,14 +907,14 @@ def train_bfm_zero(robot: str = ROBOT_G1, resume_from: str | None = None, resume
         prioritization_mode='exp',
         use_trajectory_buffer=True,
         buffer_size=5120000,
-        use_wandb=True,
+        use_wandb=use_wandb,
         wandb_ename='82623700-dzkd',  # your wandb entity (username/team), empty = default from wandb login
         wandb_gname=robot_settings["wandb_group"],  # run group
         wandb_pname=robot_settings["wandb_project"],  # your wandb project name
         load_isaac_expert_data=True,
         buffer_device='cuda',
         disable_tqdm=False,
-        evaluations=[HumanoidVerseIsaacTrackingEvaluationConfig(name='HumanoidVerseIsaacTrackingEvaluationConfig', generate_videos=False, videos_dir='videos', video_name_prefix='unknown_agent', name_in_logs='humanoidverse_tracking_eval', env=None, num_envs=1024, n_episodes_per_motion=1)],
+        evaluations=[HumanoidVerseIsaacTrackingEvaluationConfig(name='HumanoidVerseIsaacTrackingEvaluationConfig', generate_videos=False, videos_dir='videos', video_name_prefix='unknown_agent', name_in_logs=('box_climb_eval' if box_climb else 'humanoidverse_tracking_eval'), env=None, num_envs=(4096 if box_climb else 1024), n_episodes_per_motion=1)],
         eval_every_steps=9600000,
         tags={},
     )
@@ -884,15 +938,39 @@ if __name__ == "__main__":
         help="Result directory or checkpoint directory to resume from while keeping a new work_dir for this run.",
     )
     parser.add_argument(
+        "--warm_start_model_from",
+        default=None,
+        help="Model-only BFM checkpoint directory to warm-start from; creates fresh optimizer, replay, and counters.",
+    )
+    parser.add_argument(
+        "--box_climb",
+        action="store_true",
+        help="Train the PiPlus H0W fixed motion-matched box environment.",
+    )
+    parser.add_argument(
+        "--work_dir",
+        default=None,
+        help="Explicit output run directory; useful for persistent remote supervisors.",
+    )
+    parser.add_argument(
         "--no_resume_replay_buffer",
         action="store_true",
         help="Resume model weights and train status, but start with an empty online replay buffer.",
+    )
+    parser.add_argument(
+        "--no_wandb",
+        action="store_true",
+        help="Disable W&B and keep metrics in the local run logs.",
     )
     args = parser.parse_args()
     train_bfm_zero(
         robot=args.robot,
         resume_from=args.resume_from,
         resume_replay_buffer=not args.no_resume_replay_buffer,
+        warm_start_model_from=args.warm_start_model_from,
+        box_climb=args.box_climb,
+        work_dir=args.work_dir,
+        use_wandb=not args.no_wandb,
     )
 
 # uv run --no-cache -m humanoidverse.meta_online_entry_point

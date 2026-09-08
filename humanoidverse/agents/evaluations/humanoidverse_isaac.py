@@ -22,6 +22,19 @@ from ..envs.humanoidverse_isaac import HumanoidVerseIsaacConfig, HumanoidVerseVe
 from .base import BaseEvalConfig, extract_model
 from humanoidverse.utils.helpers import select_motion_body_data
 
+
+# Bounds are in the local frame of the motion-matched terrain OBJ.  The
+# retargeted clip approaches the obstacle from negative y and exits on the
+# positive-y side.  Keep the margin explicit so the reported success metric is
+# reproducible and independent of the terrain/environment origin translation.
+BOX_X_MIN = -0.445649164
+BOX_X_MAX = 0.377491860
+BOX_Y_MIN = -0.177844620
+BOX_Y_MAX = 0.359597429
+BOX_TOP_Z = 0.337000000
+BOX_CROSS_MARGIN = 0.10
+BOX_TOP_HEIGHT_MARGIN = 0.10
+
 def get_next(field: str, data: Any):
     if "next" in data and field in data["next"]:
         return data["next"][field]
@@ -426,6 +439,7 @@ def _async_tracking_worker(
 
     ctx_dict = {}
     tracking_targets = {}
+    tracking_root_pos = {}
     # target_xpos_dict = {}
     tracking_joint_pos = {}
     dof_states_list = [None] * num_envs
@@ -442,6 +456,10 @@ def _async_tracking_worker(
         ctx = model.project_z(z)
         ctx_dict[m_id] = ctx
         tracking_targets[m_id] = tree_map(lambda x: x.cpu(), tracking_target)
+        # Keep the root trajectory separately from the policy observation so
+        # box-specific metrics can undo the per-environment terrain-origin
+        # translation when comparing simulator coordinates to OBJ coordinates.
+        tracking_root_pos[m_id] = tracking_target_dict["root_pos"].detach().cpu()
         tracking_joint_pos[m_id] = tracking_target_dict["dof_pos"].clone()
         # import ipdb; ipdb.set_trace()
 
@@ -545,6 +563,8 @@ def _async_tracking_worker(
                         "observation": tree_map(lambda x: x[0 : ctx_dict[m_id].shape[0] + 1, env_id], episode_data["observation"]),
                         "joint_pos": _joint_pos,
                         "target_joint_pos": _target_joint_pos,
+                        "xpos": episode_data["xpos"][0 : ctx_dict[m_id].shape[0], env_id],
+                        "target_root_pos": tracking_root_pos[m_id],
                     },
                 )
 
@@ -624,12 +644,60 @@ def _calc_metrics(ep):
     # phc metrics
     phc_metrics = compute_joint_pos_metrics(joint_pos=ep["joint_pos"], target_joint_pos=ep["target_joint_pos"])
     metr.update(phc_metrics)
+    if str(ep["motion_file"]).startswith("box__"):
+        metr.update(compute_box_climb_metrics(ep["xpos"], ep["target_root_pos"]))
     for k, v in metr.items():
         if isinstance(v, torch.Tensor):
             metr[k] = v.tolist()
     metr["motion_id"] = ep["motion_id"]
     metr["motion_file"] = ep["motion_file"]
     return {ep["motion_file"]: metr}
+
+
+def compute_box_climb_metrics(xpos, target_root_pos):
+    """Compute fixed-geometry box traversal metrics from one rollout.
+
+    The simulator root is shifted by a matched terrain origin.  Estimating
+    that shift from the first reference frame makes all thresholds local to
+    the OBJ and keeps metrics comparable across evaluation environments.
+    """
+    # Evaluation bookkeeping is read-only; keeping this small calculation on
+    # CPU also handles simulator trajectories (CUDA) paired with reference
+    # motion tensors (CPU) without cross-device arithmetic failures.
+    actual = torch.as_tensor(xpos, dtype=torch.float32).detach().cpu()
+    reference = torch.as_tensor(target_root_pos, dtype=torch.float32).detach().cpu()
+    if actual.ndim != 3 or actual.shape[1] < 1 or reference.ndim != 2 or reference.shape[1] < 3:
+        raise ValueError(f"Invalid box metric shapes: xpos={tuple(actual.shape)}, target_root_pos={tuple(reference.shape)}")
+    length = min(actual.shape[0], reference.shape[0])
+    actual_root = actual[:length, 0, :3]
+    reference_root = reference[:length, :3]
+    local_root = actual_root - (actual_root[0] - reference_root[0])
+    x, y, z = local_root.unbind(dim=-1)
+
+    near_side = y <= BOX_Y_MIN - BOX_CROSS_MARGIN
+    far_side = y >= BOX_Y_MAX + BOX_CROSS_MARGIN
+    near_idx = torch.where(near_side)[0]
+    far_idx = torch.where(far_side)[0]
+    crossed_far_side = bool(near_idx.numel() and far_idx.numel() and far_idx[-1] > near_idx[0])
+    peak_height = float(z.max().item())
+    peak_height_margin = peak_height - (BOX_TOP_Z + BOX_TOP_HEIGHT_MARGIN)
+    top_region = (
+        (x >= BOX_X_MIN - BOX_CROSS_MARGIN)
+        & (x <= BOX_X_MAX + BOX_CROSS_MARGIN)
+        & (y >= BOX_Y_MIN)
+        & (y <= BOX_Y_MAX)
+        & (z >= BOX_TOP_Z + BOX_TOP_HEIGHT_MARGIN)
+    )
+    top_reach_ratio = float(top_region.float().mean().item())
+    success = float(crossed_far_side and peak_height_margin >= 0.0)
+    return {
+        "box_climb_success": success,
+        "box_crossed_far_side": float(crossed_far_side),
+        "box_max_root_height_m": peak_height,
+        "box_peak_height_margin_m": peak_height_margin,
+        "box_top_reach_ratio": top_reach_ratio,
+        "box_forward_progress_m": float((y.max() - y.min()).item()),
+    }
 
 
 def compute_joint_pos_metrics(joint_pos, target_joint_pos):

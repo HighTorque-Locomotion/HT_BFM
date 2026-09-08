@@ -36,6 +36,52 @@ python -m humanoidverse.tracking_inference \
 
 ## Play Stage2 AMP Checkpoint
 
+历史固定 Isaac 速度跟踪最佳 checkpoint（推荐优先测试）：
+`logs/amp_stage2_piplus_lse_1gpu_4096env_1m_backward14_resume19800_20260903/checkpoint_19900.pt`。
+该版本在五指令固定 Isaac 测试中全部无终止：前向约 `0.391 m/s`、后向约 `-0.325 m/s`、横移约 `0.288 m/s`、偏航约 `0.557 rad/s`；对应训练使用负向 vx 编码倍率 `1.4` 和加权 14-motion expert 数据。
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_1gpu_4096env_1m_backward14_resume19800_20260903 \
+  --checkpoint logs/amp_stage2_piplus_lse_1gpu_4096env_1m_backward14_resume19800_20260903/checkpoint_19900.pt \
+  --expert-dataset dataset/pkl_cmd/piplus_lse_balanced5_plus_turn4_weighted.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_19900.mp4 \
+  --show-viewer
+```
+
+GPU11 最新物理平滑性候选 checkpoint（2026-09-08）：
+`logs/amp_stage2_piplus_lse_1gpu_4096env_1m_physical_smooth34500_resume34500_20260907/checkpoint_40600.pt`。
+该文件及同目录 `config.json` 已从 JumpServer GPU11 同步。checkpoint 大小为 50,745,334 bytes，SHA256 为
+`32fa498b5aa989799f447c75becd9844de196a45ed97af628183c8fc9fe34509`，并已验证可加载且内部迭代为 40600。
+该 lineage 从 `rewardtrack_upright/checkpoint_34500.pt` 恢复，并增加物理单位下的目标位置变化、目标位置二阶差分和目标力矩变化率约束。
+历史速度跟踪候选 `speedtrack_forward/checkpoint_46500.pt` 仍保留；40600 优先用于验证动作平滑性，不能仅按迭代编号比较两个不同 lineage。
+该 checkpoint 训练时启用了 JEPA/MPC；当前 `amp_stage2_play` 命令使用纯策略播放（不启用 MPC），部署前应单独做无 MPC 行为验证。
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_1gpu_4096env_1m_physical_smooth34500_resume34500_20260907 \
+  --checkpoint logs/amp_stage2_piplus_lse_1gpu_4096env_1m_physical_smooth34500_resume34500_20260907/checkpoint_40600.pt \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_40600.mp4 \
+  --show-viewer
+```
+
 Isaac Sim 是训练时使用的物理后端，优先用于判断运动稳定性。显存较小时可让 Isaac Sim 使用 GPU、BFM/Stage2 网络使用 CPU；8GB 显存本机建议使用下面的命令。
 
 ```bash
