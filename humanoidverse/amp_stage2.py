@@ -1488,6 +1488,7 @@ def ppo_update(
     extra_parameters: Iterable[nn.Parameter] | None = None,
     bfm_model: nn.Module | None = None,
     bfm_action_std: float = 0.0,
+    lora_regularization: float = 0.0,
 ) -> dict[str, float]:
     features = rollout.encoder_features.reshape(-1, rollout.encoder_features.shape[-1])
     raw_z = rollout.raw_z.reshape(-1, rollout.raw_z.shape[-1])
@@ -1514,6 +1515,7 @@ def ppo_update(
         "ratio_max": 0.0,
         "grad_norm": 0.0,
         "lora_grad_norm": 0.0,
+        "lora_regularization": 0.0,
         "raw_z_norm": 0.0,
     }
     update_count = 0
@@ -1543,6 +1545,13 @@ def ppo_update(
             policy_loss = -torch.minimum(unclipped, clipped).mean()
             value_loss = F.mse_loss(value, returns[indices])
             loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
+            lora_penalty = torch.zeros((), device=features.device)
+            if lora_regularization > 0.0 and extra_parameters is not None:
+                lora_penalty = sum(
+                    (parameter.square().mean() for parameter in extra_parameters if parameter.requires_grad),
+                    torch.zeros((), device=features.device),
+                )
+                loss = loss + float(lora_regularization) * lora_penalty
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             trainable_parameters = list(policy.parameters())
@@ -1573,6 +1582,7 @@ def ppo_update(
             metric_sums["ratio_max"] += float(ratio.max().detach())
             metric_sums["grad_norm"] += float(grad_norm.detach())
             metric_sums["lora_grad_norm"] += float(lora_grad_norm.detach())
+            metric_sums["lora_regularization"] += float(lora_penalty.detach())
             metric_sums["raw_z_norm"] += float(raw_z[indices].norm(dim=-1).mean().detach())
             update_count += 1
 
@@ -1656,6 +1666,12 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.02,
         help="Action-space exploration std used to give the BFM LoRA adapter a PPO score-function gradient.",
+    )
+    parser.add_argument(
+        "--lora-regularization",
+        type=float,
+        default=0.0,
+        help="L2 coefficient for LoRA parameters to keep the adapted BFM near its frozen base.",
     )
     parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
@@ -1787,6 +1803,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         raise ValueError("cross_axis_velocity_weight must be non-negative")
     if args.lora_rank <= 0 or args.lora_alpha <= 0.0 or args.lora_learning_rate <= 0.0 or args.lora_action_std <= 0.0:
         raise ValueError("LoRA rank, alpha, learning rate, and action std must be positive")
+    if args.lora_regularization < 0.0:
+        raise ValueError("LoRA regularization must be non-negative")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -1997,6 +2015,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             "alpha": float(args.lora_alpha),
             "learning_rate": float(args.lora_learning_rate),
             "action_std": float(args.lora_action_std),
+            "regularization": float(args.lora_regularization),
             "actor_linear_layers": int(lora_layer_count),
             "base_bfm_frozen": True,
         },
@@ -2262,6 +2281,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 extra_parameters=lora_parameters,
                 bfm_model=bfm_model,
                 bfm_action_std=args.lora_action_std,
+                lora_regularization=args.lora_regularization,
             )
             tracking_metrics = command_tracking_metrics(rollout.commands, rollout.base_lin_vel, rollout.base_ang_vel)
             metrics = {
