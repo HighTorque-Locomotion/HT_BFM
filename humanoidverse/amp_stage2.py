@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import joblib
 import mujoco
@@ -668,13 +668,14 @@ def restore_policy_optimizer(
     *,
     learning_rate: float,
     reset_for_input_migration: bool,
+    reset_for_lora: bool = False,
 ) -> str:
     """Restore valid Adam state while always honoring the requested LR."""
-    if not reset_for_input_migration and "policy_optimizer" in checkpoint:
+    if not reset_for_input_migration and not reset_for_lora and "policy_optimizer" in checkpoint:
         optimizer.load_state_dict(checkpoint["policy_optimizer"])
         status = "loaded_with_lr_override"
     else:
-        status = "reset_for_encoder_input_transform" if reset_for_input_migration else "reset_missing_state"
+        status = "reset_for_lora" if reset_for_lora else ("reset_for_encoder_input_transform" if reset_for_input_migration else "reset_missing_state")
     for group in optimizer.param_groups:
         group["lr"] = float(learning_rate)
     return status
@@ -729,8 +730,10 @@ def compute_gae(
 @dataclass
 class Stage2Rollout:
     encoder_features: torch.Tensor
+    bfm_observations: dict[str, torch.Tensor]
     commands: torch.Tensor
     raw_z: torch.Tensor
+    bfm_actions: torch.Tensor
     old_log_prob: torch.Tensor
     values: torch.Tensor
     env_rewards: torch.Tensor
@@ -1284,6 +1287,60 @@ def _bfm_action(bfm_model, obs: Mapping[str, torch.Tensor], z: torch.Tensor) -> 
     return distribution.mean.float()
 
 
+class LoRALinear(nn.Module):
+    """Frozen linear layer plus a zero-initialized low-rank residual."""
+
+    def __init__(self, base: nn.Linear, rank: int, alpha: float) -> None:
+        super().__init__()
+        if rank <= 0:
+            raise ValueError(f"LoRA rank must be positive, got {rank}")
+        self.base = base
+        for parameter in self.base.parameters():
+            parameter.requires_grad_(False)
+        self.lora_A = nn.Parameter(torch.empty(rank, base.in_features, device=base.weight.device, dtype=base.weight.dtype))
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank, device=base.weight.device, dtype=base.weight.dtype))
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5.0))
+        self.scale = float(alpha) / float(rank)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        base = self.base(x)
+        update = F.linear(F.linear(x, self.lora_A), self.lora_B) * self.scale
+        return base + update
+
+
+def inject_bfm_actor_lora(actor: nn.Module, rank: int, alpha: float) -> int:
+    """Replace all standard Linear layers in the frozen BFM actor with LoRA wrappers."""
+    count = 0
+    for name, child in list(actor.named_children()):
+        if isinstance(child, LoRALinear):
+            count += 1
+        elif isinstance(child, nn.Linear):
+            setattr(actor, name, LoRALinear(child, rank=rank, alpha=alpha))
+            count += 1
+        else:
+            count += inject_bfm_actor_lora(child, rank=rank, alpha=alpha)
+    return count
+
+
+def bfm_lora_parameters(model: nn.Module) -> list[nn.Parameter]:
+    return [parameter for name, parameter in model.named_parameters() if "lora_" in name and parameter.requires_grad]
+
+
+def bfm_lora_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
+    return {name: value.detach().cpu() for name, value in model.named_parameters() if "lora_" in name}
+
+
+def load_bfm_lora_state_dict(model: nn.Module, state: Mapping[str, torch.Tensor] | None) -> None:
+    if not state:
+        return
+    own = dict(model.named_parameters())
+    missing = [name for name in state if name not in own]
+    if missing:
+        raise ValueError(f"Checkpoint contains incompatible BFM LoRA parameters: {missing[:5]}")
+    for name, value in state.items():
+        own[name].data.copy_(value.to(device=own[name].device, dtype=own[name].dtype))
+
+
 def _freeze_bfm(model) -> None:
     model.eval()
     for parameter in model.parameters():
@@ -1415,9 +1472,20 @@ def ppo_update(
     optimizer: torch.optim.Optimizer,
     max_grad_norm: float,
     target_kl: float | None = 0.01,
+    extra_parameters: Iterable[nn.Parameter] | None = None,
+    bfm_model: nn.Module | None = None,
+    bfm_action_std: float = 0.0,
 ) -> dict[str, float]:
     features = rollout.encoder_features.reshape(-1, rollout.encoder_features.shape[-1])
     raw_z = rollout.raw_z.reshape(-1, rollout.raw_z.shape[-1])
+    rollout_bfm_observations = getattr(rollout, "bfm_observations", {})
+    bfm_observations = {
+        name: value.reshape(-1, *value.shape[2:]) for name, value in rollout_bfm_observations.items()
+    }
+    rollout_bfm_actions = getattr(rollout, "bfm_actions", None)
+    bfm_actions = (
+        rollout_bfm_actions.reshape(-1, rollout_bfm_actions.shape[-1]) if rollout_bfm_actions is not None else None
+    )
     old_log_prob = rollout.old_log_prob.reshape(-1)
     advantages = advantages.reshape(-1)
     returns = returns.reshape(-1)
@@ -1442,6 +1510,14 @@ def ppo_update(
         for indices in torch.randperm(sample_count, device=features.device).split(int(minibatch_size)):
             distribution = policy.distribution(features[indices])
             log_prob = distribution.log_prob(raw_z[indices]).sum(dim=-1)
+            if bfm_model is not None and bfm_action_std > 0.0:
+                if not bfm_observations or bfm_actions is None:
+                    raise ValueError("LoRA PPO update requires BFM observations and sampled actions in the rollout")
+                bfm_obs_batch = {name: value[indices] for name, value in bfm_observations.items()}
+                z = bfm_model.project_z(raw_z[indices])
+                action_mean = _bfm_action(bfm_model, bfm_obs_batch, z)
+                action_distribution = torch.distributions.Normal(action_mean, float(bfm_action_std))
+                log_prob = log_prob + action_distribution.log_prob(bfm_actions[indices]).sum(dim=-1)
             entropy = distribution.entropy().mean(dim=-1).mean()
             _, _, value = policy(features[indices])
             # Bound the exponent before exp() so one bad minibatch cannot poison
@@ -1455,8 +1531,11 @@ def ppo_update(
             loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            average_gradients(policy.parameters())
-            grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+            trainable_parameters = list(policy.parameters())
+            if extra_parameters is not None:
+                trainable_parameters.extend(parameter for parameter in extra_parameters if parameter.requires_grad)
+            average_gradients(trainable_parameters)
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
             optimizer.step()
             approx_kl = (old_log_prob[indices] - log_prob).mean()
             # Every rank must make the same early-stop decision. Otherwise one
@@ -1549,6 +1628,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=float, default=16.0)
+    parser.add_argument("--lora-learning-rate", type=float, default=1e-5)
+    parser.add_argument(
+        "--lora-action-std",
+        type=float,
+        default=0.02,
+        help="Action-space exploration std used to give the BFM LoRA adapter a PPO score-function gradient.",
+    )
     parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
     parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
     parser.add_argument("--amp-weight", type=float, default=0.06)
@@ -1677,6 +1765,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         raise ValueError("command_backward_scale must be positive")
     if args.cross_axis_velocity_weight < 0.0:
         raise ValueError("cross_axis_velocity_weight must be non-negative")
+    if args.lora_rank <= 0 or args.lora_alpha <= 0.0 or args.lora_learning_rate <= 0.0 or args.lora_action_std <= 0.0:
+        raise ValueError("LoRA rank, alpha, learning rate, and action std must be positive")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -1697,6 +1787,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
     bfm_model = load_model_from_checkpoint_dir(args.bfm_checkpoint, device=bfm_load_device)
     _freeze_bfm(bfm_model)
+    lora_layer_count = inject_bfm_actor_lora(bfm_model._actor, rank=args.lora_rank, alpha=args.lora_alpha)
+    lora_parameters = bfm_lora_parameters(bfm_model._actor)
+    if not lora_parameters:
+        raise RuntimeError("No BFM actor linear layers were replaced with LoRA parameters")
     bfm_action_dim = int(getattr(bfm_model, "action_dim", -1))
     env_action_dim = int(env.single_action_space.shape[0])
     if env_action_dim != len(robot_training.policy_joint_names):
@@ -1733,7 +1827,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         hidden_dim=int(backward_arch.hidden_dim),
         hidden_layers=int(backward_arch.hidden_layers),
     ).to(device)
-    policy_optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    policy_optimizer = torch.optim.Adam(
+        [
+            {"params": policy.parameters(), "lr": args.learning_rate},
+            {"params": lora_parameters, "lr": args.lora_learning_rate},
+        ]
+    )
 
     latent_stats = _collect_bfm_latent_stats(
         bfm_agent=None,
@@ -1795,6 +1894,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         if not resume_path.is_file():
             raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        load_bfm_lora_state_dict(bfm_model._actor, checkpoint.get("bfm_lora"))
         legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
         discriminator.load_state_dict(checkpoint["discriminator"])
         policy_optimizer_resume = restore_policy_optimizer(
@@ -1802,6 +1902,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             checkpoint,
             learning_rate=args.learning_rate,
             reset_for_input_migration=legacy_input_migrated,
+            reset_for_lora=checkpoint.get("bfm_lora") is None,
         )
         discriminator_optimizer_resume = restore_discriminator_optimizer(
             discriminator_optimizer,
@@ -1864,6 +1965,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "expert_dataset": str(Path(args.expert_dataset).resolve()),
         "bfm_checkpoint": str(Path(args.bfm_checkpoint).resolve()),
         "action_dim": bfm_action_dim,
+        "bfm_lora": {
+            "enabled": True,
+            "rank": int(args.lora_rank),
+            "alpha": float(args.lora_alpha),
+            "learning_rate": float(args.lora_learning_rate),
+            "action_std": float(args.lora_action_std),
+            "actor_linear_layers": int(lora_layer_count),
+            "base_bfm_frozen": True,
+        },
         "policy_joint_names": list(robot_training.policy_joint_names),
         "fixed_joint_names": list(robot_training.fixed_joint_names),
         "simulator_control_joint_names": list(robot_training.robot.control_joint_names),
@@ -1944,7 +2054,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     try:
         for iteration in range(start_iteration, args.iterations):
-            encoder_features, commands_store, raw_z_store = [], [], []
+            encoder_features, bfm_observations_store, commands_store, raw_z_store = [], [], [], []
+            bfm_actions_store = []
             old_log_probs, values_store = [], []
             env_rewards, locomotion_rewards, terminated_store, truncated_store, crash_store, fall_store, timeout_values, amp_features = (
                 [], [], [], [], [], [], [], []
@@ -1961,10 +2072,13 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         command_scale=command_input_scale,
                         backward_command_scale=args.command_backward_scale,
                     )
-                    raw_z, old_log_prob, value = policy.sample(encoder_input)
+                    raw_z, old_z_log_prob, value = policy.sample(encoder_input)
                     # Reuse the first-stage FBModel.project_z(); it reads norm_z from the checkpoint config.
                     z = bfm_model.project_z(raw_z)
-                    action = _bfm_action(bfm_model, obs_t, z)
+                    action_mean = _bfm_action(bfm_model, obs_t, z)
+                    action_distribution = torch.distributions.Normal(action_mean, args.lora_action_std)
+                    action = action_distribution.sample().clamp(-1.0, 1.0)
+                    old_log_prob = old_z_log_prob + action_distribution.log_prob(action).sum(dim=-1)
                 next_obs, env_reward, terminated, truncated, info = env.step(action, to_numpy=False)
                 terminated = terminated.to(device=device, dtype=torch.bool)
                 truncated = truncated.to(device=device, dtype=torch.bool)
@@ -1993,8 +2107,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     online_history.reset_envs(done.nonzero(as_tuple=False).squeeze(-1), env._env.simulator.dof_pos)
 
                 encoder_features.append(encoder_input.detach())
+                bfm_observations_store.append({name: value.detach() for name, value in obs_t.items()})
                 commands_store.append(commands.detach())
                 raw_z_store.append(raw_z.detach())
+                bfm_actions_store.append(action.detach())
                 old_log_probs.append(old_log_prob.detach())
                 values_store.append(value.detach())
                 env_rewards.append(env_reward.to(device=device, dtype=torch.float32))
@@ -2042,8 +2158,13 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
             rollout = Stage2Rollout(
                 encoder_features=torch.stack(encoder_features),
+                bfm_observations={
+                    name: torch.stack([step[name] for step in bfm_observations_store])
+                    for name in bfm_observations_store[0]
+                },
                 commands=torch.stack(commands_store),
                 raw_z=torch.stack(raw_z_store),
+                bfm_actions=torch.stack(bfm_actions_store),
                 old_log_prob=torch.stack(old_log_probs),
                 values=torch.stack(values_store),
                 env_rewards=torch.stack(env_rewards),
@@ -2111,6 +2232,9 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 optimizer=policy_optimizer,
                 max_grad_norm=1.0,
                 target_kl=args.target_kl,
+                extra_parameters=lora_parameters,
+                bfm_model=bfm_model,
+                bfm_action_std=args.lora_action_std,
             )
             tracking_metrics = command_tracking_metrics(rollout.commands, rollout.base_lin_vel, rollout.base_ang_vel)
             metrics = {
@@ -2167,6 +2291,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     {
                         "policy": policy.state_dict(),
                         "policy_optimizer": policy_optimizer.state_dict(),
+                        "bfm_lora": bfm_lora_state_dict(bfm_model._actor),
                         "discriminator": discriminator.state_dict(),
                         "discriminator_optimizer": discriminator_optimizer.state_dict(),
                         "amp_reward_normalizer": reward_normalizer.state_dict(),
