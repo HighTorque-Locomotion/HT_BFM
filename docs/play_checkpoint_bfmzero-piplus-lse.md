@@ -52,6 +52,7 @@ python -m humanoidverse.amp_stage2_play \
   --device cuda:0 \
   --policy-device cpu \
   --gamepad \
+  --action-lowpass-alpha 0.2 \
   --save-mp4 \
   --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_19900.mp4 \
   --show-viewer
@@ -65,6 +66,43 @@ GPU11 最新物理平滑性候选 checkpoint（2026-09-08）：
 历史速度跟踪候选 `speedtrack_forward/checkpoint_46500.pt` 仍保留；40600 优先用于验证动作平滑性，不能仅按迭代编号比较两个不同 lineage。
 该 checkpoint 训练时启用了 JEPA/MPC；当前 `amp_stage2_play` 命令使用纯策略播放（不启用 MPC），部署前应单独做无 MPC 行为验证。
 
+GPU11 最新部署滤波闭环实验 checkpoint（2026-09-09）：
+`logs/amp_stage2_piplus_lse_1gpu_4096env_1m_rewardtrack_filter_mpc_off_resume34500_20260908/checkpoint_39900.pt`。
+该 lineage 从 `checkpoint_34500.pt` 恢复，在训练中模拟部署 action low-pass `alpha=0.2`，并关闭 MPC/JEPA。当前日志显示动作/关节加速度更低，但速度跟踪、后退 wrong-way fraction 和 termination 仍未达到 34500 基线，暂作为滤波闭环研究候选，不作为已验证真机 checkpoint。
+
+播放该 checkpoint 时必须使用与训练/部署一致的 action 低通滤波：`--action-lowpass-alpha 0.2`。播放脚本会先生成 BFM raw action，再滤波后送入环境；不加该参数会得到未滤波行为，不能与真机结果直接比较。
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_1gpu_4096env_1m_rewardtrack_filter_mpc_off_resume34500_20260908 \
+  --checkpoint logs/amp_stage2_piplus_lse_1gpu_4096env_1m_rewardtrack_filter_mpc_off_resume34500_20260908/checkpoint_39900.pt \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --action-lowpass-alpha 0.2 \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_39900.mp4 \
+  --show-viewer
+```
+
+MuJoCo 快速复核：
+
+```bash
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_1gpu_4096env_1m_rewardtrack_filter_mpc_off_resume34500_20260908 \
+  --checkpoint logs/amp_stage2_piplus_lse_1gpu_4096env_1m_rewardtrack_filter_mpc_off_resume34500_20260908/checkpoint_39900.pt \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
+  --simulator mujoco --device auto \
+  --fixed-command -0.3 0.0 0.0 \
+  --action-lowpass-alpha 0.2 \
+  --headless --max-steps 1000 --log-every-steps 50 --no-realtime
+```
+
 ```bash
 cd /home/sunteng/Project/HT_BFM
 conda activate env_isaaclab
@@ -77,6 +115,7 @@ python -m humanoidverse.amp_stage2_play \
   --device cuda:0 \
   --policy-device cpu \
   --gamepad \
+  --action-lowpass-alpha 0.2 \
   --save-mp4 \
   --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_40600.mp4 \
   --show-viewer
