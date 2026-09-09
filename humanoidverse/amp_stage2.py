@@ -378,6 +378,19 @@ class AMPDiscriminator(nn.Module):
         return self(policy_features)
 
 
+def infer_amp_discriminator_hidden_dims(state: Mapping[str, torch.Tensor] | None) -> tuple[int, int]:
+    """Recover the discriminator architecture from a Stage2 checkpoint."""
+    if not state:
+        return 512, 256
+    first = state.get("net.0.weight")
+    second = state.get("net.2.weight")
+    if first is None or second is None or first.ndim != 2 or second.ndim != 2:
+        raise ValueError("Stage2 checkpoint has an unsupported AMP discriminator state layout")
+    if int(second.shape[1]) != int(first.shape[0]):
+        raise ValueError("Stage2 checkpoint AMP discriminator hidden dimensions are inconsistent")
+    return int(first.shape[0]), int(second.shape[0])
+
+
 class MimicLiteRewardNormalizer(nn.Module):
     """Running scalar normalizer matching MimicLite's ``VecNorm(input_shape=(1,))``."""
 
@@ -1781,6 +1794,13 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     work_dir = Path(args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     _ensure_runtime_cache(work_dir)
+    resume_path: Path | None = None
+    checkpoint: Mapping[str, Any] | None = None
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
     env, robot_training = build_piplus_locomotion_env(
         device=args.device,
         robot_config=args.robot_config,
@@ -1887,7 +1907,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         key_bodies=DEFAULT_KEY_BODIES,
         history_length=args.history_length,
     )
-    discriminator = AMPDiscriminator(expert.feature_dim).to(device)
+    discriminator_hidden_dims = infer_amp_discriminator_hidden_dims(
+        checkpoint.get("discriminator") if checkpoint is not None else None
+    )
+    discriminator = AMPDiscriminator(expert.feature_dim, hidden_dims=discriminator_hidden_dims).to(device)
     broadcast_module_state(policy)
     broadcast_module_state(discriminator)
     discriminator_optimizer = torch.optim.Adam(discriminator.parameters(), lr=args.discriminator_learning_rate)
@@ -1896,11 +1919,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     policy_optimizer_resume = "fresh"
     discriminator_optimizer_resume = "fresh"
     legacy_input_migrated = False
-    if args.resume:
-        resume_path = Path(args.resume)
-        if not resume_path.is_file():
-            raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+    if checkpoint is not None and resume_path is not None:
         load_bfm_lora_state_dict(bfm_model._actor, checkpoint.get("bfm_lora"))
         legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
         discriminator.load_state_dict(checkpoint["discriminator"])
@@ -2006,6 +2025,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "command_encoder_hidden_dim": int(policy.hidden_dim),
         "command_encoder_hidden_layers": int(policy.hidden_layers),
         "expert_feature_dim": int(expert.feature_dim),
+        "discriminator_hidden_dims": list(discriminator_hidden_dims),
         "expert_motion_count": int(expert.motion_count),
         "command_range": {"low": commands_low.tolist(), "high": commands_high.tolist()},
         "command_stand_prob": args.command_stand_prob,
