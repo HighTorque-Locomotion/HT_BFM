@@ -9,6 +9,7 @@ from humanoidverse.amp_stage2 import (
     MIMICLITE_LOCOMOTION_WEIGHTS,
     AMPDiscriminator,
     CommandEncoderPolicy,
+    LoRALinear,
     MimicLiteLocomotionRewardState,
     _command_category_ids,
     _load_piplus_robot_contract,
@@ -20,10 +21,12 @@ from humanoidverse.amp_stage2 import (
     _torchrun_command,
     _transition_core,
     baseline_normalized_linvel_reward,
+    bfm_lora_parameters,
     command_tracking_metrics,
     compute_gae,
     encoder_input_scale,
     flatten_encoder_observation,
+    inject_bfm_actor_lora,
     load_command_encoder_policy_state,
     ppo_update,
     project_latent,
@@ -34,6 +37,26 @@ from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBas
 
 
 class AmpStage2Test(unittest.TestCase):
+    def test_lora_linear_starts_as_frozen_base_and_has_trainable_residual(self):
+        base = torch.nn.Linear(4, 3)
+        x = torch.randn(5, 4)
+        expected = base(x).detach()
+        layer = LoRALinear(base, rank=2, alpha=4.0)
+        actual = layer(x)
+        self.assertTrue(torch.allclose(actual, expected))
+        self.assertFalse(layer.base.weight.requires_grad)
+        self.assertTrue(layer.lora_A.requires_grad)
+        self.assertTrue(layer.lora_B.requires_grad)
+
+    def test_inject_bfm_actor_lora_replaces_standard_linears(self):
+        actor = torch.nn.Sequential(torch.nn.Linear(4, 8), torch.nn.ReLU(), torch.nn.Linear(8, 2))
+        count = inject_bfm_actor_lora(actor, rank=2, alpha=4.0)
+        self.assertEqual(count, 2)
+        parameters = bfm_lora_parameters(actor)
+        self.assertEqual(len(parameters), 4)
+        self.assertTrue(all(parameter.requires_grad for parameter in parameters))
+        self.assertTrue(all(not parameter.requires_grad for name, parameter in actor.named_parameters() if "lora_" not in name))
+
     def test_sample_commands_lateral_only_probability(self):
         commands = _sample_commands(
             512,

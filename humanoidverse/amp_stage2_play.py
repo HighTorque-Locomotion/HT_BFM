@@ -33,6 +33,8 @@ from humanoidverse.amp_stage2 import (
     build_piplus_locomotion_env,
     encoder_input_scale,
     flatten_encoder_observation,
+    inject_bfm_actor_lora,
+    load_bfm_lora_state_dict,
     load_command_encoder_policy_state,
 )
 
@@ -483,6 +485,18 @@ def play(args: argparse.Namespace) -> None:
         hidden_layers=int(metadata["command_encoder_hidden_layers"]),
     ).to(policy_device)
     checkpoint = torch.load(paths.checkpoint, map_location=policy_device, weights_only=False)
+    lora_metadata = metadata.get("bfm_lora", {})
+    if isinstance(lora_metadata, Mapping) and lora_metadata.get("enabled"):
+        lora_rank = int(lora_metadata["rank"])
+        lora_alpha = float(lora_metadata["alpha"])
+        layer_count = inject_bfm_actor_lora(bfm_model._actor, rank=lora_rank, alpha=lora_alpha)
+        if layer_count != int(lora_metadata.get("actor_linear_layers", layer_count)):
+            raise ValueError(
+                f"Stage2 LoRA actor layer count mismatch: checkpoint={lora_metadata.get('actor_linear_layers')} "
+                f"current_bfm={layer_count}"
+            )
+        load_bfm_lora_state_dict(bfm_model._actor, checkpoint.get("bfm_lora"))
+        bfm_model.eval()
     load_command_encoder_policy_state(
         policy,
         checkpoint,
