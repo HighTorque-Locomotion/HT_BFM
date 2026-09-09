@@ -1500,6 +1500,7 @@ def ppo_update(
         "ratio_mean": 0.0,
         "ratio_max": 0.0,
         "grad_norm": 0.0,
+        "lora_grad_norm": 0.0,
         "raw_z_norm": 0.0,
     }
     update_count = 0
@@ -1532,8 +1533,13 @@ def ppo_update(
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             trainable_parameters = list(policy.parameters())
+            lora_grad_norm = torch.zeros((), device=features.device)
             if extra_parameters is not None:
-                trainable_parameters.extend(parameter for parameter in extra_parameters if parameter.requires_grad)
+                lora_parameters = [parameter for parameter in extra_parameters if parameter.requires_grad]
+                trainable_parameters.extend(lora_parameters)
+                lora_grad_norm = torch.sqrt(
+                    sum((parameter.grad.detach().square().sum() for parameter in lora_parameters if parameter.grad is not None), torch.zeros((), device=features.device))
+                )
             average_gradients(trainable_parameters)
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
             optimizer.step()
@@ -1553,6 +1559,7 @@ def ppo_update(
             metric_sums["ratio_mean"] += float(ratio.mean().detach())
             metric_sums["ratio_max"] += float(ratio.max().detach())
             metric_sums["grad_norm"] += float(grad_norm.detach())
+            metric_sums["lora_grad_norm"] += float(lora_grad_norm.detach())
             metric_sums["raw_z_norm"] += float(raw_z[indices].norm(dim=-1).mean().detach())
             update_count += 1
 
