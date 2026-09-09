@@ -406,6 +406,8 @@ def play(args: argparse.Namespace) -> None:
     paths, metadata = _resolve_paths(args)
     if not 0.0 < args.command_smoothing <= 1.0:
         raise ValueError("--command-smoothing must be in (0, 1]")
+    if not 0.0 < args.action_lowpass_alpha <= 1.0:
+        raise ValueError("--action-lowpass-alpha must be in (0, 1]")
     if not 0.0 <= args.deadzone < 1.0:
         raise ValueError("--deadzone must be in [0, 1)")
     if args.fps <= 0:
@@ -552,6 +554,7 @@ def play(args: argparse.Namespace) -> None:
         )
         video_path.parent.mkdir(parents=True, exist_ok=True)
     video_writer: media.VideoWriter | None = None
+    filtered_action: torch.Tensor | None = None
     print(f"[INFO] Stage2 checkpoint={paths.checkpoint} iteration={checkpoint.get('iteration', 'unknown')}")
     print(f"[INFO] Simulator={args.simulator} env_device={device} policy_device={policy_device}")
     print(f"[INFO] First-stage BFM checkpoint={paths.bfm_checkpoint}")
@@ -583,6 +586,7 @@ def play(args: argparse.Namespace) -> None:
             if args.reset_button in pressed:
                 observation, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
                 commands.zero_()
+                filtered_action = None
 
             if fixed_command is None:
                 forward_axis = args.axis_ly if gamepad_axes is not None else args.forward_axis
@@ -614,7 +618,11 @@ def play(args: argparse.Namespace) -> None:
                     backward_command_scale=backward_command_scale,
                 )
                 raw_z = policy.deterministic_z(encoder_input)
-                action = _bfm_action(bfm_model, observation_t, bfm_model.project_z(raw_z)).to(device)
+                raw_action = _bfm_action(bfm_model, observation_t, bfm_model.project_z(raw_z)).to(device)
+                if filtered_action is None:
+                    filtered_action = torch.zeros_like(raw_action)
+                filtered_action = filtered_action + float(args.action_lowpass_alpha) * (raw_action - filtered_action)
+                action = filtered_action
             observation, _reward, terminated, truncated, _info = env.step(action, to_numpy=False)
 
             if viewer is not None or video_renderer is not None:
@@ -692,6 +700,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quit-button", type=int, default=1, help="Xbox B / PlayStation Circle by default.")
     parser.add_argument("--fixed-command", type=float, nargs=3, metavar=("VX", "VY", "WZ"), default=None)
     parser.add_argument("--command-smoothing", type=float, default=0.1)
+    parser.add_argument(
+        "--action-lowpass-alpha",
+        type=float,
+        default=0.2,
+        help="One-pole low-pass alpha applied to executed BFM actions; 0.2 matches deployment/training filter.",
+    )
     parser.add_argument(
         "--command-lateral-scale",
         type=float,
