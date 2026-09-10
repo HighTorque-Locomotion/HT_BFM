@@ -12,14 +12,17 @@ from humanoidverse.amp_stage2 import (
     LoRALinear,
     MimicLiteLocomotionRewardState,
     _command_category_ids,
+    _hydra_robot_name,
     _load_piplus_robot_contract,
     _motion_qpos,
     _policy_dof_from_motion,
+    _resample_done_command_targets,
     _sample_commands,
     _stage2_prepare_pre_reset_transition,
     _stage2_update_reset_buf,
     _torchrun_command,
     _transition_core,
+    _validate_stage1_robot_contract,
     baseline_normalized_linvel_reward,
     bfm_lora_parameters,
     command_tracking_metrics,
@@ -33,10 +36,32 @@ from humanoidverse.amp_stage2 import (
     restore_discriminator_optimizer,
     restore_policy_optimizer,
 )
+from humanoidverse.amp_stage2_amp018_speedtrack_nofilter_20260909 import (
+    FEET_DIAGNOSTIC_KEYS as AMP018_FEET_DIAGNOSTIC_KEYS,
+)
+from humanoidverse.amp_stage2_amp018_speedtrack_nofilter_20260909 import (
+    FOOT_MIN_SEPARATION as AMP018_FOOT_MIN_SEPARATION,
+)
+from humanoidverse.amp_stage2_amp018_speedtrack_nofilter_20260909 import (
+    MimicLiteLocomotionRewardState as Amp018MimicLiteLocomotionRewardState,
+)
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
 
 
 class AmpStage2Test(unittest.TestCase):
+    def test_h0w_robot_contract_matches_stage1_checkpoint(self):
+        contract = _load_piplus_robot_contract(
+            "humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H0W.yaml"
+        )
+        validated = _validate_stage1_robot_contract(
+            contract,
+            "huiying/bfmzero-piplus-h0w-isaac-20260730_102224(1)/checkpoint",
+        )
+        self.assertEqual(_hydra_robot_name("PiPlus_S_12L8A0G2H0W"), "robot=piplus/PiPlus_S_12L8A0G2H0W")
+        self.assertTrue(validated["validated"])
+        self.assertEqual(contract.robot_type, "PiPlus_S_12L8A0G2H0W")
+        self.assertEqual(len(contract.policy_joint_names), 22)
+
     def test_lora_linear_starts_as_frozen_base_and_has_trainable_residual(self):
         base = torch.nn.Linear(4, 3)
         x = torch.randn(5, 4)
@@ -486,11 +511,118 @@ class AmpStage2Test(unittest.TestCase):
         self.assertTrue(torch.equal(commands[:, :2], torch.zeros_like(commands[:, :2])))
         self.assertTrue(torch.equal(commands[:, 2], torch.full((32,), 0.5)))
 
+    def test_done_command_targets_are_resampled_to_avoid_warmup_starvation(self):
+        targets = torch.zeros(4, 3)
+        done = torch.tensor([True, False, True, False])
+        low = torch.tensor([-0.8, -0.5, -0.8])
+        high = torch.tensor([0.8, 0.5, 0.8])
+        torch.manual_seed(7)
+        updated = _resample_done_command_targets(
+            targets,
+            done,
+            low,
+            high,
+            stand_prob=0.0,
+            turn_prob=0.0,
+            lateral_prob=0.0,
+        )
+        self.assertTrue(torch.equal(updated[~done], torch.zeros_like(updated[~done])))
+        self.assertTrue(torch.any(updated[done].abs() > 0.0))
+        self.assertTrue(torch.equal(targets, torch.zeros_like(targets)))
+
     def test_torchrun_command_uses_standard_pytorch_launcher(self):
         command = _torchrun_command(4, ["--smoke", "--gpu-ids", "all"])
         self.assertEqual(command[1:4], ["-m", "torch.distributed.run", "--standalone"])
         self.assertIn("--nproc_per_node=4", command)
         self.assertEqual(command[-3:], ["--smoke", "--gpu-ids", "all"])
+
+
+class Amp018FootSeparationPenaltyTest(unittest.TestCase):
+    def _state(self):
+        return Amp018MimicLiteLocomotionRewardState(
+            num_envs=1,
+            num_dof=2,
+            dt=0.02,
+            feet_indices=torch.tensor([0, 1]),
+            torso_index=0,
+            joint_vel_indices=torch.tensor([0]),
+            joint_deviation_indices=torch.tensor([0]),
+            device=torch.device("cpu"),
+        )
+
+    def _core(self, foot_y: float) -> SimpleNamespace:
+        return SimpleNamespace(
+            num_envs=1,
+            device=torch.device("cpu"),
+            base_lin_vel=torch.zeros(1, 3),
+            base_ang_vel=torch.zeros(1, 3),
+            body_ang_vel=torch.zeros(1, 1, 3),
+            contact_forces=torch.zeros(1, 2, 3),
+            body_pos=torch.tensor([[[0.0, foot_y, 0.05], [0.0, -foot_y, 0.05]]]),
+            body_rot=torch.tensor([[[0.0, 0.0, 0.0, 1.0]]]),
+            torques=torch.zeros(1, 2),
+            dof_vel=torch.zeros(1, 2),
+            dof_pos=torch.zeros(1, 2),
+            default_dof_pos=torch.zeros(1, 2),
+            default_dof_pos_offset=torch.zeros(1, 2),
+        )
+
+    def test_foot_separation_penalty_penalizes_below_threshold(self):
+        state = self._state()
+        core = self._core(0.05)  # lateral separation 0.10 < 0.14
+        _, components = state.compute(core, torch.zeros(1, 3), torch.zeros(1, 2), torch.zeros(1, dtype=torch.bool))
+        violation = AMP018_FOOT_MIN_SEPARATION - 0.10
+        expected = -state.dt * 20.0 * violation * violation
+        self.assertAlmostEqual(components["foot_separation_penalty"].item(), expected, places=7)
+
+    def test_foot_separation_penalty_is_zero_above_threshold(self):
+        state = self._state()
+        core = self._core(0.10)  # lateral separation 0.20 > 0.14
+        _, components = state.compute(core, torch.zeros(1, 3), torch.zeros(1, 2), torch.zeros(1, dtype=torch.bool))
+        self.assertEqual(components["foot_separation_penalty"].item(), 0.0)
+
+    def test_foot_separation_penalty_is_command_gated(self):
+        state = self._state()
+        core = self._core(0.05)
+        commands_cases = {
+            "slow forward": torch.tensor([[0.3, 0.0, 0.0]]),
+            "fast forward": torch.tensor([[0.6, 0.0, 0.0]]),
+            "lateral": torch.tensor([[0.0, 0.4, 0.0]]),
+            "turning": torch.tensor([[0.0, 0.0, 0.6]]),
+            "standing": torch.zeros(1, 3),
+        }
+        values = {}
+        for name, commands in commands_cases.items():
+            _, components = state.compute(core, commands, torch.zeros(1, 2), torch.zeros(1, dtype=torch.bool))
+            values[name] = components["foot_separation_penalty"].item()
+        self.assertEqual(values["standing"], values["slow forward"])
+        self.assertLess(values["standing"], 0.0)
+        self.assertEqual(values["fast forward"], 0.0)
+        self.assertEqual(values["lateral"], 0.0)
+        self.assertEqual(values["turning"], 0.0)
+
+    def test_foot_separation_diagnostics_are_reported(self):
+        state = self._state()
+        core = self._core(0.05)
+        state.compute(core, torch.zeros(1, 3), torch.zeros(1, 2), torch.zeros(1, dtype=torch.bool))
+        diagnostics = state.last_feet_diagnostics
+        self.assertEqual(set(diagnostics), set(AMP018_FEET_DIAGNOSTIC_KEYS))
+        self.assertAlmostEqual(diagnostics["lateral_foot_separation_mean"].item(), 0.10, places=6)
+        self.assertAlmostEqual(diagnostics["foot_separation_violation_mean"].item(), AMP018_FOOT_MIN_SEPARATION - 0.10, places=6)
+        self.assertEqual(diagnostics["foot_separation_active_fraction"].item(), 1.0)
+
+    def test_foot_separation_requires_two_feet(self):
+        with self.assertRaises(ValueError):
+            Amp018MimicLiteLocomotionRewardState(
+                num_envs=1,
+                num_dof=2,
+                dt=0.02,
+                feet_indices=torch.tensor([0, 1, 2]),
+                torso_index=0,
+                joint_vel_indices=torch.tensor([0]),
+                joint_deviation_indices=torch.tensor([0]),
+                device=torch.device("cpu"),
+            )
 
 
 if __name__ == "__main__":

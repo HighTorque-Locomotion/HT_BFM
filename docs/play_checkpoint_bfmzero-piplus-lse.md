@@ -15,6 +15,38 @@ python -m humanoidverse.visualize_motion \
   --max-frames 300
 ```
 
+## PiPlus H0W 22DoF 冻结 BFM 的 AMP 专家动作
+
+当前 22DoF H0W Stage2 使用的专家数据不是 LSE 23DoF 数据，而是：
+
+```text
+dataset/piplus_nowaist_walk_run/piplus_nowaist_walk_run.pkl
+```
+
+该数据由 `/home/sunteng/Project/HT_LAB_AMP_CHECKPOINT/piplus_nowaist_walk_run` 转换而来，机器人使用 `piplus_h0w`。推荐的完整播放和方向检查命令见 [播放PiPlus-H0W-22DoF-AMP专家动作.md](播放PiPlus-H0W-22DoF-AMP专家动作.md)。最小 MuJoCo 播放命令如下：
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+uv run python -m humanoidverse.visualize_motion \
+  --robot piplus_h0w \
+  --data-path dataset/piplus_nowaist_walk_run/piplus_nowaist_walk_run.pkl \
+  --motion backward__walk_backward_edited_retargetted \
+  --max-frames 434 \
+  --viewer
+```
+
+确认专家数据与冻结 H0W BFM 的 22DoF/194维 AMP 合同：
+
+```bash
+uv run python -m humanoidverse.amp_stage2 \
+  --dry-run --disable-lora --device cpu \
+  --bfm-checkpoint 'huiying/bfmzero-piplus-h0w-isaac-20260730_102224(1)/checkpoint' \
+  --expert-dataset dataset/piplus_nowaist_walk_run/piplus_nowaist_walk_run.pkl \
+  --robot-config humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H0W.yaml
+```
+
 ## Play Checkpoint
 
 ```bash
@@ -35,6 +67,61 @@ python -m humanoidverse.tracking_inference \
 ```
 
 ## Play Stage2 AMP Checkpoint
+
+### 当前 GPU11 23DoF checkpoint（46200）
+
+已从 GPU11 拉取并校验到本地的最新 23DoF frozen-BFM + command encoder AMP Stage2 checkpoint：
+
+```text
+checkpoint/piplus_lse_stage2_checkpoint_46200.pt
+```
+
+本地 checkpoint SHA256：
+`412705dd6615a27ac15ab231546d1a0955d5b607a4649d9990ee2b32f9050fde`。
+对应 metadata 为 `checkpoint/config.json`，内部迭代为 `46200`，action dimension 为 23，使用 5-direction balanced expert dataset、无 LoRA、无 action filter。
+
+MuJoCo 无窗口快速播放：
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder checkpoint \
+  --checkpoint checkpoint/piplus_lse_stage2_checkpoint_46200.pt \
+  --bfm-checkpoint 'huiying/bfmzero-piplus-lse-isaac-20260715_143758(1)/checkpoint' \
+  --robot-config humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml \
+  --expert-dataset dataset/pkl_cmd/piplus_lse_5dir_equal_h8_486w.pkl \
+  --simulator mujoco \
+  --device auto \
+  --fixed-command -0.3 0.0 0.0 \
+  --action-lowpass-alpha 1.0 \
+  --headless --max-steps 1000 --log-every-steps 50 --no-realtime
+```
+
+该 checkpoint 训练时使用 raw BFM action，不要使用 `--action-lowpass-alpha 0.2` 复现训练行为；需要测试部署滤波闭环时，再单独显式指定滤波参数。
+
+Isaac Sim + gamepad 播放 46200 checkpoint：
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder checkpoint \
+  --checkpoint checkpoint/piplus_lse_stage2_checkpoint_46200.pt \
+  --bfm-checkpoint 'huiying/bfmzero-piplus-lse-isaac-20260715_143758(1)/checkpoint' \
+  --robot-config humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml \
+  --expert-dataset dataset/pkl_cmd/piplus_lse_5dir_equal_h8_486w.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --action-lowpass-alpha 1.0 \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_46200.mp4 \
+  --show-viewer
+```
 
 历史固定 Isaac 速度跟踪最佳 checkpoint（推荐优先测试）：
 `logs/amp_stage2_piplus_lse_1gpu_4096env_1m_backward14_resume19800_20260903/checkpoint_19900.pt`。
@@ -84,13 +171,56 @@ python -m humanoidverse.amp_stage2_play \
   --device cuda:0 \
   --policy-device cpu \
   --gamepad \
-  --action-lowpass-alpha 0.2 \
+  --action-lowpass-alpha 1.0 \
   --save-mp4 \
   --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_gamepad_39900.mp4 \
   --show-viewer
 ```
 
 MuJoCo 快速复核：
+
+## 无 LoRA Stage2 抬脚对照 checkpoint
+
+最近同步的无 LoRA Stage2 checkpoint 为 `checkpoint_35700.pt`。该 lineage 冻结第一阶段 BFM，只训练 command encoder/AMP，并启用 feet-clearance/air-time 奖励与抬脚诊断；它不是 GPU2 当前的完整 BFM 训练进程。
+
+```bash
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_1gpu_4096env_1m_feet_metrics_clearance2_airtime3_resume35400_20260909 \
+  --checkpoint logs/amp_stage2_piplus_lse_1gpu_4096env_1m_feet_metrics_clearance2_airtime3_resume35400_20260909/checkpoint_35700.pt \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --action-lowpass-alpha 1.0 \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_nolora_gamepad_35700.mp4 \
+  --show-viewer
+```
+
+## LoRA BFM 输出微调 checkpoint（GPU11 双卡）
+
+已从 `checkpoint_34500.pt` 恢复训练，并保持第一阶段 BFM 基座冻结，仅保存 actor LoRA 参数。当前已同步的首个可恢复 checkpoint 为 `checkpoint_34600.pt`；播放时需要使用与训练一致的 LoRA checkpoint metadata。
+
+```bash
+cd /home/sunteng/Project/HT_BFM
+conda activate env_isaaclab
+
+python -m humanoidverse.amp_stage2_play \
+  --model-folder logs/amp_stage2_piplus_lse_2gpu_4096env_1m_lora_reg01_from34500_20260909 \
+  --checkpoint logs/amp_stage2_piplus_lse_2gpu_4096env_1m_lora_reg01_from34500_20260909/checkpoint_34600.pt \
+  --expert-dataset dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl \
+  --simulator isaacsim \
+  --device cuda:0 \
+  --policy-device cpu \
+  --gamepad \
+  --action-lowpass-alpha 1.0 \
+  --save-mp4 \
+  --output logs/instinct_rl/amp_stage2/stage2_playback_piplus_lora_gamepad_34600.mp4 \
+  --show-viewer
+```
+
+该 checkpoint 的 LoRA 参数已由 `amp_stage2_play` 自动加载；LoRA 训练未启用 action low-pass，播放命令显式使用 `--action-lowpass-alpha 1.0`，不要改成 `0.2`。
 
 ```bash
 python -m humanoidverse.amp_stage2_play \

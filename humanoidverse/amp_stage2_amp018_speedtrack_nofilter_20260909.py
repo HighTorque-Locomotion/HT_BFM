@@ -4,8 +4,8 @@ The trainable policy is a stochastic command encoder:
 
     velocity command + BFM actor observations -> z -> frozen BFM actor -> action
 
-Only the command encoder and its value head are optimized.  The discriminator
-is trained with a MimicLite-style WGAN-GP objective on PiPlus motion features.
+The command encoder/value head, AMP discriminator, and optional scratch JEPA are
+optimized. The BFM actor remains frozen.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 import joblib
 import mujoco
@@ -34,7 +34,16 @@ from humanoidverse.agents.envs.humanoidverse_isaac import (
     load_expert_trajectories_from_motion_lib,
 )
 from humanoidverse.agents.load_utils import load_model_from_checkpoint_dir
+from humanoidverse.command_world_model import (
+    expert_latent_pca_basis,
+)
 from humanoidverse.envs.legged_base_task.legged_robot_base import LeggedRobotBase
+from humanoidverse.jepa_world_model import (
+    FrozenJEPAWorldModel,
+    jepa_mpc_command_mask,
+    plan_jepa_latent_residuals,
+    train_jepa_world_model,
+)
 from humanoidverse.utils.asset_paths import resolve_asset_path
 from humanoidverse.utils.torch_utils import quat_rotate_inverse
 
@@ -42,7 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BFM_CHECKPOINT = str(
     PROJECT_ROOT / "huiying" / "bfmzero-piplus-lse-isaac-20260715_143758(1)" / "checkpoint"
 )
-DEFAULT_EXPERT_DATASET = str(PROJECT_ROOT / "dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run.pkl")
+DEFAULT_EXPERT_DATASET = str(PROJECT_ROOT / "dataset/pi_LSE_lafan_260706/piplus_lse_lafan_10s-clipped_run_with_stand.pkl")
 DEFAULT_ROBOT_CONFIG = str(PROJECT_ROOT / "humanoidverse/config/robot/piplus/PiPlus_S_12L8A0G2H1W_LSE.yaml")
 DEFAULT_KEY_BODIES = (
     "l_ankle_roll_link",
@@ -57,48 +66,15 @@ ENCODER_COMMAND_SCALE = (1.25, 5.0, 1.25)
 ENCODER_DOF_VEL_SCALE = 0.05
 LINVEL_EXP_ERROR_SCALE = 0.16
 MOVING_COMMAND_THRESHOLD = 0.1
-AMP_COMMAND_CATEGORIES = ("stand", "forward", "backward", "lateral", "turn")
-
-
-def _hydra_robot_name(robot_type: str) -> str:
-    """Map a validated PiPlus robot type to its Hydra robot choice."""
-    aliases = {
-        "PiPlus_S_12L8A0G2H0W": "robot=piplus/PiPlus_S_12L8A0G2H0W",
-        "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
-        "PiPlus_S_12L8A0G2H1W_LSE_260611": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
-    }
-    try:
-        return aliases[str(robot_type)]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported PiPlus robot type in robot config: {robot_type!r}") from exc
-
-
-ROBOT_CONTROL_CONTRACT_KEYS = (
-    "control_type",
-    "stiffness",
-    "damping",
-    "integral",
-    "action_scale",
-    "isaac_pd_scale",
-    "clamp_actions",
-    "clip_torques",
-    "use_ht_motor",
-    "action_clip_value",
-    "action_rescale",
-    "normalize_action",
-    "normalize_action_from",
-    "normalize_action_to",
-)
-ROBOT_LIMIT_CONTRACT_KEYS = (
-    "dof_names",
-    "dof_pos_lower_limit_list",
-    "dof_pos_upper_limit_list",
-    "dof_vel_limit_list",
-    "dof_effort_limit_list",
-    "dof_effort_limit_scale",
-    "dof_armature_list",
-    "dof_joint_friction_list",
-)
+STAND_COMMAND_DEADZONE = 0.1
+DEFAULT_COMMAND_STAND_PROB = 0.25
+# Nominal PiPlus stance keeps the ankle-roll links about 0.163 m apart
+# laterally (hip pitch 0.0475 + hip roll 0.034 per leg). Penalize only when
+# the feet fall below this comfortable floor while standing or moving slowly.
+FOOT_MIN_SEPARATION = 0.14
+FOOT_SEPARATION_MAX_PLANAR_SPEED = 0.5
+FOOT_SEPARATION_MAX_LATERAL_SPEED = 0.3
+FOOT_SEPARATION_MAX_YAW_RATE = 0.5
 
 
 def _distributed_ready() -> bool:
@@ -118,6 +94,15 @@ def average_gradients(parameters) -> None:
         if parameter.grad is not None:
             torch.distributed.all_reduce(parameter.grad, op=torch.distributed.ReduceOp.SUM)
             parameter.grad.div_(world_size)
+
+
+def average_tensor(value: torch.Tensor) -> torch.Tensor:
+    """Return a distributed mean without mutating the caller's tensor."""
+    result = value.detach().clone()
+    if _distributed_ready():
+        torch.distributed.all_reduce(result, op=torch.distributed.ReduceOp.SUM)
+        result.div_(torch.distributed.get_world_size())
+    return result
 
 
 def broadcast_module_state(module: nn.Module) -> None:
@@ -202,15 +187,7 @@ def _motion_qpos(
 class PiPlusAMPExpertDataset:
     """Precomputed PiPlus AMP features with an eight-frame joint history."""
 
-    def __init__(
-        self,
-        features: np.ndarray,
-        *,
-        history_length: int,
-        feature_dim: int,
-        motion_count: int,
-        category_features: Mapping[str, np.ndarray] | None = None,
-    ) -> None:
+    def __init__(self, features: np.ndarray, *, history_length: int, feature_dim: int, motion_count: int) -> None:
         if features.ndim != 2 or features.shape[1] != feature_dim:
             raise ValueError(f"AMP expert features must have shape [N, {feature_dim}], got {features.shape}")
         if not np.isfinite(features).all():
@@ -219,11 +196,6 @@ class PiPlusAMPExpertDataset:
         self.history_length = int(history_length)
         self.feature_dim = int(feature_dim)
         self.motion_count = int(motion_count)
-        self.category_features = {
-            str(name): torch.as_tensor(value, dtype=torch.float32)
-            for name, value in (category_features or {}).items()
-            if value.ndim == 2 and value.shape[0] > 0
-        }
 
     @classmethod
     def from_pkl(
@@ -253,8 +225,7 @@ class PiPlusAMPExpertDataset:
             raise ValueError(f"Could not resolve PiPlus AMP key bodies: base={base_body}, keys={key_bodies}")
 
         feature_rows: list[np.ndarray] = []
-        category_rows: dict[str, list[np.ndarray]] = {}
-        for motion_name, motion in data.items():
+        for motion in data.values():
             root_pos = np.asarray(motion["root_trans_offset"], dtype=np.float64)
             root_rot = np.asarray(motion["root_rot"], dtype=np.float64)
             dof = _policy_dof_from_motion(motion, policy_joint_names)
@@ -278,7 +249,6 @@ class PiPlusAMPExpertDataset:
 
             if frame_count < history_length:
                 continue
-            motion_rows: list[np.ndarray] = []
             for frame_index in range(history_length - 1, frame_count):
                 joint_history = dof[frame_index - history_length + 1 : frame_index + 1].reshape(-1)
                 row = np.concatenate(
@@ -288,95 +258,26 @@ class PiPlusAMPExpertDataset:
                         joint_history,
                     ]
                 )
-                motion_rows.append(row.astype(np.float32, copy=False))
-            if motion_rows:
-                feature_rows.extend(motion_rows)
-                category = _expert_motion_category(str(motion_name), motion)
-                category_rows.setdefault(category, []).extend(motion_rows)
+                feature_rows.append(row.astype(np.float32, copy=False))
 
         feature_dim = 3 + len(key_bodies) * 3 + history_length * len(policy_joint_names)
         features = np.stack(feature_rows, axis=0) if feature_rows else np.zeros((0, feature_dim), dtype=np.float32)
-        category_features = {
-            name: np.stack(rows, axis=0).astype(np.float32, copy=False)
-            for name, rows in category_rows.items()
-        }
-        return cls(
-            features,
-            history_length=history_length,
-            feature_dim=feature_dim,
-            motion_count=len(data),
-            category_features=category_features,
-        )
+        return cls(features, history_length=history_length, feature_dim=feature_dim, motion_count=len(data))
 
-    def sample(
-        self,
-        batch_size: int,
-        device: torch.device,
-        commands: torch.Tensor | None = None,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, batch_size: int, device: torch.device) -> torch.Tensor:
         if self.features.shape[0] == 0:
             raise ValueError("AMP expert dataset contains no valid history windows")
-        if commands is None or not self.category_features:
-            indices = torch.randint(self.features.shape[0], (int(batch_size),))
-            return self.features[indices].to(device)
-        commands = commands.reshape(-1, 3)
-        if commands.shape[0] != int(batch_size):
-            raise ValueError(f"Expected {batch_size} command rows, got {commands.shape[0]}")
-        category_ids = _command_category_ids(commands)
-        sampled = torch.empty((int(batch_size), self.feature_dim), device=device)
-        fallback = self.features
-        for category_id, category_name in enumerate(AMP_COMMAND_CATEGORIES):
-            mask = category_ids == category_id
-            if not torch.any(mask):
-                continue
-            pool = self.category_features.get(category_name, fallback)
-            indices = torch.randint(pool.shape[0], (int(mask.sum()),))
-            sampled[mask] = pool[indices].to(device)
-        return sampled
+        indices = torch.randint(self.features.shape[0], (int(batch_size),))
+        return self.features[indices].to(device)
 
 
-def _command_category_ids(commands: torch.Tensor) -> torch.Tensor:
-    """Map body-frame velocity commands to AMP expert categories."""
-    commands = commands.reshape(-1, 3)
-    if commands.shape[-1] != 3:
-        raise ValueError(f"Expected commands [B, 3], got {tuple(commands.shape)}")
-    planar = commands[:, :2].norm(dim=-1)
-    yaw = commands[:, 2].abs()
-    category = torch.full((commands.shape[0],), 1, dtype=torch.long, device=commands.device)  # forward
-    stand = (planar < MOVING_COMMAND_THRESHOLD) & (yaw < MOVING_COMMAND_THRESHOLD)
-    category[stand] = 0
-    turning = (~stand) & (yaw >= MOVING_COMMAND_THRESHOLD) & (planar < 0.15)
-    category[turning] = 4
-    lateral = (~stand) & (~turning) & (commands[:, 1].abs() > commands[:, 0].abs())
-    category[lateral] = 3
-    category[(~stand) & (~turning) & (~lateral) & (commands[:, 0] < -0.05)] = 2
-    return category
-
-
-def _expert_motion_category(name: str, motion: Mapping[str, Any]) -> str:
-    """Infer a stable AMP category from motion name and optional command metadata."""
-    lower = name.lower()
-    if "stand" in lower or "default_pose" in lower:
-        return "stand"
-    if "lateral" in lower or "side" in lower:
-        return "lateral"
-    if "yaw" in lower or "turn" in lower or "rotate" in lower:
-        return "turn"
-    if "backward" in lower or "backwards" in lower or "reverse" in lower:
-        return "backward"
-    command = motion.get("command_vel")
-    if command is not None:
-        values = np.asarray(command, dtype=np.float64).reshape(-1, 3)
-        if values.size:
-            category = int(_command_category_ids(torch.as_tensor(values[:1], dtype=torch.float32))[0])
-            return AMP_COMMAND_CATEGORIES[category]
-    return "forward"
+AMP_DISCRIMINATOR_OBJECTIVE = "mse_quad_v1"
 
 
 class AMPDiscriminator(nn.Module):
-    """MimicLite-style WGAN-GP discriminator."""
+    """PiPlus AMP discriminator with MSE logits and quadratic reward mapping."""
 
-    def __init__(self, feature_dim: int, hidden_dims: tuple[int, int] = (512, 256), grad_penalty_weight: float = 10.0):
+    def __init__(self, feature_dim: int, hidden_dims: tuple[int, int] = (1024, 512), grad_penalty_weight: float = 5.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feature_dim, hidden_dims[0]),
@@ -405,7 +306,9 @@ class AMPDiscriminator(nn.Module):
         )[0]
         gradient_norm = gradients.reshape(gradients.shape[0], -1).norm(2, dim=1)
         gradient_penalty = (gradient_norm - 1.0).square().mean()
-        total = policy_score.mean() - expert_score.mean() + self.grad_penalty_weight * gradient_penalty
+        expert_loss = F.mse_loss(expert_score, torch.ones_like(expert_score))
+        policy_loss = F.mse_loss(policy_score, torch.zeros_like(policy_score))
+        total = expert_loss + policy_loss + self.grad_penalty_weight * gradient_penalty
         return {
             "loss": total,
             "gradient_penalty": gradient_penalty,
@@ -416,24 +319,13 @@ class AMPDiscriminator(nn.Module):
 
     @torch.no_grad()
     def reward(self, policy_features: torch.Tensor) -> torch.Tensor:
+        # Keep this method as the raw score accessor; the caller applies the
+        # configured reward mapping exactly once before PPO/GAE.
         return self(policy_features)
 
 
-def infer_amp_discriminator_hidden_dims(state: Mapping[str, torch.Tensor] | None) -> tuple[int, int]:
-    """Recover the discriminator architecture from a Stage2 checkpoint."""
-    if not state:
-        return 512, 256
-    first = state.get("net.0.weight")
-    second = state.get("net.2.weight")
-    if first is None or second is None or first.ndim != 2 or second.ndim != 2:
-        raise ValueError("Stage2 checkpoint has an unsupported AMP discriminator state layout")
-    if int(second.shape[1]) != int(first.shape[0]):
-        raise ValueError("Stage2 checkpoint AMP discriminator hidden dimensions are inconsistent")
-    return int(first.shape[0]), int(second.shape[0])
-
-
 class MimicLiteRewardNormalizer(nn.Module):
-    """Running scalar normalizer matching MimicLite's ``VecNorm(input_shape=(1,))``."""
+    """Legacy running scalar normalizer kept for checkpoint compatibility."""
 
     def __init__(self, decay: float = 0.999, eps: float = 1.0e-5):
         super().__init__()
@@ -532,6 +424,101 @@ def _latent_stats(values: torch.Tensor) -> dict[str, Any]:
     }
 
 
+def _latent_direction_prior(
+    projected_z: torch.Tensor,
+    reference_z: torch.Tensor,
+    *,
+    chunk_size: int = 1024,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return nearest-reference direction penalty and cosine similarity.
+
+    The BFM checkpoint only constrains the latent radius when ``norm_z`` is
+    enabled.  Comparing directions against backward-map latents supplies the
+    missing support constraint without changing the checkpoint architecture.
+    """
+    if projected_z.ndim != 2 or reference_z.ndim != 2 or projected_z.shape[-1] != reference_z.shape[-1]:
+        raise ValueError(
+            f"Latent direction shapes must be [N, D] and [M, D], got {tuple(projected_z.shape)} and {tuple(reference_z.shape)}"
+        )
+    if reference_z.shape[0] == 0:
+        raise ValueError("Latent direction reference bank is empty")
+    projected = F.normalize(projected_z.float(), dim=-1)
+    reference = F.normalize(reference_z.float(), dim=-1)
+    best_cosine: list[torch.Tensor] = []
+    for start in range(0, projected.shape[0], max(int(chunk_size), 1)):
+        similarity = projected[start : start + chunk_size] @ reference.T
+        best_cosine.append(similarity.max(dim=-1).values)
+    cosine = torch.cat(best_cosine, dim=0)
+    return 1.0 - cosine, cosine
+
+
+def _latent_mmd_rbf(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Compute a small unbiased-ish RBF MMD diagnostic on normalized latents."""
+    x = F.normalize(x.float(), dim=-1)
+    y = F.normalize(y.float(), dim=-1)
+    if x.shape[0] < 2 or y.shape[0] < 2:
+        return x.new_tensor(float("nan"))
+    joined = torch.cat((x, y), dim=0)
+    bandwidth = torch.cdist(joined, joined).square().flatten().median().clamp_min(1.0e-4)
+    k_xx = torch.exp(-torch.cdist(x, x).square() / bandwidth)
+    k_yy = torch.exp(-torch.cdist(y, y).square() / bandwidth)
+    k_xy = torch.exp(-torch.cdist(x, y).square() / bandwidth)
+    n_x, n_y = x.shape[0], y.shape[0]
+    xx = (k_xx.sum() - torch.diagonal(k_xx).sum()) / max(n_x * (n_x - 1), 1)
+    yy = (k_yy.sum() - torch.diagonal(k_yy).sum()) / max(n_y * (n_y - 1), 1)
+    return xx + yy - 2.0 * k_xy.mean()
+
+
+def latent_manifold_metrics(
+    projected_z: torch.Tensor,
+    commands: torch.Tensor,
+    reference_z: torch.Tensor,
+    *,
+    max_samples: int = 1024,
+) -> dict[str, float]:
+    """Compare Stage2 projected latents to expert latents globally and by command bin."""
+    projected_z = projected_z.reshape(-1, projected_z.shape[-1])
+    commands = commands.reshape(-1, commands.shape[-1])
+    if projected_z.shape[0] != commands.shape[0]:
+        raise ValueError("Projected latent and command sample counts must match")
+    generator = torch.Generator(device=projected_z.device)
+    generator.manual_seed(17)
+    reference = reference_z.to(projected_z.device)
+    if reference.shape[0] > max_samples:
+        reference = reference[torch.randperm(reference.shape[0], generator=generator, device=reference.device)[:max_samples]]
+
+    def sample_rows(values: torch.Tensor) -> torch.Tensor:
+        if values.shape[0] <= max_samples:
+            return values
+        indices = torch.randperm(values.shape[0], generator=generator, device=values.device)[:max_samples]
+        return values[indices]
+
+    masks = {
+        "all": torch.ones(projected_z.shape[0], dtype=torch.bool, device=projected_z.device),
+        "stand": (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() < 0.1),
+        "turn": (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() >= 0.1),
+        "slow": (commands[:, :2].norm(dim=-1) >= 0.1) & (commands[:, :2].norm(dim=-1) < 0.35),
+        "medium": (commands[:, :2].norm(dim=-1) >= 0.35) & (commands[:, :2].norm(dim=-1) < 0.65),
+        "fast": commands[:, :2].norm(dim=-1) >= 0.65,
+    }
+    metrics: dict[str, float] = {}
+    for name, mask in masks.items():
+        selected = sample_rows(projected_z[mask])
+        prefix = f"latent/{name}"
+        metrics[f"{prefix}_fraction"] = float(mask.float().mean())
+        metrics[f"{prefix}_count"] = float(mask.sum())
+        if selected.shape[0] < 2:
+            metrics[f"{prefix}_nearest_cosine"] = 0.0
+            metrics[f"{prefix}_knn_distance"] = 0.0
+            metrics[f"{prefix}_mmd_rbf"] = 0.0
+            continue
+        penalty, cosine = _latent_direction_prior(selected, reference)
+        metrics[f"{prefix}_nearest_cosine"] = float(cosine.mean())
+        metrics[f"{prefix}_knn_distance"] = float(penalty.mean())
+        metrics[f"{prefix}_mmd_rbf"] = float(_latent_mmd_rbf(selected, reference))
+    return metrics
+
+
 def _latent_stats_to_json(stats: dict[str, Any]) -> dict[str, Any]:
     def convert(value: Any) -> Any:
         if isinstance(value, torch.Tensor):
@@ -544,7 +531,7 @@ def _latent_stats_to_json(stats: dict[str, Any]) -> dict[str, Any]:
             return value.item()
         return value
 
-    return convert(stats)
+    return convert({key: value for key, value in stats.items() if not str(key).startswith("_")})
 
 
 def _collect_bfm_latent_stats(
@@ -583,6 +570,7 @@ def _collect_bfm_latent_stats(
         "frame_count": frame_count,
         "raw": _latent_stats(raw_z),
         "projected": _latent_stats(projected_z),
+        "_reference_projected": projected_z.detach().float(),
     }
 
 
@@ -606,10 +594,14 @@ def _validate_and_configure_latent_contract(
             raise ValueError(
                 f"Checkpoint norm_z=True but project_z norm is {projected_norm:.6f}, expected {expected_norm:.6f}"
             )
+        policy.configure_from_latent_stats(raw_stats["mean"], raw_stats["std"])
         return {
             "mode": "checkpoint_project_z",
             "expected_norm": expected_norm,
             "projected_norm_mean": projected_norm,
+            "raw_latent_norm_mean": float(raw_stats["norm_mean"]),
+            "raw_latent_norm_std": float(raw_stats["norm_std"]),
+            "direction_prior": "expert_projected_latent_bank",
         }
 
     policy.configure_from_latent_stats(raw_stats["mean"], raw_stats["std"])
@@ -621,21 +613,13 @@ def _validate_and_configure_latent_contract(
     }
 
 
-def encoder_input_scale(
-    obs: Mapping[str, torch.Tensor],
-    commands: torch.Tensor,
-    *,
-    command_scale: tuple[float, float, float] | None = None,
-) -> torch.Tensor:
+def encoder_input_scale(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
     """Build field-wise scales without changing the Stage2 checkpoint input shape."""
     state = obs["state"]
     last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
-    selected_command_scale = ENCODER_COMMAND_SCALE if command_scale is None else tuple(float(value) for value in command_scale)
-    if len(selected_command_scale) != 3 or any(value <= 0.0 for value in selected_command_scale):
-        raise ValueError(f"command_scale must contain three positive values, got {selected_command_scale}")
-    command_scale_tensor = commands.new_tensor(selected_command_scale)
-    if commands.shape[-1] != command_scale_tensor.numel():
-        raise ValueError(f"Expected {command_scale_tensor.numel()} commands, got {commands.shape[-1]}")
+    command_scale = commands.new_tensor(ENCODER_COMMAND_SCALE)
+    if commands.shape[-1] != command_scale.numel():
+        raise ValueError(f"Expected {command_scale.numel()} commands, got {commands.shape[-1]}")
 
     state_scale = torch.ones(state.shape[-1], device=state.device, dtype=state.dtype)
     dof_dim = int(last_action.shape[-1])
@@ -645,7 +629,7 @@ def encoder_input_scale(
             raise ValueError(f"Expected PiPlus state dim {expected_state_dim}, got {state.shape[-1]}")
         state_scale[dof_dim : 2 * dof_dim] = ENCODER_DOF_VEL_SCALE
 
-    pieces = [command_scale_tensor, state_scale, torch.ones(last_action.shape[-1], device=state.device, dtype=state.dtype)]
+    pieces = [command_scale, state_scale, torch.ones(last_action.shape[-1], device=state.device, dtype=state.dtype)]
     history = obs.get("history_actor")
     if history is not None:
         history_scale = torch.ones(history.shape[-1], device=history.device, dtype=history.dtype)
@@ -664,28 +648,15 @@ def encoder_input_scale(
     return torch.cat(pieces)
 
 
-def flatten_encoder_observation(
-    obs: Mapping[str, torch.Tensor],
-    commands: torch.Tensor,
-    *,
-    command_scale: tuple[float, float, float] | None = None,
-    backward_command_scale: float | None = None,
-) -> torch.Tensor:
+def flatten_encoder_observation(obs: Mapping[str, torch.Tensor], commands: torch.Tensor) -> torch.Tensor:
     state = obs["state"]
     last_action = obs.get("last_action", torch.zeros_like(state[..., :0]))
-    command_features = commands
-    if backward_command_scale is not None:
-        if backward_command_scale <= 0.0:
-            raise ValueError(f"backward_command_scale must be positive, got {backward_command_scale}")
-        command_features = commands.clone()
-        backward = command_features[..., 0] < -0.05
-        command_features[backward, 0] *= backward_command_scale
-    pieces = [command_features, state, last_action]
+    pieces = [commands, state, last_action]
     history = obs.get("history_actor")
     if history is not None:
         pieces.append(history)
     features = torch.cat(pieces, dim=-1)
-    return features * encoder_input_scale(obs, commands, command_scale=command_scale)
+    return features * encoder_input_scale(obs, commands)
 
 
 @torch.no_grad()
@@ -722,14 +693,13 @@ def restore_policy_optimizer(
     *,
     learning_rate: float,
     reset_for_input_migration: bool,
-    reset_for_lora: bool = False,
 ) -> str:
     """Restore valid Adam state while always honoring the requested LR."""
-    if not reset_for_input_migration and not reset_for_lora and "policy_optimizer" in checkpoint:
+    if not reset_for_input_migration and "policy_optimizer" in checkpoint:
         optimizer.load_state_dict(checkpoint["policy_optimizer"])
         status = "loaded_with_lr_override"
     else:
-        status = "reset_for_lora" if reset_for_lora else ("reset_for_encoder_input_transform" if reset_for_input_migration else "reset_missing_state")
+        status = "reset_for_encoder_input_transform" if reset_for_input_migration else "reset_missing_state"
     for group in optimizer.param_groups:
         group["lr"] = float(learning_rate)
     return status
@@ -784,10 +754,8 @@ def compute_gae(
 @dataclass
 class Stage2Rollout:
     encoder_features: torch.Tensor
-    bfm_observations: dict[str, torch.Tensor]
     commands: torch.Tensor
     raw_z: torch.Tensor
-    bfm_actions: torch.Tensor
     old_log_prob: torch.Tensor
     values: torch.Tensor
     env_rewards: torch.Tensor
@@ -802,6 +770,8 @@ class Stage2Rollout:
     amp_features: torch.Tensor
     base_lin_vel: torch.Tensor
     base_ang_vel: torch.Tensor
+    mpc_controlled: torch.Tensor
+    mpc_projected_z: torch.Tensor
 
 
 class OnlineAMPHistory:
@@ -847,6 +817,7 @@ def _transition_core(live_core, info: Mapping[str, Any]):
         base_quat=live_core.base_quat,
         base_lin_vel=live_core.base_lin_vel,
         base_ang_vel=live_core.base_ang_vel,
+        projected_gravity=live_core.projected_gravity,
         body_pos=simulator._rigid_body_pos,
         body_rot=simulator._rigid_body_rot,
         body_ang_vel=simulator._rigid_body_ang_vel,
@@ -922,27 +893,55 @@ def _sample_commands(
     low: torch.Tensor,
     high: torch.Tensor,
     *,
-    stand_prob: float = 0.1,
+    stand_prob: float = DEFAULT_COMMAND_STAND_PROB,
     turn_prob: float = 0.0,
-    lateral_prob: float = 0.0,
+    backward_prob: float | None = None,
+    backward_straight_scale: float = 0.25,
 ) -> torch.Tensor:
     """Sample velocity targets with MimicLite Twist's stand-command gate."""
     if not 0.0 <= stand_prob <= 1.0:
         raise ValueError(f"stand_prob must be in [0, 1], got {stand_prob}")
     if not 0.0 <= turn_prob <= 1.0:
         raise ValueError(f"turn_prob must be in [0, 1], got {turn_prob}")
-    if not 0.0 <= lateral_prob <= 1.0:
-        raise ValueError(f"lateral_prob must be in [0, 1], got {lateral_prob}")
+    if backward_prob is not None and not 0.0 <= backward_prob <= 1.0:
+        raise ValueError(f"backward_prob must be in [0, 1], got {backward_prob}")
+    if not 0.0 <= backward_straight_scale <= 1.0:
+        raise ValueError(f"backward_straight_scale must be in [0, 1], got {backward_straight_scale}")
     commands = low + torch.rand(num_envs, 3, device=device) * (high - low)
     turn_in_place = torch.rand(num_envs, device=device) < turn_prob
     commands[turn_in_place, :2] = 0.0
-    lateral_only = (~turn_in_place) & (torch.rand(num_envs, device=device) < lateral_prob)
-    commands[lateral_only, 0] = 0.0
-    commands[lateral_only, 2] = 0.0
+    if backward_prob is not None:
+        if float(low[0]) >= BACKWARD_COMMAND_THRESHOLD or float(high[0]) <= 0.0:
+            raise ValueError("Backward curriculum requires a negative vx lower bound and positive upper bound")
+        backward = (~turn_in_place) & (torch.rand(num_envs, device=device) < backward_prob)
+        backward_limit = -low[0]
+        minimum_backward = min(0.15, float(backward_limit))
+        backward_magnitude = minimum_backward + torch.rand(num_envs, device=device) * (
+            backward_limit - minimum_backward
+        )
+        commands[backward, 0] = -backward_magnitude[backward]
+        commands[backward, 1:] *= float(backward_straight_scale)
+        non_backward = ~turn_in_place & ~backward
+        forward_vx = torch.rand(num_envs, device=device) * high[0]
+        commands[non_backward, 0] = forward_vx[non_backward]
     low_speed = commands[:, :2].norm(dim=-1) < 0.1
-    stand = ((~turn_in_place & ~lateral_only & low_speed) |
-             ((torch.rand(num_envs, device=device) < stand_prob) & ~turn_in_place & ~lateral_only))
+    stand = (~turn_in_place & low_speed) | (torch.rand(num_envs, device=device) < stand_prob)
     return torch.where(stand.unsqueeze(-1), torch.zeros_like(commands), commands)
+
+
+def _is_standing_command(
+    commands: torch.Tensor,
+    *,
+    deadzone: float = STAND_COMMAND_DEADZONE,
+) -> torch.Tensor:
+    """Return rows whose planar and yaw commands are all inside the stand deadzone."""
+    if commands.ndim != 2 or commands.shape[-1] != 3:
+        raise ValueError(f"Expected velocity commands [B, 3], got {tuple(commands.shape)}")
+    if deadzone < 0.0:
+        raise ValueError(f"stand command deadzone must be non-negative, got {deadzone}")
+    return (commands[:, :2].norm(dim=-1) < float(deadzone)) & (
+        commands[:, 2].abs() < float(deadzone)
+    )
 
 
 def _mimiclite_resample_mask(
@@ -961,81 +960,90 @@ def _mimiclite_resample_mask(
     if warmup_steps < 0:
         raise ValueError(f"warmup_steps must be non-negative, got {warmup_steps}")
     interval_reached = (episode_steps - warmup_steps) % resample_interval == 0
-    standing = (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() < 0.1)
+    standing = _is_standing_command(commands)
     return interval_reached & ((torch.rand(commands.shape[0], device=commands.device) < resample_prob) | standing)
 
 
-def _resample_done_command_targets(
-    command_targets: torch.Tensor,
-    done: torch.Tensor,
-    low: torch.Tensor,
-    high: torch.Tensor,
-    *,
-    stand_prob: float,
-    turn_prob: float,
-    lateral_prob: float,
-) -> torch.Tensor:
-    """Give reset environments a new target so crash loops cannot starve commands.
-
-    The live command remains zero for the reset transition and is then smoothed
-    toward this target on the next step.  Without this, a reset followed by a
-    warmup shorter than the episode lifetime leaves both command tensors at
-    zero forever, which silently removes backward/lateral/turn samples from
-    the on-policy batch.
-    """
-    if done.dtype != torch.bool:
-        raise ValueError(f"done must be bool, got {done.dtype}")
-    if done.ndim != 1 or done.shape[0] != command_targets.shape[0]:
-        raise ValueError(
-            f"done shape {tuple(done.shape)} does not match command targets {tuple(command_targets.shape)}"
-        )
-    if not torch.any(done):
-        return command_targets
-    updated = command_targets.clone()
-    updated[done] = _sample_commands(
-        int(done.sum()),
-        command_targets.device,
-        low,
-        high,
-        stand_prob=stand_prob,
-        turn_prob=turn_prob,
-        lateral_prob=lateral_prob,
-    )
-    return updated
-
-
 MIMICLITE_LOCOMOTION_WEIGHTS = {
-    # Keep direct planar tracking dominant while preserving a usable stability margin.
-    "linvel_exp": 2.8,
-    # Give signed command alignment a slightly stronger gradient, including for reverse vx.
-    # Increase signed direction/yaw gradients after the widened command run
-    # plateaued while preserving the baseline-normalized reward semantics.
-    "linvel_projection": 1.1,
-    "angvel_z_exp": 2.2,
-    "single_foot_contact": 0.85,
-    "angvel_xy_l2": 0.035,
-    "body_upright": 1.1,
-    # Match HT_lab_pipeline's PiPlus locomotion stand_still term: its positive
-    # L1 pose error with weight -0.8 is represented here as a negative term.
-    "stand_still": 0.8,
-    "feet_air_time": 2.0,
-    # Reward a single swing foot for clearing the ground without encouraging
-    # double-support jumps.  The simulator foot contact threshold is 0.07 m,
-    # so this target leaves a small but visible clearance margin.
-    "feet_clearance": 1.0,
-    "energy_l1": 2.0e-4,
-    "joint_acc_l2": 1.0e-7,
-    "action_rate_l2": 0.005,
-    "action_rate2_l2": 0.005,
-    "joint_vel_l2": 1.0e-3,
-    "joint_deviation_l2": 0.11,
-    # Disabled by default; enabled only for the cross-axis challenger after
-    # Isaac screens exposed command bleed.
-    "cross_axis_velocity_l2": 0.0,
+    # Recover command response without weakening the existing hardware-facing
+    # action/acceleration smoothness terms. The previous 1.15 setting allowed
+    # nonzero planar MAE to regress while the policy optimized standing/smoothness.
+    # Strengthen forward/backward command tracking after hardware playback
+    # showed weak response at the same aggregate training error.
+    "linvel_exp": 3.20,
+    # piplus_walk does not stack signed projection/progress terms on top of its
+    # exponential trackers. Disable them to avoid aggressive corrections.
+    "linvel_projection": 0.50,
+    # Give yaw command tracking a comparable direct gradient to planar speed.
+    "angvel_z_exp": 2.60,
+    # The bounded signed term is active only for reverse commands. Strengthen
+    # it because reverse MAE and wrong-way motion grew despite a 40% curriculum.
+    "backward_velocity_progress": 2.40,
+    "turn_rate_progress": 0.72,
+    "single_foot_contact": 0.0,
+    # Match the final piplus_walk run override for torso roll/pitch damping.
+    "angvel_xy_l2": 0.16,
+    "body_upright": 2.80,
+    # Use piplus_walk's zero-command-gated L1 default-pose objective, with a
+    # stronger coefficient because hardware playback has an incorrect pose.
+    "stand_still": 1.50,
+    # The final piplus_walk run explicitly disables air-time reward and has no
+    # clearance bonus; both can otherwise encourage exaggerated stepping.
+    "feet_air_time": 3.0,
+    "feet_clearance": 2.0,
+    "backward_feet_clearance": 0.5,
+    # These terms directly target the high-frequency action, acceleration, and
+    # joint-speed regressions observed after checkpoint 24200 on the real robot.
+    "energy_l1": 5.0e-4,
+    "joint_acc_l2": 9.2e-7,
+    "action_rate_l2": 0.05,
+    # Prioritize second-difference damping because hardware playback still
+    # exhibits high-frequency oscillation after the first anti-jitter cycle.
+    "action_rate2_l2": 0.100,
+    "joint_vel_l2": 4.2e-3,
+    # piplus_walk uses L1 default-pose penalties for shoulder roll, waist, and
+    # thigh joints. L1 retains useful gradients close to the desired pose.
+    "joint_deviation_l1": 0.135,
+    # Squared-meters violation, so the weight looks large next to the
+    # unit-range trackers: 0.02 m of narrowing contributes ~1.6e-4 per step
+    # while 0.08 m contributes ~2.6e-3 per step (dt * 20 * violation^2).
+    "foot_separation_penalty": 20.0,
 }
 
-FEET_CLEARANCE_TARGET = 0.10
-FEET_CLEARANCE_SIGMA = 0.04
+SMOOTHNESS_DIAGNOSTIC_TERMS = (
+    "angvel_xy_l2",
+    "stand_still",
+    "energy_l1",
+    "joint_acc_l2",
+    "action_rate_l2",
+    "action_rate2_l2",
+    "joint_vel_l2",
+)
+
+FEET_DIAGNOSTIC_KEYS = (
+    "feet_clearance_raw_mean",
+    "feet_clearance_raw_p95",
+    "swing_foot_height_mean",
+    "swing_foot_height_p95",
+    "backward_swing_foot_height",
+    "lateral_foot_separation_mean",
+    "foot_separation_violation_mean",
+    "foot_separation_active_fraction",
+)
+
+
+def mimiclite_raw_penalty_magnitude(contribution: torch.Tensor, *, dt: float, weight: float) -> torch.Tensor:
+    if dt <= 0.0:
+        raise ValueError(f"dt must be positive, got {dt}")
+    if weight <= 0.0:
+        raise ValueError(f"weight must be positive, got {weight}")
+    return -contribution / (dt * weight)
+
+
+FEET_CLEARANCE_TARGET = 0.13
+FEET_CLEARANCE_SIGMA = 0.05
+BACKWARD_COMMAND_THRESHOLD = -0.05
+TURN_COMMAND_THRESHOLD = 0.1
 
 
 def baseline_normalized_linvel_reward(
@@ -1044,14 +1052,16 @@ def baseline_normalized_linvel_reward(
     *,
     error_scale: float = LINVEL_EXP_ERROR_SCALE,
 ) -> torch.Tensor:
-    """Return a signed tracking reward whose moving-command zero-speed baseline is zero."""
+    """Return the positive exponential tracking reward used by ``piplus_walk``.
+
+    Stage2 cannot optimize actions directly, so subtracting a zero-speed baseline
+    creates a high-variance signed signal for the latent encoder. Keep the helper
+    name for checkpoint/test compatibility while restoring the dense positive
+    locomotion objective.
+    """
     command_xy = commands[..., :2]
     tracking_error = (base_lin_vel[..., :2] - command_xy).square().sum(dim=-1)
-    tracking_score = torch.exp(-tracking_error / error_scale)
-    zero_speed_score = torch.exp(-command_xy.square().sum(dim=-1) / error_scale)
-    improvement = (tracking_score - zero_speed_score) / (1.0 - zero_speed_score).clamp_min(0.05)
-    moving = command_xy.norm(dim=-1) >= MOVING_COMMAND_THRESHOLD
-    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+    return torch.exp(-tracking_error / error_scale)
 
 
 def baseline_normalized_angvel_reward(
@@ -1060,14 +1070,28 @@ def baseline_normalized_angvel_reward(
     *,
     error_scale: float = 0.25,
 ) -> torch.Tensor:
-    """Return signed yaw tracking improvement over the zero-yaw baseline."""
+    """Return the positive exponential yaw tracking reward used by ``piplus_walk``."""
     command_z = commands[..., 2]
     tracking_error = (base_ang_vel_z - command_z).square()
-    tracking_score = torch.exp(-tracking_error / error_scale)
-    zero_yaw_score = torch.exp(-command_z.square() / error_scale)
-    improvement = (tracking_score - zero_yaw_score) / (1.0 - zero_yaw_score).clamp_min(0.05)
-    moving = command_z.abs() >= MOVING_COMMAND_THRESHOLD
-    return torch.where(moving, improvement.clamp(-1.0, 1.0), tracking_score)
+    return torch.exp(-tracking_error / error_scale)
+
+
+def directional_progress_reward(
+    achieved: torch.Tensor,
+    commands: torch.Tensor,
+    *,
+    minimum_target: float,
+    active: torch.Tensor,
+) -> torch.Tensor:
+    """Return bounded signed command progress only where the command is active."""
+    target_magnitude = commands.abs().clamp_min(minimum_target)
+    progress = (achieved * commands.sign() / target_magnitude).clamp(-1.0, 1.0)
+    return torch.where(active, progress, torch.zeros_like(progress))
+
+
+def amp_quadratic_reward(discriminator_score: torch.Tensor) -> torch.Tensor:
+    """Match ``piplus_walk``'s positive quadratic discriminator reward."""
+    return (1.0 - (discriminator_score - 1.0).square()).clamp_min(0.0)
 
 
 def _global_tracking_sums(values: torch.Tensor) -> torch.Tensor:
@@ -1111,14 +1135,6 @@ def command_tracking_metrics(
     add_mean("tracking/nonzero_vy_mae", vy_error, moving)
     add_mean("tracking/nonzero_planar_l2_mae", planar_error, moving)
 
-    standing = (~moving) & (command[:, 2].abs() < MOVING_COMMAND_THRESHOLD)
-    stand_planar_speed = torch.linalg.vector_norm(achieved_xy, dim=-1)
-    stand_yaw_speed = achieved_yaw.abs()
-    add_mean("tracking/stand_base_planar_speed_mean", stand_planar_speed, standing)
-    add_mean("tracking/stand_base_yaw_rate_abs_mean", stand_yaw_speed, standing)
-    add_mean("tracking/stand_base_planar_speed_rms", stand_planar_speed.square(), standing)
-    metrics["tracking/stand_base_planar_speed_rms"] = metrics["tracking/stand_base_planar_speed_rms"] ** 0.5
-
     bin_masks = {
         "backward": moving & (command[:, 0] < -0.05),
         "near_zero": moving & (command[:, 0].abs() <= 0.05),
@@ -1130,6 +1146,12 @@ def command_tracking_metrics(
         add_mean(f"tracking/vx_bin_{name}_mae", vx_error, mask)
         bin_count = _global_tracking_sums(mask.sum().to(dtype=torch.float64))
         metrics[f"tracking/vx_bin_{name}_fraction"] = float(bin_count / global_count)
+
+    backward = bin_masks["backward"]
+    add_mean("tracking/vx_bin_backward_command_mean", command[:, 0], backward)
+    add_mean("tracking/vx_bin_backward_achieved_mean", achieved_xy[:, 0], backward)
+    backward_wrong_way = (achieved_xy[:, 0] >= 0.0).to(dtype=achieved_xy.dtype)
+    add_mean("tracking/vx_bin_backward_wrong_way_fraction", backward_wrong_way, backward)
 
     response_mask = moving & (command[:, 0].abs() > 0.05)
     x = command[response_mask, 0]
@@ -1157,42 +1179,6 @@ def command_tracking_metrics(
     metrics["tracking/nonzero_vx_response_slope"] = float(slope) if valid else 0.0
     metrics["tracking/nonzero_vx_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
     metrics["tracking/nonzero_achieved_vx_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
-
-    # Keep a separate lateral response diagnostic.  Aggregate planar MAE can
-    # hide a policy that tracks forward speed while ignoring +/-vy commands.
-    response_mask = moving & (command[:, 1].abs() > 0.05)
-    x = command[response_mask, 1]
-    y = achieved_xy[response_mask, 1]
-    response_sums = _global_tracking_sums(
-        torch.stack(
-            (
-                x.new_tensor(float(x.numel())),
-                x.sum(),
-                y.sum(),
-                x.square().sum(),
-                y.square().sum(),
-                (x * y).sum(),
-            )
-        )
-    )
-    count, sum_x, sum_y, sum_xx, sum_yy, sum_xy = response_sums
-    denominator = count.clamp_min(1.0)
-    variance_x = (sum_xx - sum_x.square() / denominator).clamp_min(0.0)
-    variance_y = (sum_yy - sum_y.square() / denominator).clamp_min(0.0)
-    covariance = sum_xy - sum_x * sum_y / denominator
-    slope = covariance / variance_x.clamp_min(1.0e-12)
-    correlation = covariance / (variance_x * variance_y).sqrt().clamp_min(1.0e-12)
-    valid = bool(count >= 2.0 and variance_x > 1.0e-12 and variance_y > 1.0e-12)
-    metrics["tracking/nonzero_vy_response_slope"] = float(slope) if valid else 0.0
-    metrics["tracking/nonzero_vy_command_correlation"] = float(correlation.clamp(-1.0, 1.0)) if valid else 0.0
-    metrics["tracking/nonzero_achieved_vy_std"] = float((variance_y / denominator).sqrt()) if count >= 2.0 else 0.0
-
-    lateral_bins = {
-        "left": moving & (command[:, 1] > 0.05),
-        "right": moving & (command[:, 1] < -0.05),
-    }
-    for name, mask in lateral_bins.items():
-        add_mean(f"tracking/vy_bin_{name}_mae", vy_error, mask)
 
     x = command[turning, 2]
     y = achieved_yaw[turning]
@@ -1235,22 +1221,29 @@ class MimicLiteLocomotionRewardState:
         joint_vel_indices: torch.Tensor,
         joint_deviation_indices: torch.Tensor,
         device: torch.device,
-        cross_axis_velocity_weight: float = 0.0,
+        weights: dict[str, float] | None = None,
+        min_separation: float = FOOT_MIN_SEPARATION,
     ) -> None:
         self.dt = float(dt)
-        self.cross_axis_velocity_weight = float(cross_axis_velocity_weight)
-        if self.cross_axis_velocity_weight < 0.0:
-            raise ValueError("cross_axis_velocity_weight must be non-negative")
+        if feet_indices.numel() != 2:
+            raise ValueError(f"foot-separation reward requires exactly two feet, got {int(feet_indices.numel())}")
+        if min_separation <= 0.0:
+            raise ValueError(f"foot min separation must be positive, got {min_separation}")
+        self.min_separation = float(min_separation)
         self.feet_indices = feet_indices.to(device=device, dtype=torch.long)
         self.torso_index = int(torso_index)
         self.joint_vel_indices = joint_vel_indices.to(device=device, dtype=torch.long)
         self.joint_deviation_indices = joint_deviation_indices.to(device=device, dtype=torch.long)
+        self.weights = dict(MIMICLITE_LOCOMOTION_WEIGHTS if weights is None else weights)
+        if set(self.weights) != set(MIMICLITE_LOCOMOTION_WEIGHTS):
+            raise ValueError("locomotion reward weight keys must match MIMICLITE_LOCOMOTION_WEIGHTS")
         self.prev_actions = torch.zeros(num_envs, num_dof, device=device)
         self.prev_prev_actions = torch.zeros_like(self.prev_actions)
         self.prev_dof_vel = torch.zeros_like(self.prev_actions)
         self.contact_time = torch.zeros(num_envs, len(self.feet_indices), device=device)
         self.air_time = torch.zeros_like(self.contact_time)
         self.prev_contact = torch.zeros_like(self.contact_time, dtype=torch.bool)
+        self.last_feet_diagnostics: dict[str, torch.Tensor] = {}
 
     def reset(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
@@ -1275,28 +1268,22 @@ class MimicLiteLocomotionRewardState:
         contact_time = torch.where(contact, self.contact_time + self.dt, torch.zeros_like(self.contact_time))
         air_time = torch.where(contact, torch.zeros_like(self.air_time), self.air_time + self.dt)
 
-        standing = (commands[:, :2].norm(dim=-1) < 0.1) & (commands[:, 2].abs() < 0.1)
+        standing = _is_standing_command(commands)
         command_speed = commands[:, :2].norm(dim=-1)
         linvel_exp = baseline_normalized_linvel_reward(core.base_lin_vel, commands)
         linvel_projection = (core.base_lin_vel[:, :2] * commands[:, :2]).sum(dim=-1).clamp_max(command_speed)
         angvel_z_exp = baseline_normalized_angvel_reward(core.base_ang_vel[:, 2], commands)
-
-        planar_velocity = core.base_lin_vel[:, :2]
-        command_xy = commands[:, :2]
-        command_norm_sq = command_xy.square().sum(dim=-1)
-        parallel_velocity = (
-            (planar_velocity * command_xy).sum(dim=-1, keepdim=True)
-            / command_norm_sq.clamp_min(1.0e-6).unsqueeze(-1)
-        ) * command_xy
-        orthogonal_velocity = planar_velocity - parallel_velocity
-        cross_axis_velocity_l2 = -orthogonal_velocity.square().sum(dim=-1)
-        moving_or_turning = (command_speed >= MOVING_COMMAND_THRESHOLD) | (
-            commands[:, 2].abs() >= MOVING_COMMAND_THRESHOLD
+        backward_velocity_progress = directional_progress_reward(
+            core.base_lin_vel[:, 0],
+            commands[:, 0],
+            minimum_target=0.15,
+            active=commands[:, 0] < BACKWARD_COMMAND_THRESHOLD,
         )
-        cross_axis_velocity_l2 = torch.where(
-            moving_or_turning,
-            cross_axis_velocity_l2,
-            torch.zeros_like(cross_axis_velocity_l2),
+        turn_rate_progress = directional_progress_reward(
+            core.base_ang_vel[:, 2],
+            commands[:, 2],
+            minimum_target=0.15,
+            active=commands[:, 2].abs() >= TURN_COMMAND_THRESHOLD,
         )
 
         down = torch.zeros(core.num_envs, 3, device=core.device)
@@ -1321,6 +1308,49 @@ class MimicLiteLocomotionRewardState:
         valid_swing = ((contact_time > 0.1).sum(dim=-1) == 1) & (swing_count == 1) & ~standing
         feet_clearance = torch.where(valid_swing, feet_clearance, torch.zeros_like(feet_clearance))
 
+        swing_count_f = swing.sum(dim=-1).clamp_min(1).to(feet_height.dtype)
+        swing_clearance_sum = (clearance_score * swing).sum(dim=-1)
+        swing_height_sum = (feet_height * swing).sum(dim=-1)
+        backward_swing = swing & (commands[:, 0:1] < -0.10)
+        backward_swing_count = backward_swing.sum(dim=-1)
+        backward_count_f = backward_swing_count.clamp_min(1).to(feet_height.dtype)
+        backward_height_sum = (feet_height * backward_swing).sum(dim=-1)
+        backward_feet_clearance = (clearance_score * backward_swing).sum(dim=-1) / backward_count_f
+        backward_feet_clearance = torch.where(
+            (backward_swing_count > 0) & (commands[:, 0] < -0.10) & ~standing,
+            backward_feet_clearance,
+            torch.zeros_like(backward_feet_clearance),
+        )
+        # Two feet only: max over valid swing feet is a stable P95 proxy and
+        # avoids NaN propagation when both feet are in contact.
+        clearance_p95 = torch.where(swing, clearance_score, torch.zeros_like(clearance_score)).amax(dim=-1)
+        height_p95 = torch.where(swing, feet_height, torch.zeros_like(feet_height)).amax(dim=-1)
+
+        foot_dx = core.body_pos[:, self.feet_indices[0]] - core.body_pos[:, self.feet_indices[1]]
+        lateral_separation = foot_dx[:, 1].abs()
+        separation_violation = (self.min_separation - lateral_separation).clamp_min(0.0)
+        foot_separation_penalty = -separation_violation.square()
+        # Only hold the floor while standing or moving slowly forward/backward.
+        # Lateral stepping and turning legitimately narrow or cross the feet.
+        separation_active = (
+            (command_speed < FOOT_SEPARATION_MAX_PLANAR_SPEED)
+            & (commands[:, 1].abs() < FOOT_SEPARATION_MAX_LATERAL_SPEED)
+            & (commands[:, 2].abs() < FOOT_SEPARATION_MAX_YAW_RATE)
+        )
+        foot_separation_penalty = torch.where(
+            separation_active, foot_separation_penalty, torch.zeros_like(foot_separation_penalty)
+        )
+        self.last_feet_diagnostics = {
+            "feet_clearance_raw_mean": swing_clearance_sum / swing_count_f,
+            "feet_clearance_raw_p95": clearance_p95,
+            "swing_foot_height_mean": swing_height_sum / swing_count_f,
+            "swing_foot_height_p95": height_p95,
+            "backward_swing_foot_height": backward_height_sum / backward_count_f,
+            "lateral_foot_separation_mean": lateral_separation,
+            "foot_separation_violation_mean": separation_violation,
+            "foot_separation_active_fraction": separation_active.float(),
+        }
+
         energy_l1 = -(core.torques * core.dof_vel).abs().sum(dim=-1)
         joint_acc_l2 = -((core.dof_vel - self.prev_dof_vel) / max(self.dt, 1.0e-6)).square().sum(dim=-1)
         action_delta = actions - self.prev_actions
@@ -1330,33 +1360,35 @@ class MimicLiteLocomotionRewardState:
         default_dof_pos = core.default_dof_pos + core.default_dof_pos_offset
         stand_still = -(core.dof_pos - default_dof_pos).abs().sum(dim=-1)
         stand_still = torch.where(standing, stand_still, torch.zeros_like(stand_still))
-        joint_deviation_l2 = -(core.dof_pos[:, self.joint_deviation_indices] - default_dof_pos[:, self.joint_deviation_indices]).square().sum(dim=-1)
+        joint_deviation_l1 = -(core.dof_pos[:, self.joint_deviation_indices] - default_dof_pos[:, self.joint_deviation_indices]).abs().sum(dim=-1)
 
         components = {
             "linvel_exp": linvel_exp,
             "linvel_projection": linvel_projection,
             "angvel_z_exp": angvel_z_exp,
+            "backward_velocity_progress": backward_velocity_progress,
+            "turn_rate_progress": turn_rate_progress,
             "single_foot_contact": single_contact,
             "angvel_xy_l2": angvel_xy_l2,
             "body_upright": body_upright,
             "stand_still": stand_still,
             "feet_air_time": feet_air_time,
             "feet_clearance": feet_clearance,
+            "backward_feet_clearance": backward_feet_clearance,
             "energy_l1": energy_l1,
             "joint_acc_l2": joint_acc_l2,
             "action_rate_l2": action_rate_l2,
             "action_rate2_l2": action_rate2_l2,
             "joint_vel_l2": joint_vel_l2,
-            "joint_deviation_l2": joint_deviation_l2,
-            "cross_axis_velocity_l2": cross_axis_velocity_l2,
+            "joint_deviation_l1": joint_deviation_l1,
+            "foot_separation_penalty": foot_separation_penalty,
         }
         # MimicLite scales the complete task reward by the control timestep.
         # Keep these values in their final, weighted form so logs expose the
         # actual PPO contribution of every copied reward term.
-        weights = dict(MIMICLITE_LOCOMOTION_WEIGHTS)
-        if self.cross_axis_velocity_weight > 0.0:
-            weights["cross_axis_velocity_l2"] = self.cross_axis_velocity_weight
-        weighted_components = {name: self.dt * weights[name] * value for name, value in components.items()}
+        weighted_components = {
+            name: self.dt * self.weights[name] * value for name, value in components.items()
+        }
         reward = sum(weighted_components.values())
 
         self.prev_prev_actions = self.prev_actions.clone()
@@ -1374,64 +1406,94 @@ def _to_torch_obs(obs: Mapping[str, np.ndarray], device: torch.device) -> dict[s
     return {key: torch.as_tensor(value, dtype=torch.float32, device=device) for key, value in obs.items() if key != "time"}
 
 
+def _stage2_actor_observation_for_jepa(
+    observation: Mapping[str, torch.Tensor],
+    projected_z: torch.Tensor,
+    expected_dim: int,
+) -> torch.Tensor:
+    """Build the deployable ``state + last_action + history_actor + z`` JEPA layout."""
+    required = ("state", "last_action", "history_actor")
+    missing = [key for key in required if key not in observation]
+    if missing:
+        raise ValueError(f"Stage2 observation is missing JEPA fields: {missing}")
+    actor_obs = torch.cat(
+        (observation["state"], observation["last_action"], observation["history_actor"], projected_z),
+        dim=-1,
+    )
+    if actor_obs.ndim != 2 or actor_obs.shape[-1] != int(expected_dim):
+        raise ValueError(
+            "Stage2 JEPA observation "
+            f"shape {tuple(actor_obs.shape)} does not match frozen JEPA dimension {expected_dim}; "
+            f"field dims are state={observation['state'].shape[-1]}, "
+            f"last_action={observation['last_action'].shape[-1]}, "
+            f"history_actor={observation['history_actor'].shape[-1]}, z={projected_z.shape[-1]}"
+        )
+    return actor_obs.detach().clone()
+
+
 def _bfm_action(bfm_model, obs: Mapping[str, torch.Tensor], z: torch.Tensor) -> torch.Tensor:
     normalized_obs = bfm_model._normalize(dict(obs))
     distribution = bfm_model._actor(normalized_obs, z, bfm_model.cfg.actor_std)
     return distribution.mean.float()
 
 
-class LoRALinear(nn.Module):
-    """Frozen linear layer plus a zero-initialized low-rank residual."""
+def _global_mean(value: float, device: torch.device) -> float:
+    if not _distributed_ready():
+        return float(value)
+    import torch.distributed as dist
 
-    def __init__(self, base: nn.Linear, rank: int, alpha: float) -> None:
-        super().__init__()
-        if rank <= 0:
-            raise ValueError(f"LoRA rank must be positive, got {rank}")
-        self.base = base
-        for parameter in self.base.parameters():
-            parameter.requires_grad_(False)
-        self.lora_A = nn.Parameter(torch.empty(rank, base.in_features, device=base.weight.device, dtype=base.weight.dtype))
-        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank, device=base.weight.device, dtype=base.weight.dtype))
-        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5.0))
-        self.scale = float(alpha) / float(rank)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        base = self.base(x)
-        update = F.linear(F.linear(x, self.lora_A), self.lora_B) * self.scale
-        return base + update
+    tensor = torch.tensor(float(value), device=device)
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return float((tensor / dist.get_world_size()).item())
 
 
-def inject_bfm_actor_lora(actor: nn.Module, rank: int, alpha: float) -> int:
-    """Replace all standard Linear layers in the frozen BFM actor with LoRA wrappers."""
-    count = 0
-    for name, child in list(actor.named_children()):
-        if isinstance(child, LoRALinear):
-            count += 1
-        elif isinstance(child, nn.Linear):
-            setattr(actor, name, LoRALinear(child, rank=rank, alpha=alpha))
-            count += 1
-        else:
-            count += inject_bfm_actor_lora(child, rank=rank, alpha=alpha)
-    return count
+def _distill_mpc_latents(
+    policy: CommandEncoderPolicy,
+    bfm_model,
+    optimizer: torch.optim.Optimizer,
+    features: torch.Tensor,
+    target_projected_z: torch.Tensor,
+    *,
+    max_samples: int,
+    coefficient: float,
+    max_grad_norm: float,
+) -> float:
+    """Train the command encoder toward planner actions without PPO bias."""
+    if coefficient <= 0.0 or features.numel() == 0:
+        return 0.0
+    if features.shape[0] > max_samples:
+        indices = torch.randperm(features.shape[0], device=features.device)[:max_samples]
+        features = features[indices]
+        target_projected_z = target_projected_z[indices]
+    mean, _, _ = policy(features)
+    predicted = bfm_model.project_z(mean)
+    loss = float(coefficient) * F.mse_loss(predicted, target_projected_z.detach())
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    average_gradients(policy.parameters())
+    torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+    optimizer.step()
+    return _global_mean(float(loss.detach()), features.device)
 
 
-def bfm_lora_parameters(model: nn.Module) -> list[nn.Parameter]:
-    return [parameter for name, parameter in model.named_parameters() if "lora_" in name and parameter.requires_grad]
-
-
-def bfm_lora_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
-    return {name: value.detach().cpu() for name, value in model.named_parameters() if "lora_" in name}
-
-
-def load_bfm_lora_state_dict(model: nn.Module, state: Mapping[str, torch.Tensor] | None) -> None:
-    if not state:
-        return
-    own = dict(model.named_parameters())
-    missing = [name for name in state if name not in own]
-    if missing:
-        raise ValueError(f"Checkpoint contains incompatible BFM LoRA parameters: {missing[:5]}")
-    for name, value in state.items():
-        own[name].data.copy_(value.to(device=own[name].device, dtype=own[name].dtype))
+def _sample_mpc_control_mask(
+    num_envs: int,
+    *,
+    enabled: bool,
+    fraction: float,
+    max_envs: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Reserve a bounded subset for planner control; the remainder stays PPO-on-policy."""
+    mask = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    if not enabled:
+        return mask
+    candidate_count = min(int(max_envs), int(round(float(fraction) * num_envs)))
+    if candidate_count <= 0:
+        return mask
+    selected = torch.randperm(num_envs, device=device)[:candidate_count]
+    mask[selected] = True
+    return mask
 
 
 def _freeze_bfm(model) -> None:
@@ -1443,32 +1505,17 @@ def _freeze_bfm(model) -> None:
 def _load_piplus_robot_contract(robot_config: str | Path) -> SimpleNamespace:
     from omegaconf import OmegaConf
 
-    def to_plain(value):
-        return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
-
     config_path = Path(robot_config).expanduser().resolve()
     config = OmegaConf.load(config_path)
     robot_cfg = config.robot
     joint_names = tuple(str(name) for name in robot_cfg.dof_names)
     body_names = tuple(str(name) for name in robot_cfg.body_names)
-    robot_type = str(robot_cfg.asset.robot_type)
     xml_path = resolve_asset_path(robot_cfg.asset.asset_root, robot_cfg.asset.xml_file)
     if not xml_path.is_file():
-        motion_asset = robot_cfg.get("motion", {}).get("asset", {})
-        fallback_xml = resolve_asset_path(
-            motion_asset.get("assetRoot", robot_cfg.asset.asset_root),
-            motion_asset.get("assetFileName", robot_cfg.asset.xml_file),
-        )
-        if not fallback_xml.is_file():
-            raise FileNotFoundError(f"PiPlus MuJoCo XML does not exist: {xml_path} (fallback: {fallback_xml})")
-        xml_path = fallback_xml
+        raise FileNotFoundError(f"PiPlus MuJoCo XML does not exist: {xml_path}")
     return SimpleNamespace(
         config_path=config_path,
-        robot_type=robot_type,
-        hydra_robot_name=_hydra_robot_name(robot_type),
         policy_joint_names=joint_names,
-        control_contract=to_plain(robot_cfg.control),
-        limit_contract={key: to_plain(robot_cfg[key]) for key in ROBOT_LIMIT_CONTRACT_KEYS},
         fixed_joint_names=(),
         robot=SimpleNamespace(
             base_body="base_link",
@@ -1477,50 +1524,6 @@ def _load_piplus_robot_contract(robot_config: str | Path) -> SimpleNamespace:
             xml_path=xml_path.resolve(),
         ),
     )
-
-
-def _validate_stage1_robot_contract(robot_training: SimpleNamespace, bfm_checkpoint: str | Path) -> dict[str, Any]:
-    """Verify the selected H0W/LSE robot config matches the Stage1 checkpoint config."""
-    from omegaconf import OmegaConf
-
-    checkpoint_dir = Path(bfm_checkpoint).expanduser().resolve()
-    config_path = checkpoint_dir.parent / "config.yaml"
-    if not config_path.is_file():
-        raise FileNotFoundError(
-            f"Stage1 checkpoint config is required for control-contract validation: {config_path}"
-        )
-    stage1 = OmegaConf.load(config_path)
-    stage1_robot = stage1.robot
-
-    def to_plain(value):
-        return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
-
-    mismatches = []
-    stage1_type = str(stage1_robot.asset.robot_type)
-    if stage1_type != robot_training.robot_type:
-        mismatches.append(("asset.robot_type", stage1_type, robot_training.robot_type))
-    for key in ROBOT_CONTROL_CONTRACT_KEYS:
-        expected = to_plain(stage1_robot.control.get(key))
-        if key not in robot_training.control_contract:
-            continue
-        actual = robot_training.control_contract[key]
-        if expected != actual:
-            mismatches.append((f"control.{key}", expected, actual))
-    for key in ROBOT_LIMIT_CONTRACT_KEYS:
-        expected = to_plain(stage1_robot.get(key))
-        actual = robot_training.limit_contract.get(key)
-        if expected != actual:
-            mismatches.append((key, expected, actual))
-    if mismatches:
-        details = "; ".join(f"{key}: checkpoint={expected!r}, robot_config={actual!r}" for key, expected, actual in mismatches)
-        raise ValueError(f"Stage1 robot/control contract mismatch: {details}")
-    return {
-        "validated": True,
-        "source": str(config_path),
-        "robot_type": stage1_type,
-        "control_keys": [key for key in ROBOT_CONTROL_CONTRACT_KEYS if key in robot_training.control_contract],
-        "limit_keys": list(ROBOT_LIMIT_CONTRACT_KEYS),
-    }
 
 
 def build_piplus_locomotion_env(
@@ -1542,7 +1545,7 @@ def build_piplus_locomotion_env(
         raise ValueError(f"Unsupported Stage2 playback simulator: {simulator}")
     robot_training = _load_piplus_robot_contract(robot_config)
     hydra_overrides = [
-        robot_training.hydra_robot_name,
+        "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
         f"simulator={simulator}",
         # Keep playback/evaluation scenes independent of the training config's
         # recorded env count (for example, a 4096-env run directory).
@@ -1562,7 +1565,7 @@ def build_piplus_locomotion_env(
         "rewards.reward_scales.penalty_undesired_contact=-1.0",
         # Keep the wider command curriculum from being paid for with overly
         # abrupt policy changes on the hardware-facing action interface.
-        "rewards.reward_scales.penalty_action_rate=-0.55",
+        "rewards.reward_scales.penalty_action_rate=-0.72",
     ]
     env_config = HumanoidVerseIsaacConfig(
         name="humanoidverse_isaac",
@@ -1624,24 +1627,24 @@ def ppo_update(
     optimizer: torch.optim.Optimizer,
     max_grad_norm: float,
     target_kl: float | None = 0.01,
-    extra_parameters: Iterable[nn.Parameter] | None = None,
-    bfm_model: nn.Module | None = None,
-    bfm_action_std: float = 0.0,
-    lora_regularization: float = 0.0,
+    sample_mask: torch.Tensor | None = None,
 ) -> dict[str, float]:
     features = rollout.encoder_features.reshape(-1, rollout.encoder_features.shape[-1])
     raw_z = rollout.raw_z.reshape(-1, rollout.raw_z.shape[-1])
-    rollout_bfm_observations = getattr(rollout, "bfm_observations", {})
-    bfm_observations = {
-        name: value.reshape(-1, *value.shape[2:]) for name, value in rollout_bfm_observations.items()
-    }
-    rollout_bfm_actions = getattr(rollout, "bfm_actions", None)
-    bfm_actions = (
-        rollout_bfm_actions.reshape(-1, rollout_bfm_actions.shape[-1]) if rollout_bfm_actions is not None else None
-    )
     old_log_prob = rollout.old_log_prob.reshape(-1)
     advantages = advantages.reshape(-1)
     returns = returns.reshape(-1)
+    if sample_mask is not None:
+        sample_mask = sample_mask.reshape(-1).bool()
+        if sample_mask.shape != old_log_prob.shape:
+            raise ValueError("PPO sample mask does not match the flattened rollout.")
+        features = features[sample_mask]
+        raw_z = raw_z[sample_mask]
+        old_log_prob = old_log_prob[sample_mask]
+        advantages = advantages[sample_mask]
+        returns = returns[sample_mask]
+    if features.shape[0] == 0:
+        raise ValueError("PPO requires at least one direct command-encoder transition.")
     advantages = (advantages - advantages.mean()) / advantages.std().clamp_min(1.0e-6)
 
     metric_sums = {
@@ -1653,8 +1656,6 @@ def ppo_update(
         "ratio_mean": 0.0,
         "ratio_max": 0.0,
         "grad_norm": 0.0,
-        "lora_grad_norm": 0.0,
-        "lora_regularization": 0.0,
         "raw_z_norm": 0.0,
     }
     update_count = 0
@@ -1665,14 +1666,6 @@ def ppo_update(
         for indices in torch.randperm(sample_count, device=features.device).split(int(minibatch_size)):
             distribution = policy.distribution(features[indices])
             log_prob = distribution.log_prob(raw_z[indices]).sum(dim=-1)
-            if bfm_model is not None and bfm_action_std > 0.0:
-                if not bfm_observations or bfm_actions is None:
-                    raise ValueError("LoRA PPO update requires BFM observations and sampled actions in the rollout")
-                bfm_obs_batch = {name: value[indices] for name, value in bfm_observations.items()}
-                z = bfm_model.project_z(raw_z[indices])
-                action_mean = _bfm_action(bfm_model, bfm_obs_batch, z)
-                action_distribution = torch.distributions.Normal(action_mean, float(bfm_action_std))
-                log_prob = log_prob + action_distribution.log_prob(bfm_actions[indices]).sum(dim=-1)
             entropy = distribution.entropy().mean(dim=-1).mean()
             _, _, value = policy(features[indices])
             # Bound the exponent before exp() so one bad minibatch cannot poison
@@ -1684,25 +1677,10 @@ def ppo_update(
             policy_loss = -torch.minimum(unclipped, clipped).mean()
             value_loss = F.mse_loss(value, returns[indices])
             loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
-            lora_penalty = torch.zeros((), device=features.device)
-            if lora_regularization > 0.0 and extra_parameters is not None:
-                lora_penalty = sum(
-                    (parameter.square().mean() for parameter in extra_parameters if parameter.requires_grad),
-                    torch.zeros((), device=features.device),
-                )
-                loss = loss + float(lora_regularization) * lora_penalty
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            trainable_parameters = list(policy.parameters())
-            lora_grad_norm = torch.zeros((), device=features.device)
-            if extra_parameters is not None:
-                lora_parameters = [parameter for parameter in extra_parameters if parameter.requires_grad]
-                trainable_parameters.extend(lora_parameters)
-                lora_grad_norm = torch.sqrt(
-                    sum((parameter.grad.detach().square().sum() for parameter in lora_parameters if parameter.grad is not None), torch.zeros((), device=features.device))
-                )
-            average_gradients(trainable_parameters)
-            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
+            average_gradients(policy.parameters())
+            grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
             optimizer.step()
             approx_kl = (old_log_prob[indices] - log_prob).mean()
             # Every rank must make the same early-stop decision. Otherwise one
@@ -1720,8 +1698,6 @@ def ppo_update(
             metric_sums["ratio_mean"] += float(ratio.mean().detach())
             metric_sums["ratio_max"] += float(ratio.max().detach())
             metric_sums["grad_norm"] += float(grad_norm.detach())
-            metric_sums["lora_grad_norm"] += float(lora_grad_norm.detach())
-            metric_sums["lora_regularization"] += float(lora_penalty.detach())
             metric_sums["raw_z_norm"] += float(raw_z[indices].norm(dim=-1).mean().detach())
             update_count += 1
 
@@ -1770,71 +1746,120 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--history-length", type=int, default=8)
     parser.add_argument("--command-resample-steps", type=int, default=300)
     parser.add_argument("--command-resample-prob", type=float, default=0.75)
-    parser.add_argument("--command-stand-prob", type=float, default=0.2)
-    parser.add_argument("--command-turn-prob", type=float, default=0.2)
-    parser.add_argument("--command-lateral-prob", type=float, default=0.0)
+    parser.add_argument("--command-stand-prob", type=float, default=DEFAULT_COMMAND_STAND_PROB)
+    parser.add_argument("--command-turn-prob", type=float, default=0.20)
     parser.add_argument(
-        "--command-lateral-scale",
+        "--command-backward-prob",
         type=float,
-        default=ENCODER_COMMAND_SCALE[1],
-        help="Encoder preprocessing scale for the lateral velocity command; preserves the 3-D input shape.",
-    )
-    parser.add_argument(
-        "--command-backward-scale",
-        type=float,
-        default=1.0,
-        help="Additional encoder scale applied only to negative vx commands; preserves the 3-D input shape.",
-    )
-    parser.add_argument(
-        "--cross-axis-velocity-weight",
-        type=float,
-        default=0.0,
-        help="Penalty weight for velocity orthogonal to the commanded planar direction; 0 disables it.",
+        default=None,
+        help=(
+            "Optional fraction of non-turn targets sampled as mostly straight backward commands. "
+            "This is a training curriculum and does not add base linear velocity to policy observations."
+        ),
     )
     parser.add_argument("--command-warmup-steps", type=int, default=20)
-    parser.add_argument(
-        "--command-resample-on-reset",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Sample a fresh command target for reset environments to prevent crash-loop command starvation.",
-    )
-    parser.add_argument("--command-smoothing", type=float, default=0.1)
+    parser.add_argument("--command-smoothing", type=float, default=0.02)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
-    parser.add_argument("--ppo-epochs", type=int, default=4)
-    parser.add_argument("--minibatch-size", type=int, default=1024)
-    parser.add_argument("--learning-rate", type=float, default=5e-5)
-    parser.add_argument("--lora-rank", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=float, default=16.0)
     parser.add_argument(
-        "--disable-lora",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Keep the Stage1 BFM actor fully frozen; only the command encoder, value head, and discriminator train.",
+        "--latent-reference-size",
+        type=int,
+        default=1024,
+        help="Expert projected latent bank size used by the direction prior and manifold diagnostics.",
     )
-    parser.add_argument("--lora-learning-rate", type=float, default=1e-5)
     parser.add_argument(
-        "--lora-action-std",
+        "--latent-prior-weight",
         type=float,
         default=0.02,
-        help="Action-space exploration std used to give the BFM LoRA adapter a PPO score-function gradient.",
+        help="Penalty weight for nearest-expert projected latent direction distance.",
     )
     parser.add_argument(
-        "--lora-regularization",
+        "--latent-diagnostic-samples",
+        type=int,
+        default=512,
+        help="Maximum generated/reference samples per command bin for latent diagnostics.",
+    )
+    parser.add_argument(
+        "--world-model-enabled",
+        action="store_true",
+        help="Train a scratch JEPA from simulator transitions, then enable latent-residual MPC after its fit gate passes.",
+    )
+    parser.add_argument("--world-model-learning-rate", type=float, default=1.0e-5)
+    parser.add_argument("--world-model-weight-decay", type=float, default=1.0e-4)
+    parser.add_argument("--world-model-online-buffer-size", type=int, default=4096)
+    parser.add_argument("--world-model-online-batch-size", type=int, default=256)
+    parser.add_argument("--world-model-online-updates", type=int, default=4)
+    parser.add_argument("--world-model-target-momentum", type=float, default=0.996)
+    parser.add_argument("--world-model-observation-reconstruction-coef", type=float, default=1.0)
+    parser.add_argument("--world-model-motion-prediction-coef", type=float, default=2.0)
+    parser.add_argument("--world-model-grad-clip", type=float, default=1.0)
+    parser.add_argument("--world-model-normalization-warmup-iterations", type=int, default=100)
+    parser.add_argument("--world-model-normalization-momentum", type=float, default=0.95)
+    parser.add_argument("--world-model-mpc-warmup-iterations", type=int, default=1000)
+    parser.add_argument("--world-model-fit-stability-window", type=int, default=100)
+    parser.add_argument("--world-model-fit-stability-rel-std", type=float, default=0.10)
+    parser.add_argument("--world-model-fit-max-motion-mae", type=float, default=0.20)
+    parser.add_argument("--world-model-fit-ema-decay", type=float, default=0.95)
+    parser.add_argument("--world-model-planner-dim", type=int, default=8)
+    parser.add_argument("--world-model-mpc-horizon", type=int, default=5)
+    parser.add_argument("--world-model-mpc-candidates", type=int, default=4)
+    parser.add_argument("--world-model-mpc-residual-scale", type=float, default=0.15)
+    parser.add_argument("--world-model-jepa-velocity-cost", type=float, default=2.0)
+    parser.add_argument("--world-model-jepa-yaw-cost", type=float, default=1.0)
+    parser.add_argument("--world-model-jepa-upright-cost", type=float, default=1.0)
+    parser.add_argument("--world-model-jepa-action-rate-cost", type=float, default=0.02)
+    parser.add_argument("--world-model-jepa-residual-cost", type=float, default=0.01)
+    parser.add_argument(
+        "--world-model-mpc-control-fraction",
         type=float,
-        default=0.0,
-        help="L2 coefficient for LoRA parameters to keep the adapted BFM near its frozen base.",
+        default=0.25,
+        help=(
+            "Maximum fraction controlled by JEPA MPC after warmup; zero-command standing always remains direct-policy."
+        ),
     )
-    parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
-    parser.add_argument("--discriminator-learning-rate", type=float, default=2e-4)
-    parser.add_argument("--amp-weight", type=float, default=0.06)
+    parser.add_argument("--world-model-mpc-max-envs", type=int, default=1024)
     parser.add_argument(
-        "--amp-command-matched",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Sample AMP expert windows from the same command category as each rollout window.",
+        "--world-model-distill-coef",
+        type=float,
+        default=0.2,
+        help="Weight for JEPA MPC latent distillation into the command encoder after the fit gate passes.",
     )
+    parser.add_argument("--world-model-distill-batch-size", type=int, default=4096)
+    parser.add_argument("--ppo-epochs", type=int, default=5)
+    parser.add_argument("--minibatch-size", type=int, default=1024)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--target-kl", type=float, default=0.04, help="Early-stop PPO epochs after KL exceeds 1.5x this value; <=0 disables.")
+    # Match the project's standard AMP/FB discriminator rate. At 1e-4 the
+    # Stage2 discriminator separated expert and policy in under 200 updates,
+    # collapsing the useful AMP reward before PPO could catch up.
+    parser.add_argument("--discriminator-learning-rate", type=float, default=1e-5)
+    parser.add_argument("--amp-weight", type=float, default=0.18)
+    parser.add_argument("--entropy-coef", type=float, default=0.003)
     parser.add_argument("--env-reward-weight", type=float, default=1.0)
     parser.add_argument("--locomotion-reward-weight", type=float, default=1.1)
+    parser.add_argument(
+        "--linvel-exp-weight",
+        type=float,
+        default=None,
+        help="Optional run-local override for the MimicLite planar velocity tracking reward weight.",
+    )
+    parser.add_argument(
+        "--backward-velocity-progress-weight",
+        type=float,
+        default=None,
+        help="Optional run-local override for the reverse-command directional progress reward weight.",
+    )
+    parser.add_argument(
+        "--foot-separation-weight",
+        type=float,
+        default=None,
+        help="Optional run-local override for the minimum foot lateral separation penalty weight.",
+    )
+    parser.add_argument(
+        "--foot-min-separation",
+        type=float,
+        default=None,
+        help="Optional run-local override for the minimum lateral foot separation in meters.",
+    )
     parser.add_argument("--max-episode-length-s", type=float, default=20.0)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--save-every", type=int, default=100)
@@ -1890,7 +1915,6 @@ def _distributed_context(args: argparse.Namespace) -> tuple[argparse.Namespace, 
 def _run_dry_validation(args: argparse.Namespace) -> None:
     """Validate all model/data contracts without constructing an Isaac environment."""
     robot_training = _load_piplus_robot_contract(args.robot_config)
-    stage1_robot_contract = _validate_stage1_robot_contract(robot_training, args.bfm_checkpoint)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     checkpoint = Path(args.bfm_checkpoint).expanduser().resolve()
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
@@ -1916,12 +1940,7 @@ def _run_dry_validation(args: argparse.Namespace) -> None:
         json.dumps(
             {
                 "bfm_checkpoint": str(checkpoint),
-                "robot_type": robot_training.robot_type,
-                "stage1_robot_contract": stage1_robot_contract,
                 "model_class": type(bfm_model).__name__,
-                "bfm_trainable_parameter_count": sum(
-                    parameter.numel() for parameter in bfm_model.parameters() if parameter.requires_grad
-                ),
                 "action_dim": action_dim,
                 "z_dim": int(bfm_model.cfg.archi.z_dim),
                 "norm_z": bool(bfm_model.cfg.archi.norm_z),
@@ -1947,23 +1966,26 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     if args.smoke:
         args.num_envs = min(args.num_envs, 2)
         args.iterations = 1
-        args.rollout_steps = min(args.rollout_steps, 4)
+        args.rollout_steps = max(args.world_model_mpc_horizon if args.world_model_enabled else 1, min(args.rollout_steps, 5))
         args.ppo_epochs = 1
         args.minibatch_size = min(args.minibatch_size, args.num_envs * args.rollout_steps)
     if args.latent_stat_max_frames < 0:
         raise ValueError("latent_stat_max_frames must be >= 0")
-    if args.command_lateral_scale <= 0.0:
-        raise ValueError("command_lateral_scale must be positive")
-    if args.command_backward_scale <= 0.0:
-        raise ValueError("command_backward_scale must be positive")
-    if args.cross_axis_velocity_weight < 0.0:
-        raise ValueError("cross_axis_velocity_weight must be non-negative")
-    if not args.disable_lora and (
-        args.lora_rank <= 0 or args.lora_alpha <= 0.0 or args.lora_learning_rate <= 0.0 or args.lora_action_std <= 0.0
-    ):
-        raise ValueError("LoRA rank, alpha, learning rate, and action std must be positive")
-    if args.lora_regularization < 0.0:
-        raise ValueError("LoRA regularization must be non-negative")
+    locomotion_reward_weights = dict(MIMICLITE_LOCOMOTION_WEIGHTS)
+    reward_weight_overrides = {
+        "linvel_exp": args.linvel_exp_weight,
+        "backward_velocity_progress": args.backward_velocity_progress_weight,
+        "foot_separation_penalty": args.foot_separation_weight,
+    }
+    for name, value in reward_weight_overrides.items():
+        if value is None:
+            continue
+        if value < 0.0:
+            raise ValueError(f"{name} reward weight must be non-negative, got {value}")
+        locomotion_reward_weights[name] = float(value)
+    foot_min_separation = FOOT_MIN_SEPARATION if args.foot_min_separation is None else float(args.foot_min_separation)
+    if foot_min_separation <= 0.0:
+        raise ValueError(f"foot min separation must be positive, got {foot_min_separation}")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -1971,13 +1993,6 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     work_dir = Path(args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     _ensure_runtime_cache(work_dir)
-    resume_path: Path | None = None
-    checkpoint: Mapping[str, Any] | None = None
-    if args.resume:
-        resume_path = Path(args.resume)
-        if not resume_path.is_file():
-            raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
     env, robot_training = build_piplus_locomotion_env(
         device=args.device,
         robot_config=args.robot_config,
@@ -1986,21 +2001,11 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         seed=args.seed,
         max_episode_length_s=args.max_episode_length_s,
     )
-    stage1_robot_contract = _validate_stage1_robot_contract(robot_training, args.bfm_checkpoint)
     # Checkpoint configs use the device literal ``cuda``; each torchrun
     # worker has already selected its local CUDA device above.
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
     bfm_model = load_model_from_checkpoint_dir(args.bfm_checkpoint, device=bfm_load_device)
     _freeze_bfm(bfm_model)
-    if args.disable_lora:
-        lora_layer_count = 0
-        lora_parameters = []
-    else:
-        lora_layer_count = inject_bfm_actor_lora(bfm_model._actor, rank=args.lora_rank, alpha=args.lora_alpha)
-        lora_parameters = bfm_lora_parameters(bfm_model._actor)
-        if not lora_parameters:
-            raise RuntimeError("No BFM actor linear layers were replaced with LoRA parameters")
-    bfm_trainable_parameter_count = sum(parameter.numel() for parameter in bfm_model.parameters() if parameter.requires_grad)
     bfm_action_dim = int(getattr(bfm_model, "action_dim", -1))
     env_action_dim = int(env.single_action_space.shape[0])
     if env_action_dim != len(robot_training.policy_joint_names):
@@ -2015,21 +2020,63 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     obs, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
     obs_t = _to_torch_obs(obs, device)
-    commands_low = torch.tensor([-0.8, -0.5, -0.8], device=device)
-    commands_high = torch.tensor([0.8, 0.5, 0.8], device=device)
+    commands_low = torch.tensor([-0.5, -0.5, -1.0], device=device)
+    commands_high = torch.tensor([1.0, 0.5, 1.0], device=device)
     if not 0.0 <= args.command_smoothing <= 1.0:
         raise ValueError(f"command_smoothing must be in [0, 1], got {args.command_smoothing}")
+    if args.command_backward_prob is not None and not 0.0 <= args.command_backward_prob <= 1.0:
+        raise ValueError(f"command_backward_prob must be in [0, 1], got {args.command_backward_prob}")
+    if args.latent_reference_size <= 0:
+        raise ValueError(f"latent_reference_size must be positive, got {args.latent_reference_size}")
+    if args.latent_prior_weight < 0.0:
+        raise ValueError(f"latent_prior_weight must be non-negative, got {args.latent_prior_weight}")
+    if args.latent_diagnostic_samples <= 0:
+        raise ValueError(f"latent_diagnostic_samples must be positive, got {args.latent_diagnostic_samples}")
+    if args.world_model_enabled:
+        if not 0.0 <= args.world_model_mpc_control_fraction < 1.0:
+            raise ValueError("world_model_mpc_control_fraction must be in [0, 1).")
+        if args.world_model_mpc_max_envs <= 0 or args.world_model_distill_batch_size <= 0:
+            raise ValueError("World-model MPC and distillation batch limits must be positive.")
+        if args.world_model_distill_coef < 0.0:
+            raise ValueError("world_model_distill_coef must be non-negative.")
+        if args.world_model_learning_rate <= 0.0 or args.world_model_weight_decay < 0.0:
+            raise ValueError("World-model learning rate must be positive and weight decay non-negative.")
+        if min(args.world_model_online_buffer_size, args.world_model_online_batch_size, args.world_model_online_updates) <= 0:
+            raise ValueError("World-model buffer, batch size, and update count must be positive.")
+        if args.world_model_mpc_horizon != 5:
+            raise ValueError("The simulator JEPA is configured for the required five-step prediction horizon.")
+        if args.rollout_steps < args.world_model_mpc_horizon:
+            raise ValueError("rollout_steps must be at least world_model_mpc_horizon.")
+        if not 0.0 < args.world_model_target_momentum <= 1.0:
+            raise ValueError("world_model_target_momentum must be in (0, 1].")
+        if args.world_model_observation_reconstruction_coef < 0.0 or args.world_model_motion_prediction_coef < 0.0:
+            raise ValueError("World-model loss coefficients must be non-negative.")
+        if args.world_model_grad_clip < 0.0:
+            raise ValueError("world_model_grad_clip must be non-negative.")
+        if args.world_model_mpc_warmup_iterations < 1000:
+            raise ValueError("world_model_mpc_warmup_iterations must be at least 1000.")
+        if args.world_model_fit_stability_window <= 1 or args.world_model_fit_max_motion_mae <= 0.0:
+            raise ValueError("World-model fit gate window and maximum motion MAE must be positive.")
+        if not 0.0 <= args.world_model_fit_stability_rel_std or not 0.0 <= args.world_model_fit_ema_decay < 1.0:
+            raise ValueError("Invalid world-model fit stability settings.")
+        if args.world_model_normalization_warmup_iterations <= 0:
+            raise ValueError("world_model_normalization_warmup_iterations must be positive.")
+        if not 0.0 <= args.world_model_normalization_momentum < 1.0:
+            raise ValueError("world_model_normalization_momentum must be in [0, 1).")
+        for name in (
+            "world_model_jepa_velocity_cost",
+            "world_model_jepa_yaw_cost",
+            "world_model_jepa_upright_cost",
+            "world_model_jepa_action_rate_cost",
+            "world_model_jepa_residual_cost",
+        ):
+            if getattr(args, name) < 0.0:
+                raise ValueError(f"{name} must be non-negative.")
     commands = torch.zeros(args.num_envs, 3, device=device)
     command_targets = torch.zeros_like(commands)
     command_episode_steps = torch.zeros(args.num_envs, device=device, dtype=torch.long)
-    command_input_scale = (ENCODER_COMMAND_SCALE[0], args.command_lateral_scale, ENCODER_COMMAND_SCALE[2])
-    encoder_input = flatten_encoder_observation(
-        obs_t,
-        commands,
-        command_scale=command_input_scale,
-        backward_command_scale=args.command_backward_scale,
-    )
-    input_scale = encoder_input_scale(obs_t, commands, command_scale=command_input_scale)
+    encoder_input = flatten_encoder_observation(obs_t, commands)
+    input_scale = encoder_input_scale(obs_t, commands)
     backward_arch = bfm_model.cfg.archi.b
     policy = CommandEncoderPolicy(
         encoder_input.shape[-1],
@@ -2037,10 +2084,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         hidden_dim=int(backward_arch.hidden_dim),
         hidden_layers=int(backward_arch.hidden_layers),
     ).to(device)
-    optimizer_groups = [{"params": policy.parameters(), "lr": args.learning_rate}]
-    if lora_parameters:
-        optimizer_groups.append({"params": lora_parameters, "lr": args.lora_learning_rate})
-    policy_optimizer = torch.optim.Adam(optimizer_groups)
+    policy_optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
 
     latent_stats = _collect_bfm_latent_stats(
         bfm_agent=None,
@@ -2059,6 +2103,45 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         bfm_model=bfm_model,
         latent_stats=latent_stats,
     )
+    latent_reference = latent_stats["_reference_projected"].to(device=device)
+    if latent_reference.shape[0] > args.latent_reference_size:
+        reference_generator = torch.Generator(device=device)
+        reference_generator.manual_seed(29)
+        reference_indices = torch.randperm(
+            latent_reference.shape[0], generator=reference_generator, device=device
+        )[: args.latent_reference_size]
+        latent_reference = latent_reference[reference_indices]
+    world_model: FrozenJEPAWorldModel | None = None
+    world_model_basis: torch.Tensor | None = None
+    world_model_optimizer: torch.optim.Optimizer | None = None
+    if args.world_model_enabled:
+        with torch.no_grad():
+            initial_jepa_z = bfm_model.project_z(policy.deterministic_z(flatten_encoder_observation(obs_t, commands)))
+            initial_jepa_obs = _stage2_actor_observation_for_jepa(obs_t, initial_jepa_z, expected_dim=631)
+        world_model = FrozenJEPAWorldModel.from_scratch(
+            obs_dim=int(initial_jepa_obs.shape[-1]),
+            action_dim=bfm_action_dim,
+            device=device,
+            embedding_dim=int(bfm_model.cfg.archi.z_dim),
+        )
+        if world_model.action_dim != bfm_action_dim:
+            raise ValueError(
+                f"JEPA action dimension {world_model.action_dim} does not match BFM action dimension {bfm_action_dim}"
+            )
+        if world_model.embedding_dim != int(bfm_model.cfg.archi.z_dim):
+            raise ValueError(
+                f"JEPA embedding dimension {world_model.embedding_dim} does not match BFM latent dimension "
+                f"{int(bfm_model.cfg.archi.z_dim)}"
+            )
+        world_model_basis = expert_latent_pca_basis(latent_reference, args.world_model_planner_dim).to(device=device)
+        broadcast_module_state(world_model.model)
+        world_model_optimizer = torch.optim.AdamW(
+            (parameter for parameter in world_model.model.parameters() if parameter.requires_grad),
+            lr=args.world_model_learning_rate,
+            weight_decay=args.world_model_weight_decay,
+        )
+        if _distributed_ready():
+            torch.distributed.broadcast(world_model_basis, src=0)
     if rank0:
         print(
             json.dumps(
@@ -2088,10 +2171,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         key_bodies=DEFAULT_KEY_BODIES,
         history_length=args.history_length,
     )
-    discriminator_hidden_dims = infer_amp_discriminator_hidden_dims(
-        checkpoint.get("discriminator") if checkpoint is not None else None
-    )
-    discriminator = AMPDiscriminator(expert.feature_dim, hidden_dims=discriminator_hidden_dims).to(device)
+    discriminator = AMPDiscriminator(expert.feature_dim).to(device)
     broadcast_module_state(policy)
     broadcast_module_state(discriminator)
     discriminator_optimizer = torch.optim.Adam(discriminator.parameters(), lr=args.discriminator_learning_rate)
@@ -2099,26 +2179,76 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     start_iteration = 0
     policy_optimizer_resume = "fresh"
     discriminator_optimizer_resume = "fresh"
+    world_model_runtime_status = "scratch_simulator_jepa" if world_model is not None else "disabled"
+    world_model_optimizer_resume = "fresh" if world_model_optimizer is not None else "disabled"
+    world_model_fit_history: list[float] = []
+    world_model_fit_ema: float | None = None
+    world_model_mpc_ready = False
+    world_model_training_start_iteration: int | None = None
     legacy_input_migrated = False
-    if checkpoint is not None and resume_path is not None:
-        if args.disable_lora and checkpoint.get("bfm_lora"):
-            raise ValueError("Cannot resume a LoRA Stage2 checkpoint with --disable-lora")
-        load_bfm_lora_state_dict(bfm_model._actor, checkpoint.get("bfm_lora"))
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"Stage2 resume checkpoint does not exist: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
-        discriminator.load_state_dict(checkpoint["discriminator"])
+        checkpoint_discriminator = checkpoint.get("discriminator")
+        discriminator_architecture_compatible = True
+        if checkpoint_discriminator is not None:
+            try:
+                discriminator.load_state_dict(checkpoint_discriminator)
+            except RuntimeError:
+                # PiPlus uses the wider 1024/512 MSE discriminator. The old
+                # Stage2 WGAN checkpoint is still valid for the encoder, but
+                # its discriminator tensors cannot be loaded into this net.
+                discriminator_architecture_compatible = False
         policy_optimizer_resume = restore_policy_optimizer(
             policy_optimizer,
             checkpoint,
             learning_rate=args.learning_rate,
             reset_for_input_migration=legacy_input_migrated,
-            reset_for_lora=checkpoint.get("bfm_lora") is None,
         )
-        discriminator_optimizer_resume = restore_discriminator_optimizer(
-            discriminator_optimizer,
-            checkpoint,
-            learning_rate=args.discriminator_learning_rate,
-        )
+        checkpoint_objective = checkpoint.get("metadata", {}).get("amp_discriminator_objective")
+        if discriminator_architecture_compatible and checkpoint_objective == AMP_DISCRIMINATOR_OBJECTIVE:
+            discriminator_optimizer_resume = restore_discriminator_optimizer(
+                discriminator_optimizer,
+                checkpoint,
+                learning_rate=args.discriminator_learning_rate,
+            )
+        else:
+            # Do not carry WGAN-GP optimizer moments into the PiPlus MSE/quad objective.
+            discriminator_optimizer_resume = (
+                "reset_for_architecture_change" if not discriminator_architecture_compatible else "reset_for_objective_change"
+            )
         reward_normalizer.load_state_dict(checkpoint["amp_reward_normalizer"])
+        if world_model is not None:
+            checkpoint_world_model = checkpoint.get("world_model")
+            if checkpoint_world_model is not None:
+                world_model.model.load_state_dict(checkpoint_world_model, strict=True)
+                broadcast_module_state(world_model.model)
+                world_model_runtime_status = "simulator_jepa_resumed_from_stage2"
+            if world_model_optimizer is None:
+                raise AssertionError("Trainable JEPA was initialized without an optimizer")
+            checkpoint_world_model_optimizer = checkpoint.get("world_model_optimizer")
+            if checkpoint_world_model_optimizer is not None and checkpoint_world_model is not None:
+                world_model_optimizer.load_state_dict(checkpoint_world_model_optimizer)
+                world_model_optimizer_resume = "loaded_with_lr_override"
+            else:
+                world_model_optimizer_resume = "fresh_from_scratch"
+            for group in world_model_optimizer.param_groups:
+                group["lr"] = args.world_model_learning_rate
+                group["weight_decay"] = args.world_model_weight_decay
+            runtime = checkpoint.get("world_model_runtime", {}) if checkpoint_world_model is not None else {}
+            if runtime:
+                for name in ("obs_mean", "obs_std", "action_mean", "action_std"):
+                    value = runtime.get(name)
+                    if value is not None:
+                        getattr(world_model, name).copy_(torch.as_tensor(value, device=device))
+                world_model.normalization_updates = int(runtime.get("normalization_updates", 0))
+                world_model_fit_history = [float(value) for value in runtime.get("fit_history", [])]
+                world_model_fit_ema = runtime.get("fit_ema")
+                world_model_mpc_ready = bool(runtime.get("mpc_ready", False))
+                world_model_training_start_iteration = int(runtime.get("training_start_iteration", 0))
         start_iteration = int(checkpoint.get("iteration", 0))
         if start_iteration < 0 or start_iteration > args.iterations:
             raise ValueError(f"Resume iteration {start_iteration} is outside [0, {args.iterations}]")
@@ -2133,12 +2263,34 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         "policy_learning_rate": args.learning_rate,
                         "discriminator_optimizer_resume": discriminator_optimizer_resume,
                         "discriminator_learning_rate": args.discriminator_learning_rate,
+                        "world_model_runtime_status": world_model_runtime_status,
+                        "world_model_optimizer_resume": world_model_optimizer_resume,
+                        "world_model_learning_rate": args.world_model_learning_rate if world_model_optimizer is not None else None,
                     }
                 ),
                 flush=True,
             )
+    if world_model is not None and world_model_training_start_iteration is None:
+        world_model_training_start_iteration = start_iteration
     online_history = OnlineAMPHistory(args.num_envs, args.history_length, len(robot_training.policy_joint_names), device)
     online_history.reset(env._env.simulator.dof_pos)
+    jepa_context_observations: torch.Tensor | None = None
+    jepa_action_history: torch.Tensor | None = None
+    if world_model is not None:
+        with torch.no_grad():
+            initial_projected_z = bfm_model.project_z(
+                policy.deterministic_z(flatten_encoder_observation(obs_t, commands))
+            )
+        current_jepa_observation = _stage2_actor_observation_for_jepa(
+            obs_t, initial_projected_z, world_model.obs_dim
+        )
+        jepa_context_observations = current_jepa_observation.unsqueeze(1).expand(
+            -1, world_model.context_len, -1
+        ).clone()
+        current_action = obs_t["last_action"]
+        jepa_action_history = current_action.unsqueeze(1).expand(
+            -1, max(world_model.context_len - 1, 0), -1
+        ).clone()
     control_joint_names = tuple(robot_training.policy_joint_names)
     joint_vel_indices = torch.tensor(
         [index for index, name in enumerate(control_joint_names) if "shoulder" in name], device=device, dtype=torch.long
@@ -2166,27 +2318,15 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         joint_vel_indices=joint_vel_indices,
         joint_deviation_indices=joint_deviation_indices,
         device=device,
-        cross_axis_velocity_weight=args.cross_axis_velocity_weight,
+        weights=locomotion_reward_weights,
+        min_separation=foot_min_separation,
     )
 
     metadata = {
         "robot_config": str(Path(args.robot_config).resolve()),
-        "robot_type": str(robot_training.robot_type),
-        "stage1_robot_contract": stage1_robot_contract,
         "expert_dataset": str(Path(args.expert_dataset).resolve()),
         "bfm_checkpoint": str(Path(args.bfm_checkpoint).resolve()),
         "action_dim": bfm_action_dim,
-        "bfm_lora": {
-            "enabled": bool(lora_parameters),
-            "rank": int(args.lora_rank),
-            "alpha": float(args.lora_alpha),
-            "learning_rate": float(args.lora_learning_rate),
-            "action_std": float(args.lora_action_std),
-            "regularization": float(args.lora_regularization),
-            "actor_linear_layers": int(lora_layer_count),
-            "base_bfm_frozen": True,
-        },
-        "bfm_trainable_parameter_count": int(bfm_trainable_parameter_count),
         "policy_joint_names": list(robot_training.policy_joint_names),
         "fixed_joint_names": list(robot_training.fixed_joint_names),
         "simulator_control_joint_names": list(robot_training.robot.control_joint_names),
@@ -2202,7 +2342,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         ],
         "encoder_input_transform": {
             "version": ENCODER_INPUT_TRANSFORM_VERSION,
-            "command_scale": list(command_input_scale),
+            "command_scale": list(ENCODER_COMMAND_SCALE),
             "dof_vel_scale": ENCODER_DOF_VEL_SCALE,
             "legacy_checkpoint_first_layer_migrated": legacy_input_migrated,
         },
@@ -2212,28 +2352,32 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "command_encoder_hidden_dim": int(policy.hidden_dim),
         "command_encoder_hidden_layers": int(policy.hidden_layers),
         "expert_feature_dim": int(expert.feature_dim),
-        "discriminator_hidden_dims": list(discriminator_hidden_dims),
         "expert_motion_count": int(expert.motion_count),
         "command_range": {"low": commands_low.tolist(), "high": commands_high.tolist()},
         "command_stand_prob": args.command_stand_prob,
         "command_turn_prob": args.command_turn_prob,
-        "command_lateral_prob": args.command_lateral_prob,
-        "command_lateral_scale": args.command_lateral_scale,
-        "command_backward_scale": args.command_backward_scale,
-        "cross_axis_velocity_weight": args.cross_axis_velocity_weight,
+        "command_backward_prob": args.command_backward_prob,
         "command_resample_prob": args.command_resample_prob,
         "command_resample_interval": args.command_resample_steps,
         "command_warmup_steps": args.command_warmup_steps,
-        "command_resample_on_reset": bool(args.command_resample_on_reset),
         "command_smoothing": args.command_smoothing,
-        "amp_reward_mapping": "raw_discriminator_score -> MimicLiteRewardNormalizer -> amp_weight",
+        "action_filter": "none; raw BFM actions are sent directly to the environment",
+        "amp_reward_mapping": "quad(discriminator_score) -> amp_weight",
+        "amp_discriminator_objective": AMP_DISCRIMINATOR_OBJECTIVE,
         "amp_reward_weight": args.amp_weight,
-        "amp_command_matched": bool(args.amp_command_matched),
         "env_reward_weight": args.env_reward_weight,
         "locomotion_reward_weight": args.locomotion_reward_weight,
-        "locomotion_reward_terms": MIMICLITE_LOCOMOTION_WEIGHTS,
+        "locomotion_reward_terms": locomotion_reward_weights,
+        "foot_min_separation": foot_min_separation,
+        "foot_separation_penalty_semantics": (
+            "negative squared lateral foot distance violation below foot_min_separation, "
+            "active only while standing or moving slowly without lateral/yaw commands"
+        ),
+        "backward_reward_signal": "privileged simulator base_lin_vel used only by the reward and diagnostics",
+        "deployment_base_lin_vel_observation": False,
         "locomotion_reward_scaling": "each weighted term is multiplied by the environment control dt",
-        "stand_still_semantics": "HT_lab_pipeline-compatible zero-command negative L1 error from the default joint pose",
+        "stand_still_semantics": "negative L1 default-pose error inside the complete velocity-command deadzone",
+        "stand_command_deadzone": STAND_COMMAND_DEADZONE,
         "linvel_exp_error_scale": LINVEL_EXP_ERROR_SCALE,
         "linvel_exp_semantics": "signed improvement over the zero-speed baseline for nonzero planar commands",
         "standalone_tracking_reward": "removed; baseline-normalized linvel_exp and signed baseline-normalized angvel_z_exp provide command tracking",
@@ -2245,6 +2389,65 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "norm_z": bool(bfm_model.cfg.archi.norm_z),
         "latent_contract": latent_contract,
         "latent_stats": _latent_stats_to_json(latent_stats),
+        "latent_reference_size": int(latent_reference.shape[0]),
+        "latent_prior_weight": float(args.latent_prior_weight),
+        "latent_prior_metric": "1 - max_cosine(projected_z, expert_projected_latent_bank)",
+        "latent_diagnostic_samples": int(args.latent_diagnostic_samples),
+        "world_model": {
+            "enabled": bool(args.world_model_enabled),
+            "type": "scratch_simulator_action_conditioned_jepa",
+            "initialization": "random; no ROSBAG or offline JEPA checkpoint",
+            "observation_dim": int(world_model.obs_dim) if world_model is not None else None,
+            "action_dim": int(world_model.action_dim) if world_model is not None else None,
+            "context_len": int(world_model.context_len) if world_model is not None else None,
+            "embedding_dim": int(world_model.embedding_dim) if world_model is not None else None,
+            "action": "23-D BFM action generated from candidate projected latent",
+            "bfm_trainable": False,
+            "jepa_frozen": False,
+            "optimizer": None
+            if world_model_optimizer is None
+            else {
+                "type": "AdamW",
+                "learning_rate": args.world_model_learning_rate,
+                "weight_decay": args.world_model_weight_decay,
+                "resume": world_model_optimizer_resume,
+            },
+            "online_training": {
+                "enabled": bool(args.world_model_enabled),
+                "objective": "five_step_jepa_latent_alignment_plus_observation_decoder_plus_privileged_motion_head",
+                "buffer_size": args.world_model_online_buffer_size,
+                "batch_size": args.world_model_online_batch_size,
+                "updates_per_iteration": args.world_model_online_updates,
+                "target_momentum": args.world_model_target_momentum,
+                "observation_reconstruction_coef": args.world_model_observation_reconstruction_coef,
+                "motion_prediction_coef": args.world_model_motion_prediction_coef,
+                "grad_clip": args.world_model_grad_clip,
+                "normalization": "simulator statistics, frozen after warmup",
+                "normalization_warmup_iterations": args.world_model_normalization_warmup_iterations,
+                "base_lin_vel_semantics": "privileged simulator training label only; never a model input",
+            },
+            "mpc": {
+                "horizon": args.world_model_mpc_horizon,
+                "candidates": args.world_model_mpc_candidates,
+                "residual_pca_dim": args.world_model_planner_dim,
+                "residual_scale": args.world_model_mpc_residual_scale,
+                "control_fraction": args.world_model_mpc_control_fraction,
+                "max_envs": args.world_model_mpc_max_envs,
+                "minimum_jepa_only_iterations": args.world_model_mpc_warmup_iterations,
+                "fit_stability_window": args.world_model_fit_stability_window,
+                "fit_stability_relative_std": args.world_model_fit_stability_rel_std,
+                "fit_max_motion_mae": args.world_model_fit_max_motion_mae,
+                "cost": {
+                    "planar_velocity": args.world_model_jepa_velocity_cost,
+                    "yaw": args.world_model_jepa_yaw_cost,
+                    "upright": args.world_model_jepa_upright_cost,
+                    "action_rate": args.world_model_jepa_action_rate_cost,
+                    "latent_residual": args.world_model_jepa_residual_cost,
+                },
+                "stand_guard": "commands inside the 0.1 deadzone remain direct-policy",
+                "ppo_semantics": "MPC-controlled transitions are excluded from PPO and distilled after the fit gate passes.",
+            },
+        },
         "distributed_rank": rank,
         "distributed_world_size": world_size,
         "global_num_envs": int(args.num_envs * world_size),
@@ -2252,6 +2455,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "resume_iteration": start_iteration,
         "policy_optimizer_resume": policy_optimizer_resume,
         "discriminator_optimizer_resume": discriminator_optimizer_resume,
+        "world_model_runtime_status": world_model_runtime_status,
+        "world_model_optimizer_resume": world_model_optimizer_resume,
         "discriminator_learning_rate": args.discriminator_learning_rate,
         "ppo": {
             "epochs": args.ppo_epochs,
@@ -2260,7 +2465,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             "target_kl": args.target_kl,
             "clip_ratio": 0.2,
             "value_coef": 0.5,
-            "entropy_coef": 0.001,
+            "entropy_coef": args.entropy_coef,
         },
     }
     if rank0:
@@ -2269,37 +2474,103 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     try:
         for iteration in range(start_iteration, args.iterations):
-            encoder_features, bfm_observations_store, commands_store, raw_z_store = [], [], [], []
-            bfm_actions_store = []
+            # JEPA learns alone for at least 1000 iterations. MPC is latched on
+            # only after the privileged motion-fit MAE is both low and stable.
+            world_model_available = world_model is not None and world_model_mpc_ready
+            mpc_env_mask = _sample_mpc_control_mask(
+                args.num_envs,
+                enabled=world_model_available,
+                fraction=args.world_model_mpc_control_fraction,
+                max_envs=args.world_model_mpc_max_envs,
+                device=device,
+            )
+            encoder_features, commands_store, raw_z_store = [], [], []
             old_log_probs, values_store = [], []
             env_rewards, locomotion_rewards, terminated_store, truncated_store, crash_store, fall_store, timeout_values, amp_features = (
                 [], [], [], [], [], [], [], []
             )
             env_reward_components_store: dict[str, list[torch.Tensor]] = {}
-            locomotion_components_store = {name: [] for name in MIMICLITE_LOCOMOTION_WEIGHTS}
+            locomotion_components_store = {name: [] for name in locomotion_reward_weights}
+            feet_diagnostics_store: dict[str, list[torch.Tensor]] = {name: [] for name in FEET_DIAGNOSTIC_KEYS}
             base_lin_vel_store, base_ang_vel_store = [], []
+            mpc_controlled_store, mpc_projected_z_store = [], []
+            jepa_online_context_store: list[torch.Tensor] = []
+            jepa_online_action_store: list[torch.Tensor] = []
+            jepa_online_target_store: list[torch.Tensor] = []
+            jepa_online_motion_store: list[torch.Tensor] = []
+            pending_jepa_samples: list[dict[str, Any]] = []
+            jepa_online_samples_per_step = max(
+                1,
+                math.ceil(
+                    args.world_model_online_buffer_size
+                    / max(args.rollout_steps - args.world_model_mpc_horizon + 1, 1)
+                ),
+            )
             for step in range(args.rollout_steps):
                 with torch.no_grad():
                     obs_t = _to_torch_obs(obs, device)
-                    encoder_input = flatten_encoder_observation(
-                        obs_t,
-                        commands,
-                        command_scale=command_input_scale,
-                        backward_command_scale=args.command_backward_scale,
-                    )
-                    raw_z, old_z_log_prob, value = policy.sample(encoder_input)
+                    encoder_input = flatten_encoder_observation(obs_t, commands)
+                    raw_z, old_log_prob, value = policy.sample(encoder_input)
                     # Reuse the first-stage FBModel.project_z(); it reads norm_z from the checkpoint config.
-                    z = bfm_model.project_z(raw_z)
-                    action_mean = _bfm_action(bfm_model, obs_t, z)
-                    action_distribution = torch.distributions.Normal(action_mean, args.lora_action_std)
-                    action = action_distribution.sample().clamp(-1.0, 1.0)
-                    old_log_prob = old_z_log_prob + action_distribution.log_prob(action).sum(dim=-1)
+                    direct_projected_z = bfm_model.project_z(raw_z)
+                    executed_projected_z = direct_projected_z
+                    if world_model is not None and jepa_context_observations is not None:
+                        # The deployable actor observation includes the latent that
+                        # produces the current raw action. Replace the provisional
+                        # z appended after the previous environment step.
+                        jepa_context_observations[:, -1] = _stage2_actor_observation_for_jepa(
+                            obs_t, direct_projected_z, world_model.obs_dim
+                        )
+                    effective_mpc_env_mask = mpc_env_mask & jepa_mpc_command_mask(commands)
+                    if torch.any(effective_mpc_env_mask):
+                        if world_model is None or world_model_basis is None or jepa_context_observations is None or jepa_action_history is None:
+                            raise AssertionError("MPC mask was enabled without JEPA state.")
+                        planned = plan_jepa_latent_residuals(
+                            world_model=world_model,
+                            context_observations=jepa_context_observations[effective_mpc_env_mask],
+                            action_history=jepa_action_history[effective_mpc_env_mask],
+                            base_projected_z=direct_projected_z[effective_mpc_env_mask],
+                            basis=world_model_basis,
+                            bfm_model=bfm_model,
+                            bfm_observation={
+                                key: value[effective_mpc_env_mask]
+                                for key, value in obs_t.items()
+                                if key != "time"
+                            },
+                            commands=commands[effective_mpc_env_mask],
+                            last_action=obs_t["last_action"][effective_mpc_env_mask],
+                            horizon=args.world_model_mpc_horizon,
+                            num_candidates=args.world_model_mpc_candidates,
+                            residual_scale=args.world_model_mpc_residual_scale,
+                            velocity_cost_weight=args.world_model_jepa_velocity_cost,
+                            yaw_cost_weight=args.world_model_jepa_yaw_cost,
+                            upright_cost_weight=args.world_model_jepa_upright_cost,
+                            action_rate_cost_weight=args.world_model_jepa_action_rate_cost,
+                            residual_cost_weight=args.world_model_jepa_residual_cost,
+                        )
+                        executed_projected_z = direct_projected_z.clone()
+                        executed_projected_z[effective_mpc_env_mask] = planned
+                    action = _bfm_action(bfm_model, obs_t, executed_projected_z)
+                    if world_model is not None and jepa_context_observations is not None and jepa_action_history is not None:
+                        sample_count = min(jepa_online_samples_per_step, args.num_envs)
+                        sample_ids = torch.randperm(args.num_envs, device=device)[:sample_count]
+                        pending_jepa_samples.append(
+                            {
+                                "ids": sample_ids,
+                                "context": jepa_context_observations[sample_ids].detach().clone(),
+                                "history": jepa_action_history[sample_ids].detach().clone(),
+                                "actions": [],
+                                "valid": torch.ones(sample_count, device=device, dtype=torch.bool),
+                            }
+                        )
                 next_obs, env_reward, terminated, truncated, info = env.step(action, to_numpy=False)
                 terminated = terminated.to(device=device, dtype=torch.bool)
                 truncated = truncated.to(device=device, dtype=torch.bool)
                 done = torch.logical_or(terminated, truncated)
                 transition_core = _transition_core(env._env, info)
                 locomotion, locomotion_components = locomotion_reward_state.compute(transition_core, commands, action, done)
+                for name, value in locomotion_reward_state.last_feet_diagnostics.items():
+                    feet_diagnostics_store.setdefault(name, []).append(value.detach())
                 base_lin_vel_store.append(transition_core.base_lin_vel.detach())
                 base_ang_vel_store.append(transition_core.base_ang_vel.detach())
                 online_history.append(transition_core.dof_pos)
@@ -2310,22 +2581,18 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     terminal_obs = info.get("terminal_observation")
                     if terminal_obs is None:
                         raise RuntimeError("A truncated transition is missing its pre-reset terminal observation")
-                    terminal_input = flatten_encoder_observation(
-                        _to_torch_obs(terminal_obs, device),
-                        commands,
-                        command_scale=command_input_scale,
-                        backward_command_scale=args.command_backward_scale,
-                    )
+                    terminal_input = flatten_encoder_observation(_to_torch_obs(terminal_obs, device), commands)
                     with torch.no_grad():
                         timeout_value[truncated] = policy(terminal_input)[2][truncated]
                 if torch.any(done):
                     online_history.reset_envs(done.nonzero(as_tuple=False).squeeze(-1), env._env.simulator.dof_pos)
 
                 encoder_features.append(encoder_input.detach())
-                bfm_observations_store.append({name: value.detach() for name, value in obs_t.items()})
                 commands_store.append(commands.detach())
+                # PPO transitions retain the pre-projection Gaussian sample.
+                # MPC-controlled rows are masked out of PPO below, while the
+                # executed projected latent is stored separately for planning.
                 raw_z_store.append(raw_z.detach())
-                bfm_actions_store.append(action.detach())
                 old_log_probs.append(old_log_prob.detach())
                 values_store.append(value.detach())
                 env_rewards.append(env_reward.to(device=device, dtype=torch.float32))
@@ -2340,6 +2607,59 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 fall_store.append(info["termination_fall_over"].to(device=device, dtype=torch.bool))
                 timeout_values.append(timeout_value)
                 amp_features.append(current_amp_feature)
+                mpc_controlled_store.append(effective_mpc_env_mask)
+                mpc_projected_z_store.append(executed_projected_z.detach())
+                if world_model is not None and jepa_context_observations is not None and jepa_action_history is not None:
+                    next_obs_t = _to_torch_obs(next_obs, device)
+                    # Use the command encoder's next-state latent in the target
+                    # observation. This is more self-consistent than carrying
+                    # the previous executed latent across a physical step.
+                    with torch.no_grad():
+                        next_input = flatten_encoder_observation(next_obs_t, commands)
+                        provisional_next_z = bfm_model.project_z(policy.deterministic_z(next_input))
+                    next_jepa_observation = _stage2_actor_observation_for_jepa(
+                        next_obs_t, provisional_next_z, world_model.obs_dim
+                    )
+                    mature_samples: list[dict[str, Any]] = []
+                    for pending in pending_jepa_samples:
+                        pending["actions"].append(action[pending["ids"]].detach().clone())
+                        pending["valid"] &= ~done[pending["ids"]]
+                        if len(pending["actions"]) == args.world_model_mpc_horizon:
+                            mature_samples.append(pending)
+                    for pending in mature_samples:
+                        valid = pending["valid"]
+                        if torch.any(valid):
+                            ids = pending["ids"][valid]
+                            future_actions = torch.stack(pending["actions"], dim=1)[valid]
+                            jepa_online_context_store.append(pending["context"][valid])
+                            jepa_online_action_store.append(torch.cat((pending["history"][valid], future_actions), dim=1))
+                            jepa_online_target_store.append(next_jepa_observation[ids].detach().clone())
+                            jepa_online_motion_store.append(
+                                torch.cat(
+                                    (transition_core.base_lin_vel[ids, :2], transition_core.base_ang_vel[ids, 2:3]),
+                                    dim=-1,
+                                ).detach().clone()
+                            )
+                        pending_jepa_samples.remove(pending)
+                    jepa_context_observations = torch.cat(
+                        (jepa_context_observations[:, 1:], next_jepa_observation.unsqueeze(1)), dim=1
+                    )
+                    jepa_action_history = torch.cat(
+                        (jepa_action_history[:, 1:], action.unsqueeze(1)), dim=1
+                    )
+                    if torch.any(done):
+                        done_ids = done.nonzero(as_tuple=False).squeeze(-1)
+                        jepa_context_observations = jepa_context_observations.clone()
+                        jepa_action_history = jepa_action_history.clone()
+                        jepa_context_observations[done_ids] = next_jepa_observation[done_ids].unsqueeze(1)
+                        jepa_context_observations[done_ids] = jepa_context_observations[done_ids].expand(
+                            -1, world_model.context_len, -1
+                        )
+                        reset_action = next_obs_t["last_action"][done_ids]
+                        if world_model.context_len > 1:
+                            jepa_action_history[done_ids] = reset_action.unsqueeze(1).expand(
+                                -1, world_model.context_len - 1, -1
+                            )
                 obs = next_obs
                 commands = commands + args.command_smoothing * (command_targets - commands)
                 command_episode_steps = torch.where(
@@ -2352,16 +2672,6 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     command_targets = command_targets.clone()
                     commands[done] = 0.0
                     command_targets[done] = 0.0
-                    if args.command_resample_on_reset:
-                        command_targets = _resample_done_command_targets(
-                            command_targets,
-                            done,
-                            commands_low,
-                            commands_high,
-                            stand_prob=args.command_stand_prob,
-                            turn_prob=args.command_turn_prob,
-                            lateral_prob=args.command_lateral_prob,
-                        )
                 resample = _mimiclite_resample_mask(
                     command_episode_steps,
                     commands,
@@ -2378,18 +2688,13 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                         commands_high,
                         stand_prob=args.command_stand_prob,
                         turn_prob=args.command_turn_prob,
-                        lateral_prob=args.command_lateral_prob,
+                        backward_prob=args.command_backward_prob,
                     )
 
             rollout = Stage2Rollout(
                 encoder_features=torch.stack(encoder_features),
-                bfm_observations={
-                    name: torch.stack([step[name] for step in bfm_observations_store])
-                    for name in bfm_observations_store[0]
-                },
                 commands=torch.stack(commands_store),
                 raw_z=torch.stack(raw_z_store),
-                bfm_actions=torch.stack(bfm_actions_store),
                 old_log_prob=torch.stack(old_log_probs),
                 values=torch.stack(values_store),
                 env_rewards=torch.stack(env_rewards),
@@ -2404,13 +2709,97 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 amp_features=torch.stack(amp_features),
                 base_lin_vel=torch.stack(base_lin_vel_store),
                 base_ang_vel=torch.stack(base_ang_vel_store),
+                mpc_controlled=torch.stack(mpc_controlled_store),
+                mpc_projected_z=torch.stack(mpc_projected_z_store),
             )
+            world_model_online_metrics = {
+                "world_model_online_loss": 0.0,
+                "world_model_online_latent_loss": 0.0,
+                "world_model_online_reconstruction_loss": 0.0,
+                "world_model_online_motion_loss": 0.0,
+                "world_model_online_motion_mae": 0.0,
+                "world_model_online_vx_mae": 0.0,
+                "world_model_online_vy_mae": 0.0,
+                "world_model_online_yaw_rate_mae": 0.0,
+                "world_model_online_grad_norm": 0.0,
+                "world_model_online_sample_count": 0.0,
+            }
+            world_model_online_ready = bool(jepa_online_context_store)
+            if _distributed_ready():
+                ready = torch.tensor(int(world_model_online_ready), device=device)
+                torch.distributed.all_reduce(ready, op=torch.distributed.ReduceOp.MIN)
+                world_model_online_ready = bool(ready.item())
+            if world_model_optimizer is not None and world_model_online_ready:
+                if world_model is None:
+                    raise AssertionError("Online JEPA optimizer exists without a world model")
+                online_context = torch.cat(jepa_online_context_store, dim=0)
+                online_actions = torch.cat(jepa_online_action_store, dim=0)
+                online_targets = torch.cat(jepa_online_target_store, dim=0)
+                online_motion = torch.cat(jepa_online_motion_store, dim=0)
+                if online_context.shape[0] > args.world_model_online_buffer_size:
+                    keep = torch.randperm(online_context.shape[0], device=device)[: args.world_model_online_buffer_size]
+                    online_context = online_context[keep]
+                    online_actions = online_actions[keep]
+                    online_targets = online_targets[keep]
+                    online_motion = online_motion[keep]
+                world_model_online_metrics = train_jepa_world_model(
+                    world_model=world_model,
+                    optimizer=world_model_optimizer,
+                    context_observations=online_context,
+                    action_sequences=online_actions,
+                    target_observations=online_targets,
+                    target_motion=online_motion,
+                    batch_size=args.world_model_online_batch_size,
+                    updates=args.world_model_online_updates,
+                    target_momentum=args.world_model_target_momentum,
+                    observation_reconstruction_coef=args.world_model_observation_reconstruction_coef,
+                    motion_prediction_coef=args.world_model_motion_prediction_coef,
+                    grad_clip=args.world_model_grad_clip,
+                    gradient_sync=average_gradients,
+                    update_normalization=(
+                        iteration - int(world_model_training_start_iteration or 0)
+                        < args.world_model_normalization_warmup_iterations
+                    ),
+                    normalization_momentum=args.world_model_normalization_momentum,
+                    statistic_sync=average_tensor,
+                )
+                global_motion_mae = _global_mean(world_model_online_metrics["world_model_online_motion_mae"], device)
+                decay = float(args.world_model_fit_ema_decay)
+                world_model_fit_ema = (
+                    global_motion_mae
+                    if world_model_fit_ema is None
+                    else decay * world_model_fit_ema + (1.0 - decay) * global_motion_mae
+                )
+                world_model_fit_history.append(global_motion_mae)
+                world_model_fit_history = world_model_fit_history[-args.world_model_fit_stability_window :]
+                fit_mean = float(np.mean(world_model_fit_history))
+                fit_rel_std = float(np.std(world_model_fit_history) / max(abs(fit_mean), 1.0e-8))
+                trained_iterations = iteration + 1 - int(world_model_training_start_iteration or 0)
+                if (
+                    not world_model_mpc_ready
+                    and trained_iterations >= args.world_model_mpc_warmup_iterations
+                    and len(world_model_fit_history) >= args.world_model_fit_stability_window
+                    and fit_rel_std <= args.world_model_fit_stability_rel_std
+                    and float(world_model_fit_ema) <= args.world_model_fit_max_motion_mae
+                ):
+                    world_model_mpc_ready = True
+            else:
+                fit_mean = float(np.mean(world_model_fit_history)) if world_model_fit_history else float("nan")
+                fit_rel_std = (
+                    float(np.std(world_model_fit_history) / max(abs(fit_mean), 1.0e-8))
+                    if world_model_fit_history
+                    else float("nan")
+                )
+            with torch.no_grad():
+                projected_rollout_z = rollout.mpc_projected_z
+                latent_prior_penalty, latent_prior_cosine = _latent_direction_prior(
+                    projected_rollout_z.reshape(-1, projected_rollout_z.shape[-1]),
+                    latent_reference,
+                )
+                latent_prior_penalty = latent_prior_penalty.reshape(args.rollout_steps, args.num_envs)
+                latent_prior_cosine = latent_prior_cosine.reshape(args.rollout_steps, args.num_envs)
             fake_features = rollout.amp_features.reshape(-1, expert.feature_dim)
-            expert_features = expert.sample(
-                fake_features.shape[0],
-                device,
-                commands=rollout.commands.reshape(-1, 3) if args.amp_command_matched else None,
-            )
+            expert_features = expert.sample(fake_features.shape[0], device)
             discriminator_loss = discriminator.loss(expert_features, fake_features.detach())
             discriminator_optimizer.zero_grad(set_to_none=True)
             discriminator_loss["loss"].backward()
@@ -2420,19 +2809,14 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
             with torch.no_grad():
                 amp_score = discriminator.reward(fake_features)
-                amp_reward = reward_normalizer(amp_score).reshape(args.rollout_steps, args.num_envs)
-                sync_floating_buffers(reward_normalizer)
+                amp_reward = amp_quadratic_reward(amp_score).reshape(args.rollout_steps, args.num_envs)
                 rewards = (
                     args.env_reward_weight * rollout.env_rewards
                     + args.locomotion_reward_weight * rollout.locomotion_rewards
                     + args.amp_weight * amp_reward
+                    - args.latent_prior_weight * latent_prior_penalty
                 )
-                next_input = flatten_encoder_observation(
-                    _to_torch_obs(obs, device),
-                    commands,
-                    command_scale=command_input_scale,
-                    backward_command_scale=args.command_backward_scale,
-                )
+                next_input = flatten_encoder_observation(_to_torch_obs(obs, device), commands)
                 next_value = policy(next_input)[2]
                 advantages, returns = compute_gae(
                     rewards,
@@ -2444,6 +2828,27 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     discount=0.99,
                     gae_lambda=0.95,
                 )
+            world_model_metrics = {
+                "world_model_frozen": 0.0,
+                "world_model_trainable": float(world_model is not None),
+                "world_model_mpc_ready": float(world_model_mpc_ready),
+                "world_model_fit_ema": float(world_model_fit_ema) if world_model_fit_ema is not None else float("nan"),
+                "world_model_fit_window_mean": fit_mean,
+                "world_model_fit_relative_std": fit_rel_std,
+                "world_model_trained_iterations": float(
+                    iteration
+                    + 1
+                    - int(
+                        world_model_training_start_iteration
+                        if world_model_training_start_iteration is not None
+                        else iteration + 1
+                    )
+                ),
+                "world_model_mpc_control_fraction": 0.0,
+                **world_model_online_metrics,
+            }
+            if world_model is not None:
+                world_model_metrics["world_model_mpc_control_fraction"] = float(rollout.mpc_controlled.float().mean())
             ppo_metrics = ppo_update(
                 policy,
                 rollout,
@@ -2453,16 +2858,30 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 minibatch_size=args.minibatch_size,
                 clip_ratio=0.2,
                 value_coef=0.5,
-                entropy_coef=0.001,
+                entropy_coef=args.entropy_coef,
                 optimizer=policy_optimizer,
                 max_grad_norm=1.0,
                 target_kl=args.target_kl,
-                extra_parameters=lora_parameters,
-                bfm_model=bfm_model,
-                bfm_action_std=args.lora_action_std,
-                lora_regularization=args.lora_regularization,
+                sample_mask=~rollout.mpc_controlled,
+            )
+            mpc_rows = rollout.mpc_controlled.reshape(-1)
+            planner_distill_loss = _distill_mpc_latents(
+                policy,
+                bfm_model,
+                policy_optimizer,
+                rollout.encoder_features.reshape(-1, rollout.encoder_features.shape[-1])[mpc_rows],
+                rollout.mpc_projected_z.reshape(-1, rollout.mpc_projected_z.shape[-1])[mpc_rows],
+                max_samples=args.world_model_distill_batch_size,
+                coefficient=args.world_model_distill_coef if world_model_mpc_ready else 0.0,
+                max_grad_norm=1.0,
             )
             tracking_metrics = command_tracking_metrics(rollout.commands, rollout.base_lin_vel, rollout.base_ang_vel)
+            latent_metrics = latent_manifold_metrics(
+                projected_rollout_z,
+                rollout.commands,
+                latent_reference,
+                max_samples=args.latent_diagnostic_samples,
+            )
             metrics = {
                 "iteration": iteration,
                 "reward": float(rewards.mean()),
@@ -2473,6 +2892,9 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 "amp_score": float(amp_score.mean()),
                 "amp_reward": float(amp_reward.mean()),
                 "amp_reward_contribution": float((args.amp_weight * amp_reward).mean()),
+                "latent_prior_penalty": float(latent_prior_penalty.mean()),
+                "latent_prior_cosine": float(latent_prior_cosine.mean()),
+                "latent_prior_contribution": float((-args.latent_prior_weight * latent_prior_penalty).mean()),
                 "termination_rate": float(rollout.terminated.float().mean()),
                 "termination_crash_rate": float(rollout.crash.float().mean()),
                 "termination_fall_over_rate": float(rollout.fall_over.float().mean()),
@@ -2485,8 +2907,12 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                 ),
                 "discriminator_gradient_penalty": float(discriminator_loss["gradient_penalty"].detach()),
                 "discriminator_gradient_norm": float(discriminator_loss["gradient_norm"].detach()),
+                "world_model_planner_distill_loss": planner_distill_loss,
+                "ppo_direct_sample_fraction": float((~rollout.mpc_controlled).float().mean()),
                 **ppo_metrics,
+                **world_model_metrics,
                 **tracking_metrics,
+                **latent_metrics,
             }
             metrics.update(
                 {
@@ -2498,10 +2924,26 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             )
             metrics.update(
                 {
+                    f"smoothness/raw_{name}": float(
+                        mimiclite_raw_penalty_magnitude(
+                            contribution,
+                            dt=locomotion_reward_state.dt,
+                            weight=locomotion_reward_weights[name],
+                        ).mean()
+                    )
+                    for name, contribution in rollout.locomotion_components.items()
+                    if name in SMOOTHNESS_DIAGNOSTIC_TERMS
+                }
+            )
+            metrics.update(
+                {
                     f"reward_contribution/env/{name}": float((args.env_reward_weight * contribution).mean())
                     for name, contribution in rollout.env_reward_components.items()
                 }
             )
+            for name, values in feet_diagnostics_store.items():
+                flat = torch.cat(values, dim=0)
+                metrics[name] = float(torch.nanmean(flat))
             if world_size > 1:
                 import torch.distributed as dist
 
@@ -2517,10 +2959,28 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     {
                         "policy": policy.state_dict(),
                         "policy_optimizer": policy_optimizer.state_dict(),
-                        "bfm_lora": bfm_lora_state_dict(bfm_model._actor),
                         "discriminator": discriminator.state_dict(),
                         "discriminator_optimizer": discriminator_optimizer.state_dict(),
                         "amp_reward_normalizer": reward_normalizer.state_dict(),
+                        **(
+                            {
+                                "world_model": world_model.model.state_dict(),
+                                "world_model_optimizer": world_model_optimizer.state_dict(),
+                                "world_model_runtime": {
+                                    "obs_mean": world_model.obs_mean.detach().cpu(),
+                                    "obs_std": world_model.obs_std.detach().cpu(),
+                                    "action_mean": world_model.action_mean.detach().cpu(),
+                                    "action_std": world_model.action_std.detach().cpu(),
+                                    "normalization_updates": world_model.normalization_updates,
+                                    "fit_history": list(world_model_fit_history),
+                                    "fit_ema": world_model_fit_ema,
+                                    "mpc_ready": world_model_mpc_ready,
+                                    "training_start_iteration": world_model_training_start_iteration,
+                                },
+                            }
+                            if world_model is not None and world_model_optimizer is not None
+                            else {}
+                        ),
                         "iteration": iteration + 1,
                         "metadata": metadata,
                     },

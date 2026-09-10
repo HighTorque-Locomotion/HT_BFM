@@ -1,0 +1,37 @@
+# @package _global_
+
+defaults:
+  - terrain_base
+
+terrain:
+  mesh_type: trimesh
+  curriculum: true  # deterministic terrain type per column; rows repeat the same matched mesh
+  static_friction: 1.0
+  dynamic_friction: 1.0
+  restitution: 0.0
+  measure_heights: false
+  horizontal_scale: 0.05
+  vertical_scale: 0.005
+  border_size: 2.0
+  max_init_terrain_level: 9
+  terrain_length: 3.0
+  terrain_width: 3.0
+  num_rows: 10
+  num_cols: 10
+  terrain_types:
+    - flat
+    - external_stl_0
+    - external_stl_1
+    - external_stl_2
+    - external_stl_3
+    - external_stl_4
+    - external_stl_5
+  terrain_proportions: [0.4, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+  external_stl_files:
+    external_stl_0: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_down_loop_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+    external_stl_1: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_down_stop_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+    external_stl_2: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_jog_down_loop_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+    external_stl_3: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_jog_down_stop_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+    external_stl_4: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_jog_up_start_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+    external_stl_5: dataset/PiPlus_S_12L8A0G2H0W_lafan_dataset_20260629/stairs_0w/motion_matched_terrain/terrains/stairs_climbing_up_start_R_20260817_PiPlus_S_12L8A0G2H0W_retargetted_stairs.stl
+  slope_treshold: 0.75

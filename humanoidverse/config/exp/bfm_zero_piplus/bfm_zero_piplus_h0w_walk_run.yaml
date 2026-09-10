@@ -1,0 +1,27 @@
+# @package _global_
+
+defaults:
+  - bfm_zero_piplus
+  - override /robot: piplus/PiPlus_S_12L8A0G2H0W
+  - _self_
+
+exp_var: piplus_h0w_walk_run
+project_name: BFMZeroPiPlusH0WWalkRun
+
+robot:
+  asset:
+    # IsaacSim spawns from the URDF; this is also the canonical H0W MotionLib
+    # XML used by the AMP feature extractor and MuJoCo smoke tests.
+    xml_file: xml/PiPlus_S_12L8A0G2H0W.xml
+  motion:
+    motion_file: dataset/piplus_nowaist_walk_run/piplus_nowaist_walk_run.pkl
+    max_len: 450
+
+env:
+  config:
+    resample_motion_when_training: false
+    termination:
+      terminate_when_motion_far: false
+      terminate_when_motion_end: false
+    lie_down_init: false
+    lie_down_init_prob: 0.0

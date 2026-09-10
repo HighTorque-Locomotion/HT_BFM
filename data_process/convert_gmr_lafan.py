@@ -293,6 +293,7 @@ def convert_motion(
     source: Path,
     quat_order: str,
     robot: str,
+    force_walk_fps: bool = True,
 ) -> dict:
     required = (
         ("fps", "framerate"),
@@ -308,7 +309,7 @@ def convert_motion(
     root_rot = normalize_quat_xyzw(get_raw_field(raw, "root_rot", "base_quat_w", source=source), quat_order)
     dof = np.asarray(get_raw_field(raw, "dof_pos", "joint_pos", source=source), dtype=np.float32)
     fps = int(get_raw_field(raw, "fps", "framerate", source=source))
-    if robot in PIPLUS_ROBOTS and source.stem.lower().startswith("walk"):
+    if force_walk_fps and robot in PIPLUS_ROBOTS and source.stem.lower().startswith("walk"):
         fps = 50
 
     if root_pos.ndim != 2 or root_pos.shape[1] != 3:

@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - bfm_zero_piplus
+  - override /robot: piplus/PiPlus_S_12L8A0G2H0W
+  - override /terrain: terrain_piplus_h0w_box
+  - _self_
+
+exp_var: piplus_h0w_box
+project_name: BFMZeroPiPlusH0WBox
+
+robot:
+  asset:
+    # The base H0W XML is the canonical MotionLib/Isaac asset available on
+    # the training host; no extra armature-only XML is needed for this task.
+    xml_file: xml/PiPlus_S_12L8A0G2H0W.xml
+  motion:
+    motion_file: dataset/limb_20_z_scale_1.0_piplus_mapping/piplus_h0w_box_bfm.pkl
+    max_len: 450
+
+env:
+  config:
+    # The motion/terrain mesh are already in the same local frame.  Match
+    # InstinctLab TerrainMotion: reset at frame zero plus terrain origin.
+    motion_start_at_zero: true
+    resample_motion_when_training: false
+    noise_to_initial_level: 0
+    lie_down_init: false
+    lie_down_init_prob: 0.0
+    termination:
+      terminate_when_motion_far: false
+
+domain_rand:
+  push_robots: false
+  randomize_base_com: false
+  randomize_link_mass: false
+  randomize_pd_gain: false
+  randomize_friction: false
+  randomize_default_dof_pos: false
+  randomize_reset_dof_state: false
+  randomize_ctrl_delay: false
