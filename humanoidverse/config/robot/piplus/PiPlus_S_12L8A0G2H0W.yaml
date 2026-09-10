@@ -186,6 +186,9 @@ robot:
   control:
     control_type: P
     use_ht_motor: True
+    # Keep the control contract identical to the H0W BFM checkpoint config.
+    isaac_pd_scale: false
+    clamp_actions: 1.0
     stiffness:
       hip_pitch: 52.15889
       hip_roll: 52.15889
@@ -247,7 +250,10 @@ robot:
     asset_root: "package://ht_urdf/PiPlus_S_12L8A0G2H0W"
     urdf_file: "urdf/PiPlus_S_12L8A0G2H0W.urdf"
     usd_file: null
-    xml_file: "xml/PiPlus_S_12L8A0G2H0W_with_armature.xml"
+    # The checkpoint records the armature XML name, but this repository's
+    # canonical FK/MotionLib XML is the non-suffixed file below. IsaacSim uses
+    # the URDF for spawning and the control armature list above.
+    xml_file: "xml/PiPlus_S_12L8A0G2H0W.xml"
     robot_type: PiPlus_S_12L8A0G2H0W
     self_collisions: 0
     default_dof_drive_mode: 3

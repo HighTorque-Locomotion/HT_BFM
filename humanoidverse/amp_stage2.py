@@ -60,6 +60,47 @@ MOVING_COMMAND_THRESHOLD = 0.1
 AMP_COMMAND_CATEGORIES = ("stand", "forward", "backward", "lateral", "turn")
 
 
+def _hydra_robot_name(robot_type: str) -> str:
+    """Map a validated PiPlus robot type to its Hydra robot choice."""
+    aliases = {
+        "PiPlus_S_12L8A0G2H0W": "robot=piplus/PiPlus_S_12L8A0G2H0W",
+        "PiPlus_S_12L8A0G2H1W_LSE": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+        "PiPlus_S_12L8A0G2H1W_LSE_260611": "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+    }
+    try:
+        return aliases[str(robot_type)]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported PiPlus robot type in robot config: {robot_type!r}") from exc
+
+
+ROBOT_CONTROL_CONTRACT_KEYS = (
+    "control_type",
+    "stiffness",
+    "damping",
+    "integral",
+    "action_scale",
+    "isaac_pd_scale",
+    "clamp_actions",
+    "clip_torques",
+    "use_ht_motor",
+    "action_clip_value",
+    "action_rescale",
+    "normalize_action",
+    "normalize_action_from",
+    "normalize_action_to",
+)
+ROBOT_LIMIT_CONTRACT_KEYS = (
+    "dof_names",
+    "dof_pos_lower_limit_list",
+    "dof_pos_upper_limit_list",
+    "dof_vel_limit_list",
+    "dof_effort_limit_list",
+    "dof_effort_limit_scale",
+    "dof_armature_list",
+    "dof_joint_friction_list",
+)
+
+
 def _distributed_ready() -> bool:
     return torch.distributed.is_available() and torch.distributed.is_initialized()
 
@@ -924,6 +965,45 @@ def _mimiclite_resample_mask(
     return interval_reached & ((torch.rand(commands.shape[0], device=commands.device) < resample_prob) | standing)
 
 
+def _resample_done_command_targets(
+    command_targets: torch.Tensor,
+    done: torch.Tensor,
+    low: torch.Tensor,
+    high: torch.Tensor,
+    *,
+    stand_prob: float,
+    turn_prob: float,
+    lateral_prob: float,
+) -> torch.Tensor:
+    """Give reset environments a new target so crash loops cannot starve commands.
+
+    The live command remains zero for the reset transition and is then smoothed
+    toward this target on the next step.  Without this, a reset followed by a
+    warmup shorter than the episode lifetime leaves both command tensors at
+    zero forever, which silently removes backward/lateral/turn samples from
+    the on-policy batch.
+    """
+    if done.dtype != torch.bool:
+        raise ValueError(f"done must be bool, got {done.dtype}")
+    if done.ndim != 1 or done.shape[0] != command_targets.shape[0]:
+        raise ValueError(
+            f"done shape {tuple(done.shape)} does not match command targets {tuple(command_targets.shape)}"
+        )
+    if not torch.any(done):
+        return command_targets
+    updated = command_targets.clone()
+    updated[done] = _sample_commands(
+        int(done.sum()),
+        command_targets.device,
+        low,
+        high,
+        stand_prob=stand_prob,
+        turn_prob=turn_prob,
+        lateral_prob=lateral_prob,
+    )
+    return updated
+
+
 MIMICLITE_LOCOMOTION_WEIGHTS = {
     # Keep direct planar tracking dominant while preserving a usable stability margin.
     "linvel_exp": 2.8,
@@ -1363,17 +1443,32 @@ def _freeze_bfm(model) -> None:
 def _load_piplus_robot_contract(robot_config: str | Path) -> SimpleNamespace:
     from omegaconf import OmegaConf
 
+    def to_plain(value):
+        return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+
     config_path = Path(robot_config).expanduser().resolve()
     config = OmegaConf.load(config_path)
     robot_cfg = config.robot
     joint_names = tuple(str(name) for name in robot_cfg.dof_names)
     body_names = tuple(str(name) for name in robot_cfg.body_names)
+    robot_type = str(robot_cfg.asset.robot_type)
     xml_path = resolve_asset_path(robot_cfg.asset.asset_root, robot_cfg.asset.xml_file)
     if not xml_path.is_file():
-        raise FileNotFoundError(f"PiPlus MuJoCo XML does not exist: {xml_path}")
+        motion_asset = robot_cfg.get("motion", {}).get("asset", {})
+        fallback_xml = resolve_asset_path(
+            motion_asset.get("assetRoot", robot_cfg.asset.asset_root),
+            motion_asset.get("assetFileName", robot_cfg.asset.xml_file),
+        )
+        if not fallback_xml.is_file():
+            raise FileNotFoundError(f"PiPlus MuJoCo XML does not exist: {xml_path} (fallback: {fallback_xml})")
+        xml_path = fallback_xml
     return SimpleNamespace(
         config_path=config_path,
+        robot_type=robot_type,
+        hydra_robot_name=_hydra_robot_name(robot_type),
         policy_joint_names=joint_names,
+        control_contract=to_plain(robot_cfg.control),
+        limit_contract={key: to_plain(robot_cfg[key]) for key in ROBOT_LIMIT_CONTRACT_KEYS},
         fixed_joint_names=(),
         robot=SimpleNamespace(
             base_body="base_link",
@@ -1382,6 +1477,50 @@ def _load_piplus_robot_contract(robot_config: str | Path) -> SimpleNamespace:
             xml_path=xml_path.resolve(),
         ),
     )
+
+
+def _validate_stage1_robot_contract(robot_training: SimpleNamespace, bfm_checkpoint: str | Path) -> dict[str, Any]:
+    """Verify the selected H0W/LSE robot config matches the Stage1 checkpoint config."""
+    from omegaconf import OmegaConf
+
+    checkpoint_dir = Path(bfm_checkpoint).expanduser().resolve()
+    config_path = checkpoint_dir.parent / "config.yaml"
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"Stage1 checkpoint config is required for control-contract validation: {config_path}"
+        )
+    stage1 = OmegaConf.load(config_path)
+    stage1_robot = stage1.robot
+
+    def to_plain(value):
+        return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+
+    mismatches = []
+    stage1_type = str(stage1_robot.asset.robot_type)
+    if stage1_type != robot_training.robot_type:
+        mismatches.append(("asset.robot_type", stage1_type, robot_training.robot_type))
+    for key in ROBOT_CONTROL_CONTRACT_KEYS:
+        expected = to_plain(stage1_robot.control.get(key))
+        if key not in robot_training.control_contract:
+            continue
+        actual = robot_training.control_contract[key]
+        if expected != actual:
+            mismatches.append((f"control.{key}", expected, actual))
+    for key in ROBOT_LIMIT_CONTRACT_KEYS:
+        expected = to_plain(stage1_robot.get(key))
+        actual = robot_training.limit_contract.get(key)
+        if expected != actual:
+            mismatches.append((key, expected, actual))
+    if mismatches:
+        details = "; ".join(f"{key}: checkpoint={expected!r}, robot_config={actual!r}" for key, expected, actual in mismatches)
+        raise ValueError(f"Stage1 robot/control contract mismatch: {details}")
+    return {
+        "validated": True,
+        "source": str(config_path),
+        "robot_type": stage1_type,
+        "control_keys": [key for key in ROBOT_CONTROL_CONTRACT_KEYS if key in robot_training.control_contract],
+        "limit_keys": list(ROBOT_LIMIT_CONTRACT_KEYS),
+    }
 
 
 def build_piplus_locomotion_env(
@@ -1403,7 +1542,7 @@ def build_piplus_locomotion_env(
         raise ValueError(f"Unsupported Stage2 playback simulator: {simulator}")
     robot_training = _load_piplus_robot_contract(robot_config)
     hydra_overrides = [
-        "robot=piplus/PiPlus_S_12L8A0G2H1W_LSE",
+        robot_training.hydra_robot_name,
         f"simulator={simulator}",
         # Keep playback/evaluation scenes independent of the training config's
         # recorded env count (for example, a 4096-env run directory).
@@ -1653,6 +1792,12 @@ def _parse_args() -> argparse.Namespace:
         help="Penalty weight for velocity orthogonal to the commanded planar direction; 0 disables it.",
     )
     parser.add_argument("--command-warmup-steps", type=int, default=20)
+    parser.add_argument(
+        "--command-resample-on-reset",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Sample a fresh command target for reset environments to prevent crash-loop command starvation.",
+    )
     parser.add_argument("--command-smoothing", type=float, default=0.1)
     parser.add_argument("--latent-stat-max-frames", type=int, default=4096, help="Expert frames used for automatic BFM latent validation; 0 means all.")
     parser.add_argument("--ppo-epochs", type=int, default=4)
@@ -1660,6 +1805,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=float, default=16.0)
+    parser.add_argument(
+        "--disable-lora",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep the Stage1 BFM actor fully frozen; only the command encoder, value head, and discriminator train.",
+    )
     parser.add_argument("--lora-learning-rate", type=float, default=1e-5)
     parser.add_argument(
         "--lora-action-std",
@@ -1739,6 +1890,7 @@ def _distributed_context(args: argparse.Namespace) -> tuple[argparse.Namespace, 
 def _run_dry_validation(args: argparse.Namespace) -> None:
     """Validate all model/data contracts without constructing an Isaac environment."""
     robot_training = _load_piplus_robot_contract(args.robot_config)
+    stage1_robot_contract = _validate_stage1_robot_contract(robot_training, args.bfm_checkpoint)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     checkpoint = Path(args.bfm_checkpoint).expanduser().resolve()
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
@@ -1764,7 +1916,12 @@ def _run_dry_validation(args: argparse.Namespace) -> None:
         json.dumps(
             {
                 "bfm_checkpoint": str(checkpoint),
+                "robot_type": robot_training.robot_type,
+                "stage1_robot_contract": stage1_robot_contract,
                 "model_class": type(bfm_model).__name__,
+                "bfm_trainable_parameter_count": sum(
+                    parameter.numel() for parameter in bfm_model.parameters() if parameter.requires_grad
+                ),
                 "action_dim": action_dim,
                 "z_dim": int(bfm_model.cfg.archi.z_dim),
                 "norm_z": bool(bfm_model.cfg.archi.norm_z),
@@ -1801,7 +1958,9 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         raise ValueError("command_backward_scale must be positive")
     if args.cross_axis_velocity_weight < 0.0:
         raise ValueError("cross_axis_velocity_weight must be non-negative")
-    if args.lora_rank <= 0 or args.lora_alpha <= 0.0 or args.lora_learning_rate <= 0.0 or args.lora_action_std <= 0.0:
+    if not args.disable_lora and (
+        args.lora_rank <= 0 or args.lora_alpha <= 0.0 or args.lora_learning_rate <= 0.0 or args.lora_action_std <= 0.0
+    ):
         raise ValueError("LoRA rank, alpha, learning rate, and action std must be positive")
     if args.lora_regularization < 0.0:
         raise ValueError("LoRA regularization must be non-negative")
@@ -1827,15 +1986,21 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         seed=args.seed,
         max_episode_length_s=args.max_episode_length_s,
     )
+    stage1_robot_contract = _validate_stage1_robot_contract(robot_training, args.bfm_checkpoint)
     # Checkpoint configs use the device literal ``cuda``; each torchrun
     # worker has already selected its local CUDA device above.
     bfm_load_device = "cuda" if device.type == "cuda" else "cpu"
     bfm_model = load_model_from_checkpoint_dir(args.bfm_checkpoint, device=bfm_load_device)
     _freeze_bfm(bfm_model)
-    lora_layer_count = inject_bfm_actor_lora(bfm_model._actor, rank=args.lora_rank, alpha=args.lora_alpha)
-    lora_parameters = bfm_lora_parameters(bfm_model._actor)
-    if not lora_parameters:
-        raise RuntimeError("No BFM actor linear layers were replaced with LoRA parameters")
+    if args.disable_lora:
+        lora_layer_count = 0
+        lora_parameters = []
+    else:
+        lora_layer_count = inject_bfm_actor_lora(bfm_model._actor, rank=args.lora_rank, alpha=args.lora_alpha)
+        lora_parameters = bfm_lora_parameters(bfm_model._actor)
+        if not lora_parameters:
+            raise RuntimeError("No BFM actor linear layers were replaced with LoRA parameters")
+    bfm_trainable_parameter_count = sum(parameter.numel() for parameter in bfm_model.parameters() if parameter.requires_grad)
     bfm_action_dim = int(getattr(bfm_model, "action_dim", -1))
     env_action_dim = int(env.single_action_space.shape[0])
     if env_action_dim != len(robot_training.policy_joint_names):
@@ -1872,12 +2037,10 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         hidden_dim=int(backward_arch.hidden_dim),
         hidden_layers=int(backward_arch.hidden_layers),
     ).to(device)
-    policy_optimizer = torch.optim.Adam(
-        [
-            {"params": policy.parameters(), "lr": args.learning_rate},
-            {"params": lora_parameters, "lr": args.lora_learning_rate},
-        ]
-    )
+    optimizer_groups = [{"params": policy.parameters(), "lr": args.learning_rate}]
+    if lora_parameters:
+        optimizer_groups.append({"params": lora_parameters, "lr": args.lora_learning_rate})
+    policy_optimizer = torch.optim.Adam(optimizer_groups)
 
     latent_stats = _collect_bfm_latent_stats(
         bfm_agent=None,
@@ -1938,6 +2101,8 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
     discriminator_optimizer_resume = "fresh"
     legacy_input_migrated = False
     if checkpoint is not None and resume_path is not None:
+        if args.disable_lora and checkpoint.get("bfm_lora"):
+            raise ValueError("Cannot resume a LoRA Stage2 checkpoint with --disable-lora")
         load_bfm_lora_state_dict(bfm_model._actor, checkpoint.get("bfm_lora"))
         legacy_input_migrated = load_command_encoder_policy_state(policy, checkpoint, input_scale)
         discriminator.load_state_dict(checkpoint["discriminator"])
@@ -2006,11 +2171,13 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
 
     metadata = {
         "robot_config": str(Path(args.robot_config).resolve()),
+        "robot_type": str(robot_training.robot_type),
+        "stage1_robot_contract": stage1_robot_contract,
         "expert_dataset": str(Path(args.expert_dataset).resolve()),
         "bfm_checkpoint": str(Path(args.bfm_checkpoint).resolve()),
         "action_dim": bfm_action_dim,
         "bfm_lora": {
-            "enabled": True,
+            "enabled": bool(lora_parameters),
             "rank": int(args.lora_rank),
             "alpha": float(args.lora_alpha),
             "learning_rate": float(args.lora_learning_rate),
@@ -2019,6 +2186,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
             "actor_linear_layers": int(lora_layer_count),
             "base_bfm_frozen": True,
         },
+        "bfm_trainable_parameter_count": int(bfm_trainable_parameter_count),
         "policy_joint_names": list(robot_training.policy_joint_names),
         "fixed_joint_names": list(robot_training.fixed_joint_names),
         "simulator_control_joint_names": list(robot_training.robot.control_joint_names),
@@ -2056,6 +2224,7 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
         "command_resample_prob": args.command_resample_prob,
         "command_resample_interval": args.command_resample_steps,
         "command_warmup_steps": args.command_warmup_steps,
+        "command_resample_on_reset": bool(args.command_resample_on_reset),
         "command_smoothing": args.command_smoothing,
         "amp_reward_mapping": "raw_discriminator_score -> MimicLiteRewardNormalizer -> amp_weight",
         "amp_reward_weight": args.amp_weight,
@@ -2183,6 +2352,16 @@ def main(parsed_args: argparse.Namespace | None = None) -> None:
                     command_targets = command_targets.clone()
                     commands[done] = 0.0
                     command_targets[done] = 0.0
+                    if args.command_resample_on_reset:
+                        command_targets = _resample_done_command_targets(
+                            command_targets,
+                            done,
+                            commands_low,
+                            commands_high,
+                            stand_prob=args.command_stand_prob,
+                            turn_prob=args.command_turn_prob,
+                            lateral_prob=args.command_lateral_prob,
+                        )
                 resample = _mimiclite_resample_mask(
                     command_episode_steps,
                     commands,

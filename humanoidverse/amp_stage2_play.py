@@ -404,6 +404,198 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[PlaybackPaths, dict[str, o
     return paths, metadata
 
 
+def mean_absolute_error(reference: np.ndarray, estimate: np.ndarray) -> float:
+    """Mean absolute error between two equally shaped sample series."""
+    reference = np.asarray(reference, dtype=np.float64).reshape(-1)
+    estimate = np.asarray(estimate, dtype=np.float64).reshape(-1)
+    if reference.shape != estimate.shape:
+        raise ValueError(f"Shape mismatch: reference={reference.shape} estimate={estimate.shape}")
+    return float(np.mean(np.abs(estimate - reference)))
+
+
+def pearson_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Pearson correlation coefficient; 0.0 when either series has no variance."""
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    if x.shape != y.shape or x.size < 2:
+        return 0.0
+    x_centered = x - x.mean()
+    y_centered = y - y.mean()
+    x_scale = float(np.sqrt(np.sum(x_centered ** 2)))
+    y_scale = float(np.sqrt(np.sum(y_centered ** 2)))
+    if x_scale == 0.0 or y_scale == 0.0:
+        return 0.0
+    return float(np.sum(x_centered * y_centered) / (x_scale * y_scale))
+
+
+def regression_slope(values: np.ndarray, dt: float) -> float:
+    """Least-squares slope of a series sampled every dt seconds."""
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if values.size < 2 or float(dt) <= 0.0:
+        return 0.0
+    time_axis = np.arange(values.size, dtype=np.float64) * float(dt)
+    time_centered = time_axis - time_axis.mean()
+    denominator = float(np.sum(time_centered ** 2))
+    if denominator == 0.0:
+        return 0.0
+    return float(np.sum(time_centered * (values - values.mean())) / denominator)
+
+
+def _feet_indices_numpy(inner_env) -> np.ndarray:
+    indices = inner_env.feet_indices
+    if torch.is_tensor(indices):
+        return indices.detach().cpu().numpy()
+    return np.asarray(indices)
+
+
+def _feet_contact_and_slip(inner_env) -> tuple[float, float]:
+    """Foot contact ratio and contact-masked foot slip speed for the current state."""
+    try:
+        feet_indices = _feet_indices_numpy(inner_env)
+        contact_forces = inner_env.simulator.contact_forces[0, feet_indices].detach().cpu().numpy()
+        contact_mask = np.linalg.norm(contact_forces, axis=-1) > 1.0
+        foot_contact = float(np.mean(contact_mask.astype(np.float64)))
+        foot_velocity = inner_env.simulator._rigid_body_vel[0, feet_indices].detach().cpu().numpy()
+        foot_slip = float(np.mean(np.linalg.norm(foot_velocity[:, :2], axis=-1) * contact_mask.astype(np.float64)))
+        return foot_contact, foot_slip
+    except (AttributeError, IndexError, KeyError, ValueError):  # pragma: no cover - fallback instrumentation
+        return 0.0, 0.0
+
+
+class PlaybackMetricsAccumulator:
+    """Per-step playback observability aggregated into a fixed metric summary.
+
+    Headless playback runs a few hundred steps, so the accumulator keeps plain
+    per-step sample lists and recomputes the summary on demand.  ``summary`` is
+    deterministic in the recorded data, which keeps the evaluation protocol
+    reproducible across checkpoints.  ``episode_length`` reports the mean length
+    of episodes that ended in termination, or the steps since the last reset
+    when the protocol run never terminated.
+    """
+
+    METRIC_NAMES = (
+        "action_rate",
+        "base_height",
+        "command_correlation",
+        "episode_length",
+        "foot_contact",
+        "foot_slip",
+        "joint_acc",
+        "projected_gravity",
+        "response_slope",
+        "termination",
+        "tracking_vx_mae",
+        "tracking_vy_mae",
+        "tracking_yaw_rate_mae",
+    )
+
+    def __init__(self, dt: float) -> None:
+        self.dt = float(dt)
+        self.commands: list[np.ndarray] = []
+        self.velocities: list[np.ndarray] = []
+        self.base_heights: list[float] = []
+        self.projected_gravities: list[float] = []
+        self.foot_contacts: list[float] = []
+        self.foot_slips: list[float] = []
+        self.action_rates: list[float] = []
+        self.joint_accs: list[float] = []
+        self.completed_episode_lengths: list[int] = []
+        self.terminated = False
+        self.steps_since_reset = 0
+
+    def has_data(self) -> bool:
+        return len(self.velocities) > 0
+
+    def reset(self) -> None:
+        self.commands.clear()
+        self.velocities.clear()
+        self.base_heights.clear()
+        self.projected_gravities.clear()
+        self.foot_contacts.clear()
+        self.foot_slips.clear()
+        self.action_rates.clear()
+        self.joint_accs.clear()
+        self.completed_episode_lengths.clear()
+        self.terminated = False
+        self.steps_since_reset = 0
+
+    def record(
+        self,
+        *,
+        command: np.ndarray,
+        velocity: np.ndarray,
+        base_height: float,
+        projected_gravity: float,
+        foot_contact: float,
+        foot_slip: float,
+        action_rate: float,
+        joint_acc: float,
+        terminated: bool,
+    ) -> None:
+        self.commands.append(np.asarray(command, dtype=np.float64).reshape(3))
+        self.velocities.append(np.asarray(velocity, dtype=np.float64).reshape(3))
+        self.base_heights.append(float(base_height))
+        self.projected_gravities.append(float(projected_gravity))
+        self.foot_contacts.append(float(foot_contact))
+        self.foot_slips.append(float(foot_slip))
+        self.action_rates.append(float(action_rate))
+        self.joint_accs.append(float(joint_acc))
+        self.steps_since_reset += 1
+        if terminated:
+            # The environment auto-resets after this step, so this episode is
+            # complete; start a fresh counter for the next one.
+            self.completed_episode_lengths.append(self.steps_since_reset)
+            self.steps_since_reset = 0
+            self.terminated = True
+
+    def summary(self) -> dict[str, float]:
+        commands = np.stack(self.commands) if self.commands else np.zeros((0, 3))
+        velocities = np.stack(self.velocities) if self.velocities else np.zeros((0, 3))
+        if velocities.shape[0] > 0:
+            # Correlate only axes whose command actually varied; a constant
+            # command axis has no variance and carries no tracking signal.
+            varying_axes = [axis for axis in range(3) if float(np.std(commands[:, axis])) > 0.0]
+            command_correlation = (
+                float(np.mean([pearson_correlation(commands[:, axis], velocities[:, axis]) for axis in varying_axes]))
+                if varying_axes
+                else 0.0
+            )
+            tracking_errors = [
+                mean_absolute_error(commands[:, axis], velocities[:, axis]) for axis in range(3)
+            ]
+        else:
+            command_correlation = 0.0
+            tracking_errors = [0.0, 0.0, 0.0]
+        episode_length = (
+            float(np.mean(self.completed_episode_lengths))
+            if self.completed_episode_lengths
+            else float(self.steps_since_reset)
+        )
+        return {
+            "action_rate": float(np.mean(self.action_rates)) if self.action_rates else 0.0,
+            "base_height": float(np.mean(self.base_heights)) if self.base_heights else 0.0,
+            "command_correlation": command_correlation,
+            "episode_length": episode_length,
+            "foot_contact": float(np.mean(self.foot_contacts)) if self.foot_contacts else 0.0,
+            "foot_slip": float(np.mean(self.foot_slips)) if self.foot_slips else 0.0,
+            "joint_acc": float(np.mean(self.joint_accs)) if self.joint_accs else 0.0,
+            "projected_gravity": (
+                float(np.mean(self.projected_gravities)) if self.projected_gravities else 0.0
+            ),
+            "response_slope": (
+                regression_slope(velocities[:, 0], self.dt) if velocities.shape[0] else 0.0
+            ),
+            "termination": 1.0 if self.terminated else 0.0,
+            "tracking_vx_mae": tracking_errors[0],
+            "tracking_vy_mae": tracking_errors[1],
+            "tracking_yaw_rate_mae": tracking_errors[2],
+        }
+
+    def format_summary(self) -> str:
+        summary = self.summary()
+        return " ".join(f"{name}={summary[name]:.6g}" for name in self.METRIC_NAMES)
+
+
 def play(args: argparse.Namespace) -> None:
     paths, metadata = _resolve_paths(args)
     if not 0.0 < args.command_smoothing <= 1.0:
@@ -569,6 +761,10 @@ def play(args: argparse.Namespace) -> None:
         video_path.parent.mkdir(parents=True, exist_ok=True)
     video_writer: media.VideoWriter | None = None
     filtered_action: torch.Tensor | None = None
+    metrics = PlaybackMetricsAccumulator(float(env._env.dt))
+    prev_action_np: np.ndarray | None = None
+    prev_dof_vel_np: np.ndarray | None = None
+    summary_printed = False
     print(f"[INFO] Stage2 checkpoint={paths.checkpoint} iteration={checkpoint.get('iteration', 'unknown')}")
     print(f"[INFO] Simulator={args.simulator} env_device={device} policy_device={policy_device}")
     print(f"[INFO] First-stage BFM checkpoint={paths.bfm_checkpoint}")
@@ -601,6 +797,9 @@ def play(args: argparse.Namespace) -> None:
                 observation, _ = env.reset(to_numpy=False, reset_to_default_pose=True)
                 commands.zero_()
                 filtered_action = None
+                metrics.reset()
+                prev_action_np = None
+                prev_dof_vel_np = None
 
             if fixed_command is None:
                 forward_axis = args.axis_ly if gamepad_axes is not None else args.forward_axis
@@ -639,6 +838,44 @@ def play(args: argparse.Namespace) -> None:
                 action = filtered_action
             observation, _reward, terminated, truncated, _info = env.step(action, to_numpy=False)
 
+            # Instrumentation: aggregate the same per-step observability the
+            # training rewards use, so headless playback emits a fixed metric
+            # contract for every checkpoint.
+            base_lin_vel = env._env.base_lin_vel[0].detach().cpu().numpy()
+            command_now = commands[0].detach().cpu().numpy()
+            velocity_now = np.asarray(
+                [base_lin_vel[0], base_lin_vel[1], float(env._env.base_ang_vel[0, 2].detach().cpu())],
+                dtype=np.float64,
+            )
+            base_height = float(env._env.simulator.robot_root_states[0, 2].detach().cpu())
+            # Deviation of the unit projected-gravity vector from vertical
+            # (sin of the base tilt): 0.0 upright, 1.0 horizontal.
+            projected_gravity = float(
+                np.linalg.norm(env._env.projected_gravity[0].detach().cpu().numpy()[:2])
+            )
+            foot_contact, foot_slip = _feet_contact_and_slip(env._env)
+            dof_vel_np = env._env.simulator.dof_vel[0].detach().cpu().numpy()
+            action_np = action[0].detach().cpu().numpy()
+            action_rate = 0.0 if prev_action_np is None else float(np.mean(np.abs(action_np - prev_action_np)))
+            joint_acc = (
+                0.0
+                if prev_dof_vel_np is None
+                else float(np.mean(np.abs(dof_vel_np - prev_dof_vel_np)) / metrics.dt)
+            )
+            prev_action_np = action_np
+            prev_dof_vel_np = dof_vel_np
+            metrics.record(
+                command=command_now,
+                velocity=velocity_now,
+                base_height=base_height,
+                projected_gravity=projected_gravity,
+                foot_contact=foot_contact,
+                foot_slip=foot_slip,
+                action_rate=action_rate,
+                joint_acc=joint_acc,
+                terminated=bool(terminated.any() or truncated.any()),
+            )
+
             if viewer is not None or video_renderer is not None:
                 qpos, _ = env._get_qpos_qvel(to_numpy=True)
             if viewer is not None:
@@ -651,17 +888,20 @@ def play(args: argparse.Namespace) -> None:
                 video_writer.add_image(frame)
             step += 1
             if step == 1 or (args.log_every_steps > 0 and step % args.log_every_steps == 0):
-                base_velocity = env._env.base_lin_vel[0].detach().cpu().numpy()
-                yaw_velocity = float(env._env.base_ang_vel[0, 2].detach().cpu())
                 print(
                     f"[INFO] step={step} command={commands[0].detach().cpu().numpy().round(3).tolist()} "
-                    f"velocity={[round(float(base_velocity[0]), 3), round(float(base_velocity[1]), 3), round(yaw_velocity, 3)]} "
-                    f"terminated={bool(terminated.any())} truncated={bool(truncated.any())}",
+                    f"velocity={[round(float(velocity_now[0]), 3), round(float(velocity_now[1]), 3), round(float(velocity_now[2]), 3)]} "
+                    f"terminated={bool(terminated.any())} truncated={bool(truncated.any())} "
+                    f"{metrics.format_summary()}",
                     flush=True,
                 )
             if args.realtime:
                 time.sleep(max(0.0, float(env._env.dt) - (time.monotonic() - started_at)))
+        print(f"[INFO] [METRICS] summary {metrics.format_summary()}", flush=True)
+        summary_printed = True
     finally:
+        if not summary_printed and metrics.has_data():
+            print(f"[INFO] [METRICS] summary {metrics.format_summary()}", flush=True)
         if video_writer is not None:
             video_writer.close()
             print(f"[INFO] Saved MP4: {video_path}")
