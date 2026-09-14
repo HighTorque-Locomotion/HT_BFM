@@ -13,6 +13,29 @@
 <img src="static/images/meta.png" style="height:50px;" />
 </div>
 
+## Pi 平地 AMP
+
+使用 Python 3.11、Isaac Sim 5.1 和 Isaac Lab，在项目根目录运行。
+普通 AMP 支持 `walk_pi_waq_22`、`walk_pi_waq_run_22` 和 `walk_pi_waq_23`：
+
+```bash
+python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
+  --controller amp --num-envs 4096 --headless
+```
+
+`walk_pi_waq_22` 还支持冻结 BFM actor 和观测归一化器，训练上层 command encoder：
+
+```bash
+python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
+  --controller bfm-phase --bfm-weights model/pi_flat_amp/bfm_actor \
+  --num-envs 4096 --headless
+```
+
+`bfm-phase` 使用显式相位输入，改为 `bfm` 可训练无相位版本。
+`--bfm-weights` 指向 H0W22 actor 权重包或原始 checkpoint 目录。
+训练结果保存到 `logs/flat_amp/`；其他训练、回放和导出参数见
+`python -m humanoidverse.flat_amp --help` 及各子命令的 `--help`。
+
 ## Code
 
 Code will be released in stages:
