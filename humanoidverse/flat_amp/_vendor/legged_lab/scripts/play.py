@@ -1,0 +1,79 @@
+"""Replay a flat AMP checkpoint with deterministic actions."""
+
+import argparse
+import copy
+import os
+import traceback
+from pathlib import Path
+
+from legged_lab.scripts.train import TASKS
+
+
+def main():
+    from isaaclab.app import AppLauncher
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=TASKS, default=TASKS[0])
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--num_envs", type=int, default=1)
+    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--velocity", nargs=3, type=float, default=(0.4, 0.0, 0.0), metavar=("VX", "VY", "YAW"))
+    parser.add_argument("--actuator-profile", choices=("ht", "legacy"), default="ht")
+    AppLauncher.add_app_launcher_args(parser)
+    args = parser.parse_args()
+    os.environ["PI_22DOF_ACTUATOR_PROFILE"] = args.actuator_profile
+    import torch
+
+    if args.device and str(args.device).startswith("cuda"):
+        torch.cuda.set_device(args.device)
+    launcher = AppLauncher(args, multi_gpu=False)
+    app = launcher.app
+    try:
+        import legged_lab.envs  # noqa: F401
+        from legged_lab.utils import task_registry
+        from rsl_rl.modules import ActorCriticWaq
+
+        env_cfg, agent_cfg = map(copy.deepcopy, task_registry.get_cfgs(args.task))
+        env_cfg.device = args.device or agent_cfg.device
+        env_cfg.scene.seed = agent_cfg.seed
+        env_cfg.scene.num_envs = args.num_envs
+        env_cfg.noise.add_noise = False
+        env_cfg.domain_rand.events.push_robot = None
+        env_cfg.commands.heading_command = False
+        env_cfg.commands.rel_standing_envs = 0.0
+        env_cfg.commands.rel_onestep_envs = 0.0
+        env_cfg.commands.rel_turn_only_envs = 0.0
+        for axis, value in zip(("lin_vel_x", "lin_vel_y", "ang_vel_z"), args.velocity):
+            setattr(env_cfg.commands.ranges, axis, (value, value))
+        env = task_registry.get_task_class(args.task)(env_cfg, args.headless)
+        history, extras = env.get_observations()
+        obs = extras["observations"]
+        cfg = agent_cfg.policy.to_dict()
+        cfg.pop("class_name")
+        policy = ActorCriticWaq(
+            obs["current_actor_obs"].shape[1], obs["critic"].shape[1], history.shape[1], env.num_actions, **cfg
+        ).to(env.device)
+        saved = torch.load(args.checkpoint.expanduser(), map_location=env.device, weights_only=False)
+        if (saved.get("infos") or {}).get("bfm"):
+            raise ValueError("Use train_bfm_amp.py --play for a BFM command encoder checkpoint.")
+        if "obs_norm_state_dict" in saved:
+            raise ValueError("This task uses empirical_normalization=False; checkpoint is incompatible.")
+        policy.load_state_dict(saved["model_state_dict"], strict=True)
+        policy.eval()
+        with torch.inference_mode():
+            for _ in range(args.steps):
+                if not app.is_running():
+                    break
+                actions, _ = policy.act_inference(obs["current_actor_obs_add_nosie"], history)
+                history, _, _, extras = env.step(actions)
+                obs = extras["observations"]
+        print("[INFO] Deterministic replay completed.")
+    except Exception:
+        traceback.print_exc()
+        raise
+    finally:
+        app.close(skip_cleanup=args.headless)
+
+
+if __name__ == "__main__":
+    main()

@@ -212,3 +212,9 @@ data_process/dataset
 humanoidverse/data
 outputs/
 _wandb/
+
+# Flat AMP run artifacts and the optional pretrained actor.
+/logs/flat_amp/
+/model/pi_flat_amp/
+/humanoidverse/flat_amp/_vendor/legged_lab/assets/**/usd/
+!/humanoidverse/flat_amp/_vendor/rsl_rl/env/
