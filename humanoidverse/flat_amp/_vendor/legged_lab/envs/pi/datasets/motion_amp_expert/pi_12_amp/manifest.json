@@ -1,0 +1,288 @@
+{
+  "source_selection": "Pi_S_12L0A0G0H0W_LSE_lafan_walk.yaml",
+  "source_selection_sha256": "61ad2a84c99fdb0748e7e94bb56c2872d7085170cbf217d842c48cce70aeff41",
+  "generator": "python -m humanoidverse.flat_amp.augment_pi12_data",
+  "reflection": "world Y=0; swap l_/r_; negate X/Z joint rotations; WXYZ quaternion -> (w,-x,y,-z)",
+  "sampling": "equal weight per clip, original and mirror paired; preserve framerate and frame count",
+  "original_count": 26,
+  "mirrored_count": 26,
+  "motions": [
+    {
+      "source": "npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
+      "original": "original/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted_mirrored.npz",
+      "original_sha256": "a8bc231aa9f82d9a7de7bfdf24f7efccd1942a437e16b78345ea171596947543",
+      "mirrored_sha256": "d032e617d62b4b6ed9dea3bb2b2f586781ad038e0c42cdf276cbe9dd158b6de3",
+      "frames": 121,
+      "framerate": 60.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
+      "original": "original/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted_mirrored.npz",
+      "original_sha256": "af1cd6c6d5033cf0601e7afaf868738e78e98c40a637521839fcb4ac7241385f",
+      "mirrored_sha256": "3cee8e9a6b81caa59cc079d82b04bee171a651d64413e25001d32189f816f078",
+      "frames": 121,
+      "framerate": 60.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "original": "original/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "original_sha256": "613c7502e9d5fda36031e0927a0dd26f99a35c5b54d3f0c63b583b7fcfe74777",
+      "mirrored_sha256": "f7c83bebc0b056d41964df342ef7ef95a67f4b22acdb8c2b0389d7f32e780db7",
+      "frames": 61,
+      "framerate": 30.0,
+      "omitted_cached_fields_in_mirror": [
+        "link_body_list",
+        "local_body_pos"
+      ]
+    },
+    {
+      "source": "npz_pi/TURN_LEFT180DEGREES_retargeted.npz",
+      "original": "original/npz_pi/TURN_LEFT180DEGREES_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/TURN_LEFT180DEGREES_retargeted_mirrored.npz",
+      "original_sha256": "f3c4501087aaf8b75d3dc796d96623b1e0caa1351d6038d0efe2570c77344be9",
+      "mirrored_sha256": "dd9eea6172a93d82823eed9f52a967a35d61c0729cc13bd24115349c472fde58",
+      "frames": 281,
+      "framerate": 60.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/TURN_RIGHT180DEGREES_retargeted.npz",
+      "original": "original/npz_pi/TURN_RIGHT180DEGREES_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/TURN_RIGHT180DEGREES_retargeted_mirrored.npz",
+      "original_sha256": "ecf05959d9fc7afffb8760e0377273446042d239aba22e569d24d296c9872aee",
+      "mirrored_sha256": "d025942bf1d7b2a8e1c67a4bbe2f2f7aaa60f9a335345492340f0dc85a536716",
+      "frames": 281,
+      "framerate": 60.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted.npz",
+      "original": "original/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted_mirrored.npz",
+      "original_sha256": "b6065d31cd82cace5ae346b983806790a785c27d904ef9088b90eab9e5bfb70a",
+      "mirrored_sha256": "615aade9108f213bae4c8beb6a49dd22fb7798eaca14bac98dded91a3ff30ff6",
+      "frames": 121,
+      "framerate": 60.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/walk_back_retargetted.npz",
+      "original": "original/npz_pi/walk_back_retargetted.npz",
+      "mirrored": "mirrored/npz_pi/walk_back_retargetted_mirrored.npz",
+      "original_sha256": "b8e85c9f42b416767b1732c37f8d90cee860e604c615efd00929b96dd10f6220",
+      "mirrored_sha256": "86fab7734d383d6498002ce50dfb5576097dd32a61e4c122848265e7c193d95e",
+      "frames": 161,
+      "framerate": 30.0,
+      "omitted_cached_fields_in_mirror": [
+        "body_ang_vel_w",
+        "body_lin_vel_w",
+        "body_names",
+        "body_pos_w",
+        "body_quat_w",
+        "dof_pos",
+        "joint_vel"
+      ]
+    },
+    {
+      "source": "npz_pi/walk_forward_retargetted.npz",
+      "original": "original/npz_pi/walk_forward_retargetted.npz",
+      "mirrored": "mirrored/npz_pi/walk_forward_retargetted_mirrored.npz",
+      "original_sha256": "7aa74de562df2a142a4c3d4ce223fa7c56ed4171314306579fa5cc52565fd1fb",
+      "mirrored_sha256": "7dd4a22316a7a65d600c7fd597beee3ad46a767592a5219b9029f0b937c0bf34",
+      "frames": 83,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "original": "original/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "original_sha256": "97534845ff81babd8ff72983ed3d32fd4f58243ab6b4ce2943bddb21cef6658d",
+      "mirrored_sha256": "39c5ddc65a5506c578bf416a1e9844efac6369025f6fb442b5fca56348ec0ea9",
+      "frames": 100,
+      "framerate": 30.0,
+      "omitted_cached_fields_in_mirror": [
+        "link_body_list",
+        "local_body_pos"
+      ]
+    },
+    {
+      "source": "npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "original": "original/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "original_sha256": "e3c1bba751a3b6c208638797183eab8087eb8f7c2433910bf9665616a6ad93ef",
+      "mirrored_sha256": "76afee60e3ceb9ab3f0ee858805e87e9e986641ef3f14e268414ceb555e6392d",
+      "frames": 100,
+      "framerate": 30.0,
+      "omitted_cached_fields_in_mirror": [
+        "link_body_list",
+        "local_body_pos"
+      ]
+    },
+    {
+      "source": "npz_pi/npz_pii/forward_0.4ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/forward_0.4ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/forward_0.4ms_retargeted_mirrored.npz",
+      "original_sha256": "126288a3f23cd8e93dd5e5ed125829f208c2a93f73f74ba9e5e27785807f58f1",
+      "mirrored_sha256": "3ebdbdde70a09066041079b26b407f46b6096788a3571f1b0fe3c9f271944915",
+      "frames": 264,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/forward_0.8ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/forward_0.8ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/forward_0.8ms_retargeted_mirrored.npz",
+      "original_sha256": "9e45bfbe66c30a32bad43664ea6b48f8786791f176b43981d3b5a3daaf07a540",
+      "mirrored_sha256": "09b220ba405b0e07b419fa4cf23ee504ebbf873d58a11a881383bdf5fa6ec2f7",
+      "frames": 224,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/forward_1.2ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/forward_1.2ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/forward_1.2ms_retargeted_mirrored.npz",
+      "original_sha256": "3bd32c340ef1a0587d22387e7b3a3bec6707680cc5e8b4f57baf25f1ac48365f",
+      "mirrored_sha256": "d8c4e4b62530e739a01e53b3be0777ed0a4cd9a5e976a3715944aa773b8dd3b5",
+      "frames": 261,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/forward_1.5ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/forward_1.5ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/forward_1.5ms_retargeted_mirrored.npz",
+      "original_sha256": "eeec918ed89486e1be3d8dce747b1153b152b097df59b3d099be7a3064cb5cf2",
+      "mirrored_sha256": "3fd3f5f5ad5f50ac999f8a20b5093ef728eca9eb88e9a6ef0da20b8396744f42",
+      "frames": 210,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/backward_0.3ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/backward_0.3ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/backward_0.3ms_retargeted_mirrored.npz",
+      "original_sha256": "92e79c1a2276af131ce8c319c06bec09c7102a512b00eaa4439f8faf3c91445b",
+      "mirrored_sha256": "d9283d1c16afa06c7e5deda77ba56fa7d1fff402c57681387083aef063273fcf",
+      "frames": 256,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/backward_0.6ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/backward_0.6ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/backward_0.6ms_retargeted_mirrored.npz",
+      "original_sha256": "a67c0e6ec370b232c3ee4937c322d3452c40db12b5ab014b99e86055e720cb12",
+      "mirrored_sha256": "6f40cbdb475322de60235d2229f42340bcbb44012a96dbc7df81216edb0b608e",
+      "frames": 256,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/left_0.3ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/left_0.3ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/left_0.3ms_retargeted_mirrored.npz",
+      "original_sha256": "460e109afba97ff4a3092555983072f0c1f40a4a8ebcf2b2fe0691f217b82ab1",
+      "mirrored_sha256": "526da862b20aa468bdb37333993731196ce58ab8b82571a268762e29d1208a0c",
+      "frames": 200,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/left_0.6ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/left_0.6ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/left_0.6ms_retargeted_mirrored.npz",
+      "original_sha256": "fac12a9cf369d1c35dd2070c159520a23252ea561ad50d1efa5d3744db165e45",
+      "mirrored_sha256": "882bbb04a1fd381e07b82dbe2dc98acf86b715fd5140f369dae05edd60d947e9",
+      "frames": 225,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/right_0.3ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/right_0.3ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/right_0.3ms_retargeted_mirrored.npz",
+      "original_sha256": "3a23ea8f96f28706e41a8a15b77ccb22d86b50b319962593703f256b02d5271e",
+      "mirrored_sha256": "bffc41b40959c3ca15264ff75aac12977466ecf95dd52a5256ee967e95d29ee0",
+      "frames": 207,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/right_0.6ms_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/right_0.6ms_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/right_0.6ms_retargeted_mirrored.npz",
+      "original_sha256": "ffe58c162a04361c435371fca4102c853b3d2493af730ff01d849afe87e9e7c3",
+      "mirrored_sha256": "c390245c9e5c59803cec3cf4ea371be8c87889923024d8303b8bd5e1f9894a1f",
+      "frames": 204,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_left_0.5rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_left_0.5rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_left_0.5rads_retargeted_mirrored.npz",
+      "original_sha256": "4809390467fa28d2d73670899820ef1701fa9814b84a0358e07bc306e5cf1177",
+      "mirrored_sha256": "c67affa15e2b9a1501286a05c85979bd5020ebd60237a60f3223fc0d8d780a52",
+      "frames": 314,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_left_1.0rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_left_1.0rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_left_1.0rads_retargeted_mirrored.npz",
+      "original_sha256": "0ea40bf7993c70fa68a3366053118462925718011c0588026f84313e96ca53f4",
+      "mirrored_sha256": "a3e0d7d46881e108b056c1da1f4ff03cf68f201860a1fc121aaeebc416caa5de",
+      "frames": 314,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_left_1.5rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_left_1.5rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_left_1.5rads_retargeted_mirrored.npz",
+      "original_sha256": "68ab18f4835e116e898a854b84facf896ba87bd95d0b202c9fca98f5ecd8c7e6",
+      "mirrored_sha256": "dd2a05d3264fd7e008ec7d9ebc89cf30d01c228d95a499cdf704dbbb6bfae370",
+      "frames": 210,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_right_0.5rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_right_0.5rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_right_0.5rads_retargeted_mirrored.npz",
+      "original_sha256": "17624aa111eeb90b550bea1bd51e5c401146cf2453efade3ec3f6996f201affc",
+      "mirrored_sha256": "4db18a5e58538145521078f0e9bae075b8f756d1b72c51960ba480dc60f3a727",
+      "frames": 314,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_right_1.0rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_right_1.0rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_right_1.0rads_retargeted_mirrored.npz",
+      "original_sha256": "063df0108116a15c9762d3e8a5c1e20f7aa3e0c87f36b55f32d4990a7383f28a",
+      "mirrored_sha256": "bf0af4a58e7394755e8f0fd54907b2c901f74f12b5a3e7b7407eafd52873024a",
+      "frames": 314,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/npz_pii/turn_right_1.5rads_retargeted.npz",
+      "original": "original/npz_pi/npz_pii/turn_right_1.5rads_retargeted.npz",
+      "mirrored": "mirrored/npz_pi/npz_pii/turn_right_1.5rads_retargeted_mirrored.npz",
+      "original_sha256": "e386982d616a7817c58f08efe9ed8e23ffc1a5cb9b5fb1b15a1a69bd800a015e",
+      "mirrored_sha256": "748f0059217ac93eb70aec4b1b18a8defbf80abcde70033f495aeee64f04b95e",
+      "frames": 210,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
+    }
+  ]
+}

@@ -53,6 +53,21 @@ class SceneCfg(InteractiveSceneCfg):
         self.contact_sensor = ContactSensorCfg(
             prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True, update_period=physics_dt
         )
+        if getattr(config, "play_ui", False):
+            # Separate single-body sensors are required for ground-filtered XYZ
+            # forces. The existing reward sensor continues to use normal forces.
+            ground_path = "/World/ground/terrain/GroundPlane/CollisionPlane"
+            if config.terrain_type != "plane":
+                ground_path = "/World/ground/terrain"
+            for side, prefix in (("left", "l"), ("right", "r")):
+                setattr(self, f"{side}_foot_force", ContactSensorCfg(
+                    prim_path=f"{{ENV_REGEX_NS}}/Robot/{prefix}_ankle_roll_link",
+                    history_length=0,
+                    update_period=physics_dt,
+                    track_friction_forces=True,
+                    max_contact_data_count_per_prim=64,
+                    filter_prim_paths_expr=[ground_path],
+                ))
         self.light = AssetBaseCfg(
             prim_path="/World/light", spawn=sim_utils.DistantLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0)
         )

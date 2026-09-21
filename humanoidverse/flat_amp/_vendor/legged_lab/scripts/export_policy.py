@@ -49,8 +49,8 @@ def main():
     actions = sizes("actor")[-1]
     num_obs = 9 + 3 * actions + 2
     history = state["encoder_module.0.weight"].shape[1]
-    if actions not in (22, 23) or history != 10 * num_obs:
-        raise ValueError("Expected a Pi 22/23-DoF, ten-frame proprioceptive checkpoint.")
+    if actions not in (12, 22, 23) or history != 10 * num_obs:
+        raise ValueError("Expected a Pi 12/22/23-DoF, ten-frame proprioceptive checkpoint.")
     actor = ActorCriticWaq(
         num_obs,
         state["critic.0.weight"].shape[1],

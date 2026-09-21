@@ -62,7 +62,12 @@ class AmpWaqOnPolicyRunner:
             raise ValueError("Only AMP task rewards are supported.")
         if "symmetry_cfg" in self.alg_cfg and self.alg_cfg["symmetry_cfg"] is not None:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
-        loader_cls = {"AMPLoaderPi": AMPLoaderPi, "AMPLoaderPi22": AMPLoaderPi22}[train_cfg["amp_loader_class_name"]]
+        if train_cfg["amp_loader_class_name"] == "AMPLoaderPi12":
+            from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12
+
+            loader_cls = AMPLoaderPi12
+        else:
+            loader_cls = {"AMPLoaderPi": AMPLoaderPi, "AMPLoaderPi22": AMPLoaderPi22}[train_cfg["amp_loader_class_name"]]
         amp_data = loader_cls(
             device,
             time_between_frames=self.env.step_dt,
@@ -71,7 +76,10 @@ class AmpWaqOnPolicyRunner:
             motion_files=train_cfg["amp_motion_files"],
             motion_weights=train_cfg.get("amp_motion_weights", None),
             amp_exclude_ankle_roll=train_cfg.get("amp_exclude_ankle_roll", True),
+            **train_cfg.get("amp_loader_kwargs", {}),
         )
+        if self.env.get_amp_obs_for_expert_trans().shape[-1] != amp_data.observation_dim:
+            raise ValueError("Online AMP features and expert features have different dimensions")
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = Discriminator(
             amp_data.observation_dim * 2,
@@ -193,12 +201,15 @@ class AmpWaqOnPolicyRunner:
                         privileged_obs = obs
                     next_amp_obs_with_term = torch.clone(next_amp_obs)
                     reset_env_ids = self.env.reset_env_ids
-                    terminal_amp_states = self.env.get_amp_obs_for_expert_trans()[reset_env_ids]
+                    terminal_amp_states = infos.get("terminal_amp_states")
+                    if terminal_amp_states is None:
+                        terminal_amp_states = self.env.get_amp_obs_for_expert_trans()[reset_env_ids]
                     next_amp_obs_with_term[reset_env_ids] = terminal_amp_states
                     next_obs_no_noise_with_term = torch.clone(next_obs_no_noise)
-                    next_obs_no_noise_with_term[reset_env_ids] = infos["observations"].get("current_actor_obs")[
-                        reset_env_ids
-                    ]
+                    terminal_actor_obs = infos.get("terminal_actor_obs")
+                    if terminal_actor_obs is None:
+                        terminal_actor_obs = infos["observations"]["current_actor_obs"][reset_env_ids]
+                    next_obs_no_noise_with_term[reset_env_ids] = terminal_actor_obs
                     rewards = self.alg.discriminator.predict_amp_reward(
                         amp_obs, next_amp_obs_with_term, rewards, normalizer=self.alg.amp_normalizer
                     )[0]

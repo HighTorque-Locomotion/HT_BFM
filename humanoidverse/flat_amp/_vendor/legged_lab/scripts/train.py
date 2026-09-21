@@ -1,4 +1,4 @@
-"""Train one of the three flat Pi AMP tasks."""
+"""Train a flat Pi AMP task."""
 
 import argparse
 import copy
@@ -7,7 +7,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-TASKS = ("walk_pi_waq_22", "walk_pi_waq_run_22", "walk_pi_waq_23")
+from humanoidverse.flat_amp import TASKS
 
 
 def main():

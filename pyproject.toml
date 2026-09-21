@@ -66,6 +66,8 @@ humanoidverse = ["config/**/*", "data/**/*"]
     "_vendor/legged_lab/assets/**/*.STL",
     "_vendor/legged_lab/assets/**/*.stl",
     "_vendor/legged_lab/envs/pi/datasets/**/*.npz",
+    "_vendor/legged_lab/envs/pi/datasets/**/*.yaml",
+    "_vendor/legged_lab/envs/pi/datasets/**/manifest.json",
 ]
 
 [tool.setuptools.packages.find]

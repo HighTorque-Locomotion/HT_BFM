@@ -126,6 +126,8 @@ def main():
     launcher = AppLauncher(args, multi_gpu=False)
     app = launcher.app
     runner = None
+    play_window = None
+    physical_env = None
     try:
         from isaaclab.utils.io import dump_yaml
 
@@ -136,6 +138,7 @@ def main():
         env_cfg, agent_cfg = task_registry.get_cfgs(args.task)
         env_cfg, agent_cfg = copy.deepcopy(env_cfg), copy.deepcopy(agent_cfg)
         env_cfg.scene.num_envs = args.num_envs
+        env_cfg.scene.play_ui = args.play and not args.headless
         env_cfg.device = device
         env_cfg.sim.device = device
         if args.seed is not None:
@@ -171,6 +174,10 @@ def main():
                 raise ValueError("--play requires a trained command encoder checkpoint via --resume")
             policy = runner.get_inference_policy()
             obs, _ = env.get_observations()
+            if not args.headless:
+                from humanoidverse.flat_amp.play_ui import FlatAmpPlayWindow
+
+                play_window = FlatAmpPlayWindow(physical_env)
             with torch.inference_mode():
                 for _ in range(args.play_steps):
                     if not app.is_running():
@@ -186,9 +193,14 @@ def main():
         traceback.print_exc()
         raise
     finally:
+        if play_window is not None:
+            play_window.close()
         if runner is not None and runner.writer is not None:
             runner.writer.flush()
             runner.writer.close()
+        if args.play and not args.headless and physical_env is not None:
+            physical_env.sim.clear_all_callbacks()
+            physical_env.sim.clear_instance()
         # bxkj/Isaac 5.1 can hang closing a headless physics stage. Checkpoints and
         # logging are finished above; use SimulationApp's supported immediate shutdown.
         app.close(wait_for_replicator=False, skip_cleanup=args.headless)

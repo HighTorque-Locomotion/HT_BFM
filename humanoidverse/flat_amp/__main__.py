@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import CONTROLLERS, PROJECT_ROOT, TASKS, VENDOR_ROOT, activate
+from .keyboard_control import add_keyboard_arguments
 
 
 def positive_int(value):
@@ -53,8 +54,10 @@ def build_parser():
             command.add_argument("--checkpoint", type=Path, required=True)
             command.add_argument("--steps", type=positive_int, default=1000)
             command.add_argument(
-                "--velocity", nargs=3, type=float, metavar=("VX", "VY", "YAW"), help="Fixed command for ordinary AMP playback"
+                "--velocity", nargs=3, type=float, metavar=("VX", "VY", "YAW"),
+                help="Fixed AMP command, or initial command with keyboard control",
             )
+            add_keyboard_arguments(command)
     export = commands.add_parser("export", help="Export an ordinary AMP checkpoint to TorchScript and ONNX")
     export.add_argument("--checkpoint", required=True, type=Path)
     export.add_argument("--output", required=True, type=Path, help="New export directory")
@@ -100,6 +103,13 @@ def build_invocation(args):
     if args.operation == "bundle-bfm":
         return "legged_lab.scripts.export_bfm_actor", bfm_options(args) + ["--output", str(resolve_path(args.output))]
     frozen = args.controller != "amp"
+    if args.operation == "play" and args.keyboard_control:
+        if frozen:
+            raise ValueError("--keyboard-control is supported only for ordinary AMP playback")
+        if args.headless:
+            raise ValueError("--keyboard-control requires a GUI; omit --headless")
+    if args.task == "walk_pi_waq_12" and args.actuator_profile != "ht":
+        raise ValueError("Pi12 uses the HT_lab 5047 motor profile; --actuator-profile must be ht")
     if frozen and args.task != "walk_pi_waq_22":
         raise ValueError("Frozen H0W22 BFM is supported only for walk_pi_waq_22")
     if not frozen and (args.bfm_weights is not None or args.bfm_robot_config is not None):
@@ -143,6 +153,11 @@ def build_invocation(args):
             result += ["--checkpoint", str(resolve_path(args.checkpoint)), "--steps", str(args.steps)]
             if args.velocity is not None:
                 result += ["--velocity", *(str(value) for value in args.velocity)]
+            if args.keyboard_control:
+                result += [
+                    "--keyboard-control", "--keyboard-linvel-step", str(args.keyboard_linvel_step),
+                    "--keyboard-angvel-step", str(args.keyboard_angvel_step),
+                ]
             module = "play"
     return "legged_lab.scripts." + module, result
 

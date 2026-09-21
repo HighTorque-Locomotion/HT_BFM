@@ -32,7 +32,7 @@ cycle so the left and right legs exchange gait roles.
 from __future__ import annotations
 import torch
 
-SUPPORTED_NUM_JOINTS = (22, 23)
+SUPPORTED_NUM_JOINTS = (12, 22, 23)
 OBS_PREFIX_DIM = 9
 PHASE_DIM = 2
 _PI_JOINT_MIRROR = {

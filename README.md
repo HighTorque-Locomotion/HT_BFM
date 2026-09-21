@@ -23,6 +23,18 @@ python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
   --controller amp --num-envs 4096 --headless
 ```
 
+12 自由度 Pi 使用 `walk_pi_waq_12`（HT_lab 5047 电机配置；项目内 pi12_walk 专家共 26 条原件 + 26 条左右镜像）：
+
+```bash
+python -m humanoidverse.flat_amp train --task walk_pi_waq_12 \
+  --controller amp --num-envs 4096 --device cuda:0 --headless
+```
+
+资产路径、47 维观测与训练/回放说明见 [Pi12 任务文档](docs/flat_amp_pi12.md)。
+图形播放默认显示与 HT_lab 同源的 IsaacLab 面板，可查看观测、动作、奖励及双脚三轴力曲线，见 [播放面板说明](docs/flat_amp_play_ui.md)。
+普通 AMP 的 `play` 追加 `--keyboard-control --steps 100000` 可在窗口内调速：
+`W/S` 前后、`A/D` 侧移、`Q/E` 转向、`X` 指令归零；无需重新训练模型。
+
 `walk_pi_waq_22` 还支持冻结 BFM actor 和观测归一化器，训练上层 command encoder：
 
 ```bash

@@ -5,7 +5,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor"
-TASKS = ("walk_pi_waq_22", "walk_pi_waq_run_22", "walk_pi_waq_23")
+TASKS = ("walk_pi_waq_22", "walk_pi_waq_run_22", "walk_pi_waq_23", "walk_pi_waq_12")
 CONTROLLERS = ("amp", "bfm", "bfm-phase")
 
 

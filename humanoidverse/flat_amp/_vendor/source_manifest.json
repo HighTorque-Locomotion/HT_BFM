@@ -1,6 +1,7 @@
 {
   "source_project": "pi-flat-amp",
   "source_commit": "b2d706a8b1323146a0e58595424b7fe5090a8357",
+  "local_modifications": "Pi12 AMP adaptation, optional keyboard playback and native IsaacLab playback panel: sha256 preserves upstream provenance; local_sha256 records modified vendored files.",
   "files": [
     {
       "path": "LICENSE.legged_lab",
@@ -350,7 +351,8 @@
     {
       "path": "legged_lab/envs/__init__.py",
       "source_path": "legged_lab/envs/__init__.py",
-      "sha256": "46428d350705dd43700283b71c5b549d07d2f4808fcf3936afc983404ba295c0"
+      "sha256": "46428d350705dd43700283b71c5b549d07d2f4808fcf3936afc983404ba295c0",
+      "local_sha256": "6f49bb3d567fd29792a0c1789d681eaccea35de9af6ea5b799cc61131254256a"
     },
     {
       "path": "legged_lab/envs/base/__init__.py",
@@ -495,12 +497,14 @@
     {
       "path": "legged_lab/envs/pi/pi_env.py",
       "source_path": "legged_lab/envs/pi/pi_env.py",
-      "sha256": "b758c3a4b6934752ba557f7782cb184e130d9e386bba724ceff497bc04bb35b9"
+      "sha256": "b758c3a4b6934752ba557f7782cb184e130d9e386bba724ceff497bc04bb35b9",
+      "local_sha256": "a60695b32ff83276b6715c9a43a817338447df18aa1ab1e8e513f65da368af9f"
     },
     {
       "path": "legged_lab/envs/pi/symmetry.py",
       "source_path": "legged_lab/envs/pi/symmetry.py",
-      "sha256": "a8fed4b0d5a3a58115cc1654e6b3d9af94d06f04b69a7081b65fce2e7a19b313"
+      "sha256": "a8fed4b0d5a3a58115cc1654e6b3d9af94d06f04b69a7081b65fce2e7a19b313",
+      "local_sha256": "0b8781176ceec4598dbc31623e0cb60e3e53ca3ccd0c0ba6d1f10fe346821e7c"
     },
     {
       "path": "legged_lab/mdp/__init__.py",
@@ -535,22 +539,26 @@
     {
       "path": "legged_lab/scripts/export_policy.py",
       "source_path": "legged_lab/scripts/export_policy.py",
-      "sha256": "723af3db3d6f702f297bed6de07bd63d28a757759cac3b629338cf27929db6df"
+      "sha256": "723af3db3d6f702f297bed6de07bd63d28a757759cac3b629338cf27929db6df",
+      "local_sha256": "a4b7e267622a033f3903415259b1ca120cc71780c73b740d04ed57f7a8dc77c8"
     },
     {
       "path": "legged_lab/scripts/play.py",
       "source_path": "legged_lab/scripts/play.py",
-      "sha256": "24cacc67f550c21c9ad9fb842e9ea209874f7f4de68c7dfaa111edf707a92382"
+      "sha256": "24cacc67f550c21c9ad9fb842e9ea209874f7f4de68c7dfaa111edf707a92382",
+      "local_sha256": "b2b914a76b662bc39e95bf920487b0b456d2b1937adf3a131f49e18a0dab6df3"
     },
     {
       "path": "legged_lab/scripts/train.py",
       "source_path": "legged_lab/scripts/train.py",
-      "sha256": "22e476b5a76845225fe203e34b006e3a8840cf31d29dfa5b1457e898c10fdff5"
+      "sha256": "22e476b5a76845225fe203e34b006e3a8840cf31d29dfa5b1457e898c10fdff5",
+      "local_sha256": "c1fb42b3d4c8a5cdddf79edf737076cffd1563e4f060aa2662a01b54f94ded88"
     },
     {
       "path": "legged_lab/scripts/train_bfm_amp.py",
       "source_path": "legged_lab/scripts/train_bfm_amp.py",
-      "sha256": "f22319650316d2d609615ac8a0cfa1030d611f01c83fdd533464e014d9f94905"
+      "sha256": "f22319650316d2d609615ac8a0cfa1030d611f01c83fdd533464e014d9f94905",
+      "local_sha256": "09aada4d4978dd2317851012e6f3dbd52455ba7f511575d724c4e9c4e2378c4f"
     },
     {
       "path": "legged_lab/utils/__init__.py",
@@ -575,7 +583,8 @@
     {
       "path": "legged_lab/utils/env_utils/scene.py",
       "source_path": "legged_lab/utils/env_utils/scene.py",
-      "sha256": "52b082db0ca7913079658e8683b09889b7d916754184ddc4b185dbc71b9e490c"
+      "sha256": "52b082db0ca7913079658e8683b09889b7d916754184ddc4b185dbc71b9e490c",
+      "local_sha256": "41642af56f1c5aeb57b190519d8d5d9333c29718fd710921d462933e73beb7bc"
     },
     {
       "path": "legged_lab/utils/task_registry.py",
@@ -660,7 +669,8 @@
     {
       "path": "rsl_rl/runners/amp_waq_on_policy_runner.py",
       "source_path": "rsl_rl/rsl_rl/runners/amp_waq_on_policy_runner.py",
-      "sha256": "6cdc0cdcc99217d29f42111504025af953ff1a9ce69addf95cbbdb2b699a79d4"
+      "sha256": "6cdc0cdcc99217d29f42111504025af953ff1a9ce69addf95cbbdb2b699a79d4",
+      "local_sha256": "271a1b717d24988e50d279c132f4f8736f0bebd8c2920d96b3c7c52b6b4dd00e"
     },
     {
       "path": "rsl_rl/storage/__init__.py",

@@ -56,7 +56,7 @@ def test_training_core_and_assets_match_source_manifest():
     for item in manifest["files"]:
         path = VENDOR_ROOT / item["path"]
         assert not path.is_symlink()
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"], item["path"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == item.get("local_sha256", item["sha256"]), item["path"]
 
 
 @pytest.mark.parametrize("controller,phase", [("bfm", False), ("bfm-phase", True)])
@@ -94,7 +94,7 @@ def test_bfm_dispatch_preserves_phase_resume_and_local_source(tmp_path, controll
     assert options[options.index("--num_envs") + 1] == "1"
 
 
-@pytest.mark.parametrize("task", ["walk_pi_waq_run_22", "walk_pi_waq_23"])
+@pytest.mark.parametrize("task", ["walk_pi_waq_run_22", "walk_pi_waq_23", "walk_pi_waq_12"])
 def test_bfm_rejects_unsupported_task_before_loading_weights(task):
     args = build_parser().parse_args(["train", "--controller", "bfm", "--task", task])
     with pytest.raises(ValueError, match="only for walk_pi_waq_22"):
@@ -113,4 +113,5 @@ assert 'isaaclab' not in sys.modules and 'torch' not in sys.modules
         "walk_pi_waq_22: amp, bfm, bfm-phase",
         "walk_pi_waq_run_22: amp",
         "walk_pi_waq_23: amp",
+        "walk_pi_waq_12: amp",
     ]

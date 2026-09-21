@@ -42,6 +42,8 @@ def _tolist(x):
 
 
 class PiDof23Env(VecEnv):
+    amp_upper_body = True
+
     def __init__(self, cfg: PiDof23WalkFlatEnvCfg, headless):
         self.cfg: PiDof23WalkFlatEnvCfg
         self.cfg = cfg
@@ -137,7 +139,9 @@ class PiDof23Env(VecEnv):
             name_keys=["l_ankle_roll_link", "r_ankle_roll_link"], preserve_order=True
         )
         self.torso_body_ids, _ = self.robot.find_bodies(name_keys=["torso_link"], preserve_order=True)
-        self.wrist_body_ids, _ = self.robot.find_bodies(name_keys=["l_wrist_link", "r_wrist_link"], preserve_order=True)
+        self.wrist_body_ids = []
+        if self.amp_upper_body:
+            self.wrist_body_ids, _ = self.robot.find_bodies(name_keys=["l_wrist_link", "r_wrist_link"], preserve_order=True)
         self.left_leg_ids, _ = self.robot.find_joints(
             name_keys=["l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint", "l_calf_joint", "l_ankle_pitch_joint"]
             + ([] if self.cfg.amp_exclude_ankle_roll else ["l_ankle_roll_joint"]),
@@ -151,11 +155,17 @@ class PiDof23Env(VecEnv):
         print("left_leg_ids:", self.left_leg_ids)
         print("right_leg_ids:", self.right_leg_ids)
         self.left_arm_ids, _ = self.robot.find_joints(
-            name_keys=["l_shoulder_pitch_joint", "l_shoulder_roll_joint", "l_upper_arm_joint", "l_elbow_joint"],
+            name_keys=(
+                ["l_shoulder_pitch_joint", "l_shoulder_roll_joint", "l_upper_arm_joint", "l_elbow_joint"]
+                if self.amp_upper_body else []
+            ),
             preserve_order=True,
         )
         self.right_arm_ids, _ = self.robot.find_joints(
-            name_keys=["r_shoulder_pitch_joint", "r_shoulder_roll_joint", "r_upper_arm_joint", "r_elbow_joint"],
+            name_keys=(
+                ["r_shoulder_pitch_joint", "r_shoulder_roll_joint", "r_upper_arm_joint", "r_elbow_joint"]
+                if self.amp_upper_body else []
+            ),
             preserve_order=True,
         )
         if "waist_yaw_joint" in self.robot.joint_names:
@@ -163,15 +173,17 @@ class PiDof23Env(VecEnv):
         else:
             self.waist_joint_ids = []
         self.head_joint_ids, _ = self.robot.find_joints(
-            name_keys=["head_yaw_joint", "head_pitch_joint"], preserve_order=True
+            name_keys=["head_yaw_joint", "head_pitch_joint"] if self.amp_upper_body else [], preserve_order=True
         )
-        self.head_pitch_joint_id = self.head_joint_ids[1]
-        self.head_end_body_ids, _ = self.robot.find_bodies(name_keys=["camera_link"], preserve_order=True)
+        self.head_pitch_joint_id = self.head_joint_ids[1] if self.amp_upper_body else None
+        self.head_end_body_ids = []
+        if self.amp_upper_body:
+            self.head_end_body_ids, _ = self.robot.find_bodies(name_keys=["camera_link"], preserve_order=True)
         if len(self.torso_body_ids) != 1:
             raise RuntimeError(f"Expected one torso_link for Pi AMP observations, found {len(self.torso_body_ids)}")
-        if len(self.wrist_body_ids) != 2:
+        if self.amp_upper_body and len(self.wrist_body_ids) != 2:
             raise RuntimeError(f"Expected two wrist links for Pi AMP observations, found {len(self.wrist_body_ids)}")
-        if len(self.head_end_body_ids) != 1:
+        if self.amp_upper_body and len(self.head_end_body_ids) != 1:
             raise RuntimeError(
                 f"Expected one camera_link as the Pi AMP head endpoint, found {len(self.head_end_body_ids)}"
             )
@@ -184,7 +196,7 @@ class PiDof23Env(VecEnv):
             + len(self.head_joint_ids)
             + len(self.waist_joint_ids)
         )
-        end_effector_pos_size = 15 + (3 if self.has_waist_joints else 0)
+        end_effector_pos_size = (15 if self.amp_upper_body else 6) + (3 if self.has_waist_joints else 0)
         self.amp_obs_dim = 6 + 2 * amp_joint_count + end_effector_pos_size
         self.obs_scales = self.cfg.normalization.obs_scales
         self.add_noise = self.cfg.noise.add_noise
@@ -344,6 +356,9 @@ class PiDof23Env(VecEnv):
             self.event_manager.apply(mode="interval", dt=self.step_dt)
         self.reset_buf, self.time_out_buf = self.check_reset()
         reward_buf = self.reward_manager.compute(self.step_dt)
+        play_window = getattr(self, "_play_window", None)
+        if play_window is not None:
+            play_window.update(actions, processed_actions)
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset(self.reset_env_ids)
         actor_obs, critic_obs, current_actor_obs_add_nosie, current_actor_obs, current_critic_obs = (
@@ -438,6 +453,19 @@ class PiDof23Env(VecEnv):
         right_foot_pos = quat_apply(
             root_quat_inv, self.robot.data.body_state_w[:, self.feet_body_ids[1], :3] - root_pos
         )
+        if not self.amp_upper_body:
+            joint_ids = list(self.left_leg_ids) + list(self.right_leg_ids)
+            return torch.cat(
+                (
+                    self.robot.data.root_lin_vel_b,
+                    self.robot.data.root_ang_vel_b,
+                    self.robot.data.joint_pos[:, joint_ids],
+                    self.robot.data.joint_vel[:, joint_ids],
+                    left_foot_pos,
+                    right_foot_pos,
+                ),
+                dim=-1,
+            )
         left_hand_pos = quat_apply(
             torso_quat_inv, self.robot.data.body_state_w[:, self.wrist_body_ids[0], :3] - torso_state[:, :3]
         )

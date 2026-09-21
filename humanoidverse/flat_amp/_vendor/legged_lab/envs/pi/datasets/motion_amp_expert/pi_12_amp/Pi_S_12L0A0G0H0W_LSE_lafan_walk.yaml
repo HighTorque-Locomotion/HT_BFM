@@ -1,0 +1,23 @@
+selected_files:
+- original/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz
+- mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted_mirrored.npz
+- original/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz
+- mirrored/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted_mirrored.npz
+- original/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz
+- mirrored/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz
+- original/npz_pi/TURN_LEFT180DEGREES_retargeted.npz
+- mirrored/npz_pi/TURN_LEFT180DEGREES_retargeted_mirrored.npz
+- original/npz_pi/TURN_RIGHT180DEGREES_retargeted.npz
+- mirrored/npz_pi/TURN_RIGHT180DEGREES_retargeted_mirrored.npz
+- original/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted.npz
+- mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted_mirrored.npz
+- original/npz_pi/walk_back_retargetted.npz
+- mirrored/npz_pi/walk_back_retargetted_mirrored.npz
+- original/npz_pi/walk_forward_retargetted.npz
+- mirrored/npz_pi/walk_forward_retargetted_mirrored.npz
+- original/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz
+- mirrored/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz
+- original/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz
+- mirrored/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz
+- original/npz_pi/walk_forward_retargetted_reversed.npz
+- mirrored/npz_pi/walk_forward_retargetted_reversed_mirrored.npz

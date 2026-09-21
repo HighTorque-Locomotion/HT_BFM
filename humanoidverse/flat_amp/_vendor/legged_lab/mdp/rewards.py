@@ -337,16 +337,24 @@ def joint_deviation_l2(
     lin_command_threshold: float = 0.1,
     yaw_command_threshold: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    exempt_lateral: bool = False,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     angle = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    command = env.command_generator.command
     lin_active, yaw_active, _ = command_activity_masks(
-        env.command_generator.command,
+        command,
         lin_command_threshold=lin_command_threshold,
         yaw_command_threshold=yaw_command_threshold,
     )
     pure_yaw_active = ~lin_active & yaw_active
-    return torch.sum(torch.square(angle), dim=1) * (~pure_yaw_active).float()
+    exempt = pure_yaw_active
+    if exempt_lateral:
+        pure_lateral_active = (command[:, 1].abs() >= lin_command_threshold) & (
+            command[:, 0].abs() < lin_command_threshold
+        )
+        exempt = pure_yaw_active | pure_lateral_active
+    return torch.sum(torch.square(angle), dim=1) * (~exempt).float()
 
 
 def feet_stumble(env: PiDof23Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:

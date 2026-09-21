@@ -18,7 +18,7 @@ from humanoidverse.flat_amp import VENDOR_ROOT
 ROOT = VENDOR_ROOT
 
 
-@pytest.mark.parametrize("joints", [22, 23])
+@pytest.mark.parametrize("joints", [12, 22, 23])
 def test_amp_updates_policy_vae_discriminator_and_exports(joints):
     torch.manual_seed(42)
     torch.set_num_threads(1)
@@ -26,15 +26,25 @@ def test_amp_updates_policy_vae_discriminator_and_exports(joints):
     policy = ActorCriticWaq(dim, dim + 5, dim * 10, joints, actor_hidden_dims=[32, 16], critic_hidden_dims=[32, 16])
     loader_cls = AMPLoaderPi22 if joints == 22 else AMPLoaderPi
     motion = "pi_22_amp/walk_forward_retargetted.npz" if joints == 22 else "new_npz/left.npz"
+    loader_kwargs = {"motion_files": [str(ROOT / "legged_lab/envs/pi/datasets/motion_amp_expert" / motion)]}
+    if joints == 12:
+        from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12, selected_motion_files
+
+        from humanoidverse.flat_amp.pi12_paths import motion_yaml, robot_urdf
+
+        if not motion_yaml().is_file() or not robot_urdf().is_file():
+            pytest.skip("Pi12 integration requires the supplied HT_lab motions and URDF")
+        loader_cls = AMPLoaderPi12
+        loader_kwargs = {"motion_files": selected_motion_files(motion_yaml())[:1]}
     loader = loader_cls(
         "cpu",
         time_between_frames=0.02,
         preload_transitions=True,
         num_preload_transitions=128,
         amp_exclude_ankle_roll=False,
-        motion_files=[str(ROOT / "legged_lab/envs/pi/datasets/motion_amp_expert" / motion)],
+        **loader_kwargs,
     )
-    assert loader.observation_dim == (65 if joints == 22 else 70)
+    assert loader.observation_dim == {12: 36, 22: 65, 23: 70}[joints]
     discriminator = Discriminator(loader.observation_dim * 2, 0.3, [32, 16], "cpu", 0.65)
     algo = AMPWAQPPO(
         policy,
@@ -99,4 +109,4 @@ def test_no_perception_or_student_training_packages():
         "amp_ppo.py",
         "amp_waq_ppo.py",
     }
-    assert {p.name for p in (ROOT / "legged_lab/envs/pi").glob("*cfg*.py")} == {"pi_cfg.py", "pi_22dof_cfg.py"}
+    assert {p.name for p in (ROOT / "legged_lab/envs/pi").glob("*cfg*.py")} == {"pi_cfg.py", "pi_22dof_cfg.py", "pi_12dof_cfg.py"}
