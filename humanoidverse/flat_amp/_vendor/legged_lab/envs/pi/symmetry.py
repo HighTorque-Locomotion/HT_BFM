@@ -16,7 +16,7 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-"""Left-right symmetry transforms for the Pi 22/23-DOF policies.
+"""Left-right symmetry transforms for the Pi12 policy.
 
 The standard simple-phase policy frame is laid out as::
 
@@ -32,7 +32,7 @@ cycle so the left and right legs exchange gait roles.
 from __future__ import annotations
 import torch
 
-SUPPORTED_NUM_JOINTS = (12, 22, 23)
+SUPPORTED_NUM_JOINTS = (12,)
 OBS_PREFIX_DIM = 9
 PHASE_DIM = 2
 _PI_JOINT_MIRROR = {
@@ -48,17 +48,7 @@ _PI_JOINT_MIRROR = {
     "r_ankle_pitch_joint": ("l_ankle_pitch_joint", 1.0),
     "l_ankle_roll_joint": ("r_ankle_roll_joint", -1.0),
     "r_ankle_roll_joint": ("l_ankle_roll_joint", -1.0),
-    "l_shoulder_pitch_joint": ("r_shoulder_pitch_joint", 1.0),
-    "r_shoulder_pitch_joint": ("l_shoulder_pitch_joint", 1.0),
-    "l_shoulder_roll_joint": ("r_shoulder_roll_joint", -1.0),
-    "r_shoulder_roll_joint": ("l_shoulder_roll_joint", -1.0),
-    "l_upper_arm_joint": ("r_upper_arm_joint", -1.0),
-    "r_upper_arm_joint": ("l_upper_arm_joint", -1.0),
-    "l_elbow_joint": ("r_elbow_joint", 1.0),
-    "r_elbow_joint": ("l_elbow_joint", 1.0),
-    "waist_yaw_joint": ("waist_yaw_joint", -1.0),
-    "head_yaw_joint": ("head_yaw_joint", -1.0),
-    "head_pitch_joint": ("head_pitch_joint", 1.0),
+
 }
 
 

@@ -1,7 +1,7 @@
 # Pi 12 自由度平地 AMP 训练
 
-任务名为 `walk_pi_waq_12`，controller 为 `amp`。沿用既有三个平地任务的
-ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失，不加载 BFM。
+任务名为 `walk_pi_waq_12`，controller 为 `amp`。本项目仅保留此任务的
+ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失。
 
 ## 配置与调参入口
 
@@ -24,7 +24,7 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失，不加�
 奖励项设为 `None` 或 `weight=0.0` 会禁用该项；新增奖励可直接添加 `RewTerm`。
 奖励计算函数位于 `humanoidverse/flat_amp/_vendor/legged_lab/mdp/rewards.py`，
 若只给 Pi12 添加新计算逻辑，可在该模块新增函数并仅在 Pi12 配置中引用；
-修改已有共享函数会同时影响引用它的其他任务。
+修改计算函数后需重新运行 Pi12 回归测试。
 
 电机参数和初始姿态仍在 `.../legged_lab/assets/pi/pi_12dof.py`。
 命令行参数（如 `--num-envs`、`--max-iterations`、`--amp-preload`）优先于配置默认值。
@@ -39,6 +39,29 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失，不加�
 动作、观测和奖励均为有限值；本次未验证 GUI 回放或长跑收敛。
 
 ## 环境实现入口
+
+### 2026-09-21 横移、纯转向采样与接触力调整
+
+以下为相对调整前配置的变更记录，当前源码已核对：
+
+| 位置 / 参数 | 调整前 | 调整后 |
+|---|---|---|
+| `PiDof12WalkFlatEnvCfg.commands.rel_onestep_envs` | `0.05` | `0.15`（纯横移命令采样比例） |
+| `PiDof12WalkFlatEnvCfg.commands.rel_turn_only_envs` | `0.05` | `0.15`（纯转向命令采样比例） |
+| `PiDof12RewardCfg.joint_deviation_hip_walk.params` | 仅豁免纯转向 | 新增 `exempt_lateral=True`，同时豁免横移 |
+| `PiDof12RewardCfg.feet_force.params.threshold` | `200` | `170`（取建议范围 160～180 的中间值） |
+| `PiDof12RewardCfg.feet_force.params.max_reward` | `200` | `400` |
+
+`joint_deviation_hip_walk.weight` 仍为 `-1.0`，`feet_force.weight` 仍为 `-0.03`。
+共享函数 `mdp/rewards.py::joint_deviation_l2` 增加可选参数
+`exempt_lateral=False`，由 Pi12 单独启用。横移豁免条件为
+`abs(vy_cmd) >= lin_command_threshold` 且
+`abs(vx_cmd) < lin_command_threshold`，不额外限制 yaw 命令；
+前进/后退和明显含前后速度的斜向行走仍保留原惩罚，原有纯转向豁免保留。
+其他未启用该参数的任务保持原有行为。
+
+本轮未调整 `foot_gait.params.threshold`，其值仍为 `0.56`。
+上述训练参数需重启训练或在新配置下恢复训练后生效，不会自动改变已运行的训练进程。
 
 `humanoidverse/flat_amp/_vendor/legged_lab/envs/pi/pi_12dof_env.py` 中的
 `PiDof12Env` 已展开为独立环境，只继承 RSL-RL 的 `VecEnv` 抽象接口，
@@ -70,7 +93,7 @@ URDF 使用相邻资产项目，专家数据默认使用 HT_BFM 项目内的副�
 
 - URDF：`../ht_urdf/ht_urdf/Pi_S_12L0A0G0H0W/urdf/Pi_S_12L0A0G0H0W_260909.urdf`
 - 专家目录：`humanoidverse/flat_amp/_vendor/legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/`
-- 专家选择：上述目录下的 `Pi_S_12L0A0G0H0W_LSE_lafan_walk.yaml`，共 52 条。
+- 专家选择：上述目录下的 `Pi_S_12L0A0G0H0W_LSE_lafan_walk.yaml`，当前启用 11 对、共 22 条。
 
 可用 `PI12_URDF_PATH` 和 `PI12_AMP_MOTION_YAML` 环境变量覆盖路径。保留 URDF
 相邻的 meshes 目录。训练不再依赖外部 HT_lab 数据目录，无需安装或导入 HT_lab。
@@ -87,14 +110,9 @@ URDF 使用相邻资产项目，专家数据默认使用 HT_BFM 项目内的副�
 
 现有 AMP 加载器不在线生成镜像专家。PPO 的 `use_mirror_loss=True` 约束策略的
 左右对称性；`use_data_augmentation` 同样针对策略训练数据，不会扩充专家库。
-三个参考任务的数据都位于 `.../datasets/motion_amp_expert/`：
-
-- `walk_pi_waq_22` / `walk_pi_waq_run_22`：`pi_22_amp/`，配置手动选择部分已生成的 `_mirrored.npz`。
-- `walk_pi_waq_23`：`new_npz/`。
-
-Pi12 的 `pi_12_amp/` 包含原 YAML 选中的 26 条原轨迹（`original/`，逐字节复制）
-和 26 条离线镜像（`mirrored/`）。选择文件将每个原件及镜像成对列出，加载器
-对 52 条片段等权采样，每对合计概率保持原先的 1/26。帧数、帧率不变。
+Pi12 的 `pi_12_amp/` 保留 27 条原件和 27 条离线镜像，其中包含原先清单
+漏记的反向行走动作对。当前 YAML 选择其中 11 对、共 22 条片段，按片段等权采样。
+清理任务代码时没有修改 NPZ 内容或 YAML 选择，帧数、帧率不变。
 镜像规则为矢状面反射（world Y=0）：
 
 - 按关节名称交换左右；hip_pitch/calf/ankle_pitch 保持符号，hip_roll/thigh/ankle_roll 取反。
@@ -104,7 +122,7 @@ Pi12 的 `pi_12_amp/` 包含原 YAML 选中的 26 条原轨迹（`original/`，�
   Pi12 加载器重新差分求速度，并使用目标 URDF 重算脚端 FK。
 
 `manifest.json` 记录原件与镜像的 SHA256、帧数、帧率和省略的缓存字段。
-没有修改 HT_lab 源数据或其他三个任务的数据/配置。复现命令如下（输出必须是
+原始动作数据保持不变。复现镜像命令如下（输出必须是
 不存在的新目录；已附带生成好的数据，日常训练不需要执行）：
 
 ```bash
@@ -114,7 +132,7 @@ python -m humanoidverse.flat_amp.augment_pi12_data \
 ```
 
 如曾设置 `PI12_AMP_MOTION_YAML`，该变量仍优先于项目内默认路径；要使用
-新的 52 条默认数据，先 `unset PI12_AMP_MOTION_YAML`。
+项目当前默认选择，先 `unset PI12_AMP_MOTION_YAML`。
 
 镜像数据生成后，44 项 CPU 测试通过，覆盖全部 52 条轨迹的加载/采样、
 镜像两次还原、四元数反射、AMP 速度/关节特征及目标脚端 FK 对称关系，
@@ -219,3 +237,24 @@ CPU 单元测试覆盖专家轨迹、关节顺序、四元数、AMP 特征、PPO
 在 RTX 4090 / Isaac Sim 5.1 上完成上述 16 环境、2 次迭代、2048 AMP 预载的
 GPU 短跑，正常保存 `model_0.pt` 和 `model_1.pt`。新增检查覆盖全部启用奖励的
 关节和刚体名称匹配。该短跑仅验证训练链路，不代表策略已经学会行走。
+
+
+## 2026-09-22 单任务清理
+
+项目仅注册 `walk_pi_waq_12`。Pi22/Pi23、BFM、Stage2 及其他任务的源码、入口、
+配置和对应测试已移除；`.gitignore` 忽略的内容保留。
+`AMPLoaderPi12` 的加载、插值和采样方法已展开为独立实现，Pi12 5047 电机直接
+继承 Isaac Lab 的 `DelayedPDActuator`。任务环境与奖励参数保持原样。
+历史验证记录中的其他任务及旧数据数量仅描述当时状态，以本节和当前配置为准。
+
+本次清理验证（`conda activate HT_BFM`，RTX 4090）：
+
+- `python -m pytest tests/flat_amp -q`：49 项通过；Ruff 与 `git diff --check` 通过。
+- 实际训练 16 个环境、2 次迭代、2048 条 AMP 预载，生成 `model_0.pt` 和 `model_1.pt`；
+  从 `model_1.pt` 恢复训练 1 次迭代成功。checkpoint 策略参数均为有限值。
+- 独立无界面播放入口加载训练权重，完成 2 个环境、100 步播放。
+- TorchScript / ONNX 导出成功，ONNX checker 通过；ONNX Runtime 与 TorchScript
+  在 batch=1、8、32 时输出一致（atol=1e-6、rtol=1e-5）。
+- 独立加载器的当前全部专家特征及 100 个插值样本与清理前逐位一致；55 个 NPZ/YAML 文件未变。
+- 图形面板测试未通过：本机 Isaac Sim 报 NVIDIA/Vulkan 设备初始化失败，90 秒超时；
+  未据此声称 GUI 可用，也未验证长期训练收敛。

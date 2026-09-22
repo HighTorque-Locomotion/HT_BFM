@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Tuple
 from rsl_rl.env import VecEnv
 
 if TYPE_CHECKING:
-    from legged_lab.envs.pi.pi_cfg import PiDof23WalkFlatEnvCfg as BaseEnvConfig
-    from legged_lab.envs.pi.pi_cfg import PiDof23WalkAgentCfg as BaseAgentConfig
+    from legged_lab.envs.pi.pi_12dof_cfg import PiDof12WalkFlatEnvCfg as BaseEnvConfig
+    from legged_lab.envs.pi.pi_12dof_cfg import PiDof12WalkAgentCfg as BaseAgentConfig
 
 
 class TaskRegistry:

@@ -1,18 +1,18 @@
-"""Pi flat-ground AMP with an optional frozen BFM controller."""
+"""Standalone walk_pi_waq_12 training, playback and export."""
 
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor"
-TASKS = ("walk_pi_waq_22", "walk_pi_waq_run_22", "walk_pi_waq_23", "walk_pi_waq_12")
-CONTROLLERS = ("amp", "bfm", "bfm-phase")
+TASKS = ("walk_pi_waq_12",)
+CONTROLLERS = ("amp",)
 
 
 def activate():
     """Use the bundled training core while preserving historical checkpoint module names.
 
-    Activation is explicit so importing HumanoidVerse or its existing Stage2 does
+    Activation is explicit so importing the package does
     not change Python's package search path. A process cannot mix training cores.
     """
     for package in ("legged_lab", "rsl_rl"):

@@ -5,9 +5,8 @@ import json
 from pathlib import Path
 
 import torch
-from torch import nn
-
 from rsl_rl.modules import ActorCriticWaq
+from torch import nn
 
 
 class Policy(nn.Module):
@@ -49,8 +48,8 @@ def main():
     actions = sizes("actor")[-1]
     num_obs = 9 + 3 * actions + 2
     history = state["encoder_module.0.weight"].shape[1]
-    if actions not in (12, 22, 23) or history != 10 * num_obs:
-        raise ValueError("Expected a Pi 12/22/23-DoF, ten-frame proprioceptive checkpoint.")
+    if actions != 12 or history != 10 * num_obs:
+        raise ValueError("Expected a Pi12, ten-frame proprioceptive checkpoint.")
     actor = ActorCriticWaq(
         num_obs,
         state["critic.0.weight"].shape[1],
@@ -92,7 +91,7 @@ def main():
                 "history_dim": history,
                 "history_order": "oldest_to_newest",
                 "input": "scaled proprioceptive observation history",
-                "output": "normalized joint actions; apply task action scale/default pose and head mask in controller",
+                "output": "normalized joint actions; apply task action scale/default pose in controller",
                 "checkpoint": args.checkpoint.name,
             },
             indent=2,

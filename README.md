@@ -1,355 +1,83 @@
-<h1 align="center"> BFM-Zero: A Promptable Behavioral Foundation Model for Humanoid Control Using Unsupervised Reinforcement Learning </h1>
+# HT_BFM · walk_pi_waq_12
 
-<div align="center">
+本项目仅保留 Pi 12 自由度平地 AMP 任务 `walk_pi_waq_12`，包括训练、断点恢复、播放、键盘调速、Isaac Lab 播放面板，以及 TorchScript / ONNX 导出。
 
-[[arXiv]](https://arxiv.org/abs/2511.04131)
-[[Paper]](https://lecar-lab.github.io/BFM-Zero/resources/paper.pdf)
-[[Website]](https://lecar-lab.github.io/BFM-Zero/)
+## 环境与资产
 
-<!-- [[Arxiv]](https://lecar-lab.github.io/SoFTA/) -->
-<!-- [[Video]](https://www.youtube.com/) -->
-
-<img src="static/images/ip.png" style="height:50px;" />
-<img src="static/images/meta.png" style="height:50px;" />
-</div>
-
-## Pi 平地 AMP
-
-使用 Python 3.11、Isaac Sim 5.1 和 Isaac Lab，在项目根目录运行。
-普通 AMP 支持 `walk_pi_waq_22`、`walk_pi_waq_run_22` 和 `walk_pi_waq_23`：
+在项目根目录使用现有环境：
 
 ```bash
-python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
-  --controller amp --num-envs 4096 --headless
+conda activate HT_BFM
+python -m humanoidverse.flat_amp list-tasks
 ```
 
-12 自由度 Pi 使用 `walk_pi_waq_12`（HT_lab 5047 电机配置；项目内 pi12_walk 专家共 26 条原件 + 26 条左右镜像）：
+运行环境为 Python 3.11、Isaac Sim 5.1、Isaac Lab 与 CUDA PyTorch。
+`environment.yml` 记录依赖和相邻 Isaac Lab 源码路径；已经配置好的 `HT_BFM` 无需重装。
+需要安装本项目时运行 `python -m pip install --no-deps -e .`。
+
+机器人默认读取相邻资产仓库：
+`../ht_urdf/ht_urdf/Pi_S_12L0A0G0H0W/urdf/Pi_S_12L0A0G0H0W_260909.urdf`，并需要其相邻 meshes。
+可用 `PI12_URDF_PATH` 覆盖 URDF 路径。
+专家数据位于本项目 `humanoidverse/flat_amp/_vendor/legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/`，
+当前 YAML 选择 11 对、共 22 条动作。`PI12_AMP_MOTION_YAML` 可覆盖选择文件。
+无需安装或导入 `HT_lab`。
+
+## 训练与恢复
 
 ```bash
-python -m humanoidverse.flat_amp train --task walk_pi_waq_12 \
-  --controller amp --num-envs 4096 --device cuda:0 --headless
+python -m humanoidverse.flat_amp train \
+  --task walk_pi_waq_12 --controller amp \
+  --num-envs 4096 --device cuda:0 --headless
+
+python -m humanoidverse.flat_amp train \
+  --resume /path/to/model_1000.pt --max-iterations 1000 --headless
 ```
 
-资产路径、47 维观测与训练/回放说明见 [Pi12 任务文档](docs/flat_amp_pi12.md)。
-图形播放默认显示与 HT_lab 同源的 IsaacLab 面板，可查看观测、动作、奖励及双脚三轴力曲线，见 [播放面板说明](docs/flat_amp_play_ui.md)。
-普通 AMP 的 `play` 追加 `--keyboard-control --steps 100000` 可在窗口内调速：
-`W/S` 前后、`A/D` 侧移、`Q/E` 转向、`X` 指令归零；无需重新训练模型。
+任务默认就是 `walk_pi_waq_12`，controller 默认 `amp`，可以省略。
+日志和 checkpoint 默认写入 `logs/flat_amp/walk_pi_waq_12/`；`--log-dir` 可指定新的输出目录。
+短跑验证可使用 `--num-envs 16 --max-iterations 2 --amp-preload 2048`。
 
-`walk_pi_waq_22` 还支持冻结 BFM actor 和观测归一化器，训练上层 command encoder：
+## 播放
 
 ```bash
-python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
-  --controller bfm-phase --bfm-weights model/pi_flat_amp/bfm_actor \
-  --num-envs 4096 --headless
+python -m humanoidverse.flat_amp play \
+  --checkpoint /path/to/model_1000.pt --num-envs 1 --steps 100000
+
+python -m humanoidverse.flat_amp play \
+  --checkpoint /path/to/model_1000.pt --keyboard-control --steps 100000
+
+python -m humanoidverse.flat_amp play \
+  --checkpoint /path/to/model_1000.pt --headless --steps 100
 ```
 
-`bfm-phase` 使用显式相位输入，改为 `bfm` 可训练无相位版本。
-`--bfm-weights` 指向 H0W22 actor 权重包或原始 checkpoint 目录。
-训练结果保存到 `logs/flat_amp/`；其他训练、回放和导出参数见
-`python -m humanoidverse.flat_amp --help` 及各子命令的 `--help`。
+键盘：`W/S` 前后、`A/D` 横移、`Q/E` 转向、`X` 归零。
+固定速度可传入 `--velocity VX VY YAW`。图形播放需要可用的 NVIDIA/Vulkan 图形环境。
+播放面板见 [面板说明](docs/flat_amp_play_ui.md)。
 
-## Code
-
-Code will be released in stages:
-
-- [x] **Pretrained checkpoints + sim-to-sim / sim-to-real deployment**  
-  → [`deploy`](https://github.com/LeCAR-Lab/BFM-Zero/tree/deploy) branch
-
-- [x] **Minimal inference code + tutorial**  
-  → [`minimal_inference`](https://github.com/LeCAR-Lab/BFM-Zero/tree/minimal_inference) branch
-
-- [x] **Full training and evaluation pipelines**
-
-- [ ] **Minimal training code (RTX 4090 support)**
-
-# BFM-Zero Training
-
-Humanoidverse training for BFM-Zero with Isaac Sim or MuJoCo.
-
-## Requirements
-
-- Python 3.11
-- CUDA-capable GPU
-- Isaac Sim (Linux) or MuJoCo for simulation
-
-## Installation
-
-### 1. Clone and fetch large files (Git LFS)
-
-This repo uses [Git LFS](https://git-lfs.github.com/) for motion data and model. After cloning, install LFS and pull the large files:
+## 导出
 
 ```bash
-git clone https://github.com/LeCAR-Lab/BFM-Zero.git
-cd BFM-Zero
-git lfs install
-git lfs pull
+python -m humanoidverse.flat_amp export \
+  --checkpoint /path/to/model_1000.pt --output /path/to/new_export_directory
 ```
-Note: If the repository exceeded its LFS budget,  you can access the data here: https://huggingface.co/LeCAR-Lab/BFM-Zero/tree/main/data
 
-### 2. Create the Python environment
+导出目录必须尚不存在。生成 `policy.pt`、`policy.onnx` 和 `interface.json`，无需启动 Isaac Sim。
+输入为从旧到新的 10 帧观测，共 470 维；输出为 12 维归一化关节动作。
+部署时按任务配置应用 action scale 和默认姿态。
 
-You can install the project with either Conda or uv. Conda users do not need to
-run `uv`.
+## 实现与验证
 
-#### Option A: Conda
+- 任务环境：`humanoidverse/flat_amp/_vendor/legged_lab/envs/pi/pi_12dof_env.py`
+- 奖励、随机化和训练配置：`.../envs/pi/pi_12dof_cfg.py`
+- Pi12 电机与机器人：`.../assets/pi/pi_12dof.py`
+- 独立动作加载器：`humanoidverse/flat_amp/_vendor/rsl_rl/utils/motion_loader_forpi_12dof.py`
 
-From this directory (BFM-Zero):
+环境、任务配置、动作加载器及电机不再继承其他任务实现，仍使用 Isaac Lab / RSL-RL 的通用接口。
+详细配置见 [Pi12 文档](docs/flat_amp_pi12.md)。
 
 ```bash
-(暂时的conda环境创建方法，后续再规范化)
-conda create -n HT_BFM --clone HT_lab的环境
-
-  conda activate HT_BFM
-  cd /data/laihuiying/BFM-Zero
-  # for 5090
-  python -m pip install \
-    "easydict>=1.13" \
-    "exca==0.4.5" \
-    "humenv @ git+https://github.com/facebookresearch/humenv.git" \
-    "loguru>=0.7.3" \
-    "mediapy>=1.2.3" \
-    "ml-collections>=1.1.0" \
-    "mujoco==3.8.1" \
-    "notebook>=7.4.2" \
-    "numpy-stl>=3.2.0" \
-    "onnxruntime==1.26.0" \
-    "open3d>=0.19.0" \
-    "pot>=0.9.5" \
-    "tensordict>=0.8.3" \
-    "termcolor>=3.0.1" \
-    "tyro>=0.9.18"\
-    "wandb"\
-  # for 4090
-  python -m pip install \
-    "numpy==1.26.0" \
-    "packaging==23.0" \
-    "easydict>=1.13" \
-    "exca==0.4.5" \
-    "humenv @ git+https://github.com/facebookresearch/humenv.git" \
-    "loguru>=0.7.3" \
-    "mediapy>=1.2.3" \
-    "ml-collections>=1.1.0" \
-    "mujoco==3.8.1" \
-    "notebook>=7.4.2" \
-    "numpy-stl>=3.2.0" \
-    "onnxruntime==1.26.0" \
-    "open3d>=0.19.0" \
-    "pot>=0.9.5" \
-    "tensordict>=0.8.3" \
-    "termcolor>=3.0.1" \
-    "tyro>=0.9.18" \
-    "wandb"
- conda install -c conda-forge libglu mesalib
-
-
-#### Option B: uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+python -m pytest tests/flat_amp -q
+ruff check humanoidverse tests
 ```
 
-Or with pip: `pip install uv`
-
-From this directory (BFM-Zero):
-
-```bash
-uv sync
-```
-
-## Data
-
-- **Motion data**: Included via Git LFS in `humanoidverse/data/` after `git lfs pull`. `lafan_29dof.pkl` is for evaluation; `lafan_29dof_10s-clipped.pkl` is for training.
-- If you are unsure about the data format, please check the discussion in
-  [Issue #12](https://github.com/LeCAR-Lab/BFM-Zero/issues/12).
-
-
-## Training
-
-### Launch
-
-```bash
-python -m humanoidverse.train
-```
-If you installed with uv, prefix commands with `uv run`, for example
-`uv run python -m humanoidverse.train`.
-
-Note: change `buffer_device` to "cuda:0" if you have larger vRAM.
-
-### Main parameters
-
-Training is driven by `humanoidverse.train` (see `train_bfm_zero()` in `train.py`). Key options:
-
-| Area | Parameters |
-|------|------------|
-| **Scale** | `num_env_steps`, `online_parallel_envs`, `buffer_size`, `checkpoint_every_steps` |
-| **Paths** | `work_dir`, env’s `lafan_tail_path` (expert motion data) |
-| **Run** | `seed`, `use_wandb`, `wandb_pname` / `wandb_gname` / `wandb_ename` |
-| **Policy / optim** | `update_agent_every`, `num_agent_updates`, `num_seed_steps`; agent config (e.g. `batch_size`, `lr_actor`, `lr_critic`, `discount`) |
-| **Robot / env** | Overridden via `hydra_overrides` (e.g. `robot=...`, `robot.control.action_scale=...`, `env.config.lie_down_init=...`) |
-
-Override from code by passing a custom `TrainConfig`, or extend the CLI to accept Hydra/tyro overrides.
-
-Tips: After 50-100 M steps training, eval/emd should lower than 0.75.
-
-
-<div align="center">
-<img src="static/images/training_curve.png" style="height:300px;" />
-</div>
-
----
-
-## Inference
-
-After training, three scripts handle inference and export:
-
-| Script | Purpose |
-|--------|---------|
-| **`humanoidverse.tracking_inference`** | Motion tracking → extract latent \(z\), export ONNX |
-| **`humanoidverse.goal_inference`** | Goal-reaching → compute \(z\) for different goals |
-| **`humanoidverse.reward_inference`** | Reward-based tasks → compute \(z\) and evaluate performance |
-
-### Example outputs (videos)
-
-Videos from `BFM-Zero/model` after running each inference script with `--save_mp4`:
-
-**1. Tracking inference** — expert (left) vs policy (right):
-
-<img src="https://github.com/LeCAR-Lab/BFM-Zero/blob/main/model/tracking_inference/tracking.gif" controls width="400">
-
-
-**2. Goal inference** — goal-reaching rollout:
-
-<img src="https://github.com/LeCAR-Lab/BFM-Zero/blob/main/model/goal_inference/goal.gif" controls width="400">
-
-**3. Reward inference** — example task (e.g. move-ego):
-
-<img src="https://github.com/LeCAR-Lab/BFM-Zero/blob/main/model/reward_inference/move-ego-low0.6-0-0.7.gif" controls width="400"></img>
-
----
-
-All scripts use **tyro** for the CLI. General usage:
-
-```bash
-python -m humanoidverse.tracking_inference --help
-python -m humanoidverse.goal_inference --help
-python -m humanoidverse.reward_inference --help
-```
-
-**Common arguments:**
-
-- `--model_folder`: Path to the trained model directory (must contain `checkpoint/` and `config.json`).
-- `--data_path` (optional): Override the default LaFan data path.
-- `--simulator`: `isaacsim` (default) or `mujoco`. **Use `--simulator mujoco` to run without Isaac Lab** (MuJoCo only; output is directly usable for sim2sim visualization).
-- `--headless` (default: `True`): Run without GUI; use `--no-headless` to show the viewer.
-- `--save_mp4`: Save rendered videos.
-
-**Output:** All inference scripts export the policy to ONNX (`{model_name}.onnx`) in their respective output subdirectories under `exported/`.
-
----
-
-### Tracking inference
-
-Runs motion tracking, exports ONNX, and optionally saves a comparison video (expert vs policy).
-
-```bash
-python -m humanoidverse.tracking_inference \
-    --model_folder /path/to/model \
-    --data_path humanoidverse/data/lafan_29dof.pkl \
-    --no-headless \
-    --save_mp4
-```
-
-- `--model_folder` should point to the **outer** model directory (the one that contains `checkpoint/`).
-- You can set motion IDs and visualization length inside the script if exposed.
-
-**Outputs** (under `model_folder/tracking_inference/`):
-
-- `zs_{MOTION_ID}.pkl`: Latent \(z\) for each motion.
-- `tracking.mp4`: Expert vs policy comparison (when `--save_mp4` is set).
-
----
-
-### Goal inference
-
-Computes \(z\) for predefined goals and optionally renders goal-reaching videos.
-
-```bash
-python -m humanoidverse.goal_inference \
-    --model_folder /path/to/model \
-    --data_path humanoidverse/data/lafan_29dof.pkl \
-    --save_mp4
-```
-
-- Iterates over predefined goals and computes the corresponding \(z\).
-- Requires `goal_frames_lafan29dof.json` (the script searches for it in several locations).
-
-**Outputs** (under `model_folder/goal_inference/`):
-
-- `goal_reaching.pkl`: Dictionary `{goal_name -> z}`.
-- `videos/*.mp4`: Per-goal videos (if `--save_mp4 True`).
-
----
-
-### Reward inference
-
-Runs reward-based task inference: computes \(z\) and optionally runs rollouts for evaluation.
-
-```bash
-python -m humanoidverse.reward_inference \
-    --model_folder /path/to/model \
-    --save_mp4 
-```
-
-**Key arguments:**
-
-| Argument | Description |
-|----------|-------------|
-| `--num_samples` | Number of samples in the buffer per inference run. |
-| `--n_inferences` | Number of inference latents per reward task. |
-| `--episode_length` | Steps per rollout. |
-| `--skip_rollouts` | If `True`, only compute \(z\); do not run visualization rollouts. |
-
-**Outputs** (under `model_folder/reward_inference/`):
-
-- `reward_locomotion.pkl`: Dictionary `{task_name -> z}`.
-- `videos/*.mp4`: Per-task videos (when `--save_mp4` is set).
-
----
-
-
-
-## License
-
-BFM-Zero is licensed under the CC BY-NC 4.0 license. See [LICENSE](LICENSE) for details.
-
-## Citation
-
-If you find this project useful in your research, please consider citing:
-
-<!--
-```bibtex
-@article{li2025bfmzero,
-  title   = {BFM-Zero: A Promptable Behavioral Foundation Model for Humanoid Control Using Unsupervised Reinforcement Learning},
-  author  = {Yitang Li and Zhengyi Luo and Tonghe Zhang and Cunxi Dai and Anssi Kanervisto and Andrea Tirinzoni and Haoyang Weng and Kris Kitani and Mateusz Guzek and Ahmed Touati and Alessandro Lazaric and Matteo Pirotta and Guanya Shi},
-  journal = {arXiv preprint arXiv:2505.06776},
-  year    = {2025}
-}
-```
-Wrong arXiv id here!!
---> 
-
-```bibtex
-@misc{li2025bfmzeropromptablebehavioralfoundation,
-      title={BFM-Zero: A Promptable Behavioral Foundation Model for Humanoid Control Using Unsupervised Reinforcement Learning}, 
-      author={Yitang Li and Zhengyi Luo and Tonghe Zhang and Cunxi Dai and Anssi Kanervisto and Andrea Tirinzoni and Haoyang Weng and Kris Kitani and Mateusz Guzek and Ahmed Touati and Alessandro Lazaric and Matteo Pirotta and Guanya Shi},
-      year={2025},
-      eprint={2511.04131},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO},
-      url={https://arxiv.org/abs/2511.04131}, 
-}
-```
-
-## Contact
-
-If you have any problems, please contact [liyitang475@gmail.com](mailto:liyitang475@gmail.com).
+按 `.gitignore` 忽略的历史数据、日志、模型、缓存和环境目录保留，不参与任务注册。

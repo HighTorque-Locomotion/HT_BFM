@@ -4,8 +4,8 @@
   "generator": "python -m humanoidverse.flat_amp.augment_pi12_data",
   "reflection": "world Y=0; swap l_/r_; negate X/Z joint rotations; WXYZ quaternion -> (w,-x,y,-z)",
   "sampling": "equal weight per clip, original and mirror paired; preserve framerate and frame count",
-  "original_count": 26,
-  "mirrored_count": 26,
+  "original_count": 27,
+  "mirrored_count": 27,
   "motions": [
     {
       "source": "npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
@@ -283,6 +283,17 @@
       "frames": 210,
       "framerate": 50.0,
       "omitted_cached_fields_in_mirror": []
+    },
+    {
+      "source": "npz_pi/walk_forward_retargetted_reversed.npz",
+      "original": "original/npz_pi/walk_forward_retargetted_reversed.npz",
+      "mirrored": "mirrored/npz_pi/walk_forward_retargetted_reversed_mirrored.npz",
+      "original_sha256": "8c978547c6a48ab8724ae1f75d5c6f99ff840c72bac97a5224401893bbc08f19",
+      "mirrored_sha256": "ca8156392ac5e1687cea10e8d6725ed8919b5bf612d1ffbba68dbc6c7ad963cd",
+      "frames": 83,
+      "framerate": 50.0,
+      "omitted_cached_fields_in_mirror": []
     }
-  ]
+  ],
+  "local_modifications": "Inventory includes the existing reversed forward-walk pair. The selection YAML enables a subset; motion files are unchanged."
 }

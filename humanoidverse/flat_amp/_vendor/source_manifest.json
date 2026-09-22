@@ -1,12 +1,17 @@
 {
   "source_project": "pi-flat-amp",
   "source_commit": "b2d706a8b1323146a0e58595424b7fe5090a8357",
-  "local_modifications": "Pi12 AMP adaptation, optional keyboard playback and native IsaacLab playback panel: sha256 preserves upstream provenance; local_sha256 records modified vendored files.",
+  "local_modifications": "Pi12-only subset: independent task environment/configuration, expanded expert loader and 5047 motor; removed Pi22/Pi23 and BFM paths. sha256 preserves original provenance; local_sha256 records current files.",
   "files": [
     {
       "path": "LICENSE.legged_lab",
       "source_path": "LICENSE",
       "sha256": "3c22c7837e13946d64864d1cbd4f408aea262af507e678b9e81ff5cd38d19d6f"
+    },
+    {
+      "path": "LICENSE.rsl_rl",
+      "source_path": "rsl_rl/LICENSE",
+      "sha256": "d96416ef724b3972dd9a8316008b1b51d8972c1be5fd0d38f0b4b1664b125e4e"
     },
     {
       "path": "legged_lab/__init__.py",
@@ -16,343 +21,27 @@
     {
       "path": "legged_lab/assets/__init__.py",
       "source_path": "legged_lab/assets/__init__.py",
-      "sha256": "14f7f013a8c46ac78d3531840616493d5c4c2b5ffb20068ed6e968c7be6d2417"
-    },
-    {
-      "path": "legged_lab/assets/pi/PiPlus_S_12L8A0G2H0W.py",
-      "source_path": "legged_lab/assets/pi/PiPlus_S_12L8A0G2H0W.py",
-      "sha256": "5eaa0575951461f4e4944fe9a1358a6fce44c7ca73850b7482ad090dea3032fc"
+      "sha256": "14f7f013a8c46ac78d3531840616493d5c4c2b5ffb20068ed6e968c7be6d2417",
+      "local_sha256": "e2e8222732297f5b87fa24718b8912eeccc5c5c81f4d2df91b83cc6cb0fae121"
     },
     {
       "path": "legged_lab/assets/pi/__init__.py",
       "source_path": "legged_lab/assets/pi/__init__.py",
-      "sha256": "87395fb205f81860081b6355b29e177dbcefb676f8a10f34b49a1af04d1c8d0c"
-    },
-    {
-      "path": "legged_lab/assets/pi/ht_motor.py",
-      "source_path": "legged_lab/assets/pi/ht_motor.py",
-      "sha256": "695808d912ee574149ab440b7475909f787c7f30e64e1e84b8cfdbf5cac15bfc"
-    },
-    {
-      "path": "legged_lab/assets/pi/ht_motor_cfg.py",
-      "source_path": "legged_lab/assets/pi/ht_motor_cfg.py",
-      "sha256": "d93d02c5cb23d23e00079127539722416349d0c4e7a452e96dfd853ead24ce2d"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/base_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/base_link.STL",
-      "sha256": "b9b79dc8d0ac1ce0de28c42a8bff24b9a2af3b65c5cb89f2f36521a3c902e00e"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/camera_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/camera_link.STL",
-      "sha256": "2a49423e69b630f950b4cba4a525fb0bf39b7b0346711f042d16484d9226d99a"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/head_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/head_pitch_link.STL",
-      "sha256": "4b85d27f5f79524b65cbbb30ee723402e2f1d171064fd1427355eb45dddd3e12"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/head_yaw_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/head_yaw_link.STL",
-      "sha256": "5000e45e4c4b2590ed733793281a2b837d705f7b45bf3983756564e604904d4b"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_ankle_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_ankle_pitch_link.STL",
-      "sha256": "e56ae65314981abd7c7d04557df16acc47d09824033f0e44b4d07519221c634b"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_ankle_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_ankle_roll_link.STL",
-      "sha256": "19565801e382f8f6a5bfa74212c445afe2d95899c4d1fbd359caba463364f099"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_calf_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_calf_link.STL",
-      "sha256": "0c44c6b3d07878840fcab5e28bbb6992e9fd9f1383df57e01b54cad66c3153cb"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_elbow_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_elbow_link.STL",
-      "sha256": "278d537f962ade4d2ad2485b2142928e58d6dc3b22cc7a83d904aba4a2396562"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_hip_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_hip_pitch_link.STL",
-      "sha256": "9b39c363bc5c2956bb076455f414840a85bbe660dd27d99993fe0acad89b4ddd"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_hip_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_hip_roll_link.STL",
-      "sha256": "d482cf33b184e526beed3a8fbb1aa44e3d40ec0b54db9f604bcd2d2aee47d592"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_shoulder_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_shoulder_pitch_link.STL",
-      "sha256": "b811dc2ab334c9d979f39a1179854bc2d604ac5db25ce09324921fcae66feaee"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_shoulder_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_shoulder_roll_link.STL",
-      "sha256": "c877dd7bb0a9fee0883aa51ab08b215a6f725abfa5df4cabdb8733871c49dda6"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_thigh_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_thigh_link.STL",
-      "sha256": "9a5066de807521ff4cb12c0cf8730bc0e29bb47333c16abdfe14dc7d8211da68"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_upper_arm_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_upper_arm_link.STL",
-      "sha256": "da71ecaf25d27212a477145fdb29aa2bccf27f8cfa60552951ca135ac60048a9"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/l_wrist_link_H0W.STL",
-      "source_path": "legged_lab/assets/pi/meshes/l_wrist_link_H0W.STL",
-      "sha256": "c74114fff8b95bab6fd6db05f0192bebebf64162b801fad788d38fd14a17886d"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_ankle_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_ankle_pitch_link.STL",
-      "sha256": "55528e9f33cdbf0a571d975e3aa70ca9a10027eee86779694d180cebb4a74214"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_ankle_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_ankle_roll_link.STL",
-      "sha256": "895c2cebbc0f193276983dbe905adda9c8821a4ddc1e2af767369d47a364a733"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_calf_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_calf_link.STL",
-      "sha256": "ed5b07b03a979af63c080ba3326860274854515d74bd99a75886296e5758bac8"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_elbow_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_elbow_link.STL",
-      "sha256": "c8d9389a56aacf2b1915bb5f27162a027cdbf1ff4241f218ecd5708bda602318"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_hip_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_hip_pitch_link.STL",
-      "sha256": "3e1dc007ae15b023285b64e7e74e46ddb847d7e35c3370a0125c35ceb10d43a0"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_hip_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_hip_roll_link.STL",
-      "sha256": "765fa920775f14f07f98f918fbc294fd251e7d6e4c0728deb6ef6847a94953bc"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_shoulder_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_shoulder_pitch_link.STL",
-      "sha256": "571697939e13fb0f3b9612a371e4c02948d0dc2b1c19476d77cd03624fc847f2"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_shoulder_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_shoulder_roll_link.STL",
-      "sha256": "f155c77dd0cdf795f5920ab6170a34e4a3c2fc0ae16d1c558d533738a497026c"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_thigh_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_thigh_link.STL",
-      "sha256": "d3372be8f0f31712af632ab599e5ab5480a2d6c5fc0991746d649aaa05f33a28"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_upper_arm_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_upper_arm_link.STL",
-      "sha256": "836bde56c55cc9b886c7034f9eb80faa14f98f578be8fae5d285ec3ec233ccc8"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/r_wrist_link_H0W.STL",
-      "source_path": "legged_lab/assets/pi/meshes/r_wrist_link_H0W.STL",
-      "sha256": "82f1480f55aa5f4ddafefe55461b9e3a22d079aa586baefb22cc3e84cb398a87"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/torso_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/torso_link.STL",
-      "sha256": "614c546b6235c9265ba78c32c56118ff13327c23cf142c75d6c68fd9e77cbee9"
-    },
-    {
-      "path": "legged_lab/assets/pi/meshes/waist_yaw_link.STL",
-      "source_path": "legged_lab/assets/pi/meshes/waist_yaw_link.STL",
-      "sha256": "ad121341ef3923c215d383f6ee80b27ab0ff854ef84d4a94495fc3284933da2d"
-    },
-    {
-      "path": "legged_lab/assets/pi/pi.py",
-      "source_path": "legged_lab/assets/pi/pi.py",
-      "sha256": "70204b448f4d4ed472b8a642209e62ee4476df9bef4b6fd697e530ba9d4195a0"
-    },
-    {
-      "path": "legged_lab/assets/pi/pi_22dof.py",
-      "source_path": "legged_lab/assets/pi/pi_22dof.py",
-      "sha256": "720177e13b6a4f335417b21675bf5964b7a04c6d91dfa8adefcc8836a09f3a21"
-    },
-    {
-      "path": "legged_lab/assets/pi/pi_22dof_legacy.py",
-      "source_path": "legged_lab/assets/pi/pi_22dof_legacy.py",
-      "sha256": "1346e71662232ab08b43d00fb1c01b131129edca8eddbeefa39368451c6edce3"
-    },
-    {
-      "path": "legged_lab/assets/pi/urdf/PiPlus_S_12L8A0G2H1W_LSE_260611_hybrid_old_wrist.urdf",
-      "source_path": "legged_lab/assets/pi/urdf/PiPlus_S_12L8A0G2H1W_LSE_260611_hybrid_old_wrist.urdf",
-      "sha256": "ef410f64e9fe06c8605e508ebd70f720f7534c1a876e8898d820eb0ee2a9d478"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/base_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/base_link.STL",
-      "sha256": "ed4acc695b2e7447fa5329840f091ba0883f155b49db546d8461396eb047ce39"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/camera_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/camera_link.STL",
-      "sha256": "f7fd0a9c3bdf1e69df66c302e00d2b0485e90a81dab3d853bbb73141d73ccc77"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/head_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/head_pitch_link.STL",
-      "sha256": "5bae52bc61d70efba5885f3d9fa723c4f8cf307b7e869efdfdf133dd3a14d7c2"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/head_yaw_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/head_yaw_link.STL",
-      "sha256": "6512521342bf15a091c4735c3724956978d1107a693dd1648f5316d3484c7946"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_pitch_link.STL",
-      "sha256": "3966fcd4f65d0ae312179b1177d221d3d78a4b89755a0ce389e6d94c36eb31b2"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_roll_link.STL",
-      "sha256": "a19c163e49adaa8de4d802ce4c963b5dbcc244e1fa1f15d3a81a9048b72704bc"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_roll_link_simplify.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_ankle_roll_link_simplify.STL",
-      "sha256": "81f39fe96a137ec6155b07ab6e4272ac5ee69fe237813ea0b36565963e8dcb0e"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_calf_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_calf_link.STL",
-      "sha256": "b3d0253f8796b3b93b69bfec86a62af59c125666f47e5312951253b60e022d1c"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_elbow_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_elbow_link.STL",
-      "sha256": "54fee2cf8baf58f3530cb587a14563d25f0b32e8c88b98cf4eca5e69cf75abb2"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_hip_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_hip_pitch_link.STL",
-      "sha256": "3418525a78d8dbe26b5ae90bcb2405b575bd8b3575f0f743a728df190e950661"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_hip_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_hip_roll_link.STL",
-      "sha256": "292a190665c0c516b0a36a6df18c6c0f709cae8e486623f5831a9441fd9ead9f"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_shoulder_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_shoulder_pitch_link.STL",
-      "sha256": "04e190dbef83a211531ce88325890f7caf7160268146ddc094887ce757a94370"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_shoulder_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_shoulder_roll_link.STL",
-      "sha256": "acec2b4c5a42d7fb26689a6322e25ed5d743b5b36047f03dd475abe29fd64590"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_thigh_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_thigh_link.STL",
-      "sha256": "7c882f893292144f50fc753fcd2de9abe0564976b53fb31f32c16ba7b5e7bb82"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_upper_arm_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_upper_arm_link.STL",
-      "sha256": "62aabe243f973ad0028056f0c1d421530323965e1358b340ec59fb1fba0d6416"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/l_wrist_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/l_wrist_link.STL",
-      "sha256": "f7e4233961e08e93870fd3f629cabece6d7b06027201b13b1d2f4f5b638fc399"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_pitch_link.STL",
-      "sha256": "ca03c03bb15c6df6b2cdc8d3b5fc379961a47e07d9d1545cd1db4514ce1d9532"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_roll_link.STL",
-      "sha256": "bb6266e5cc78256a79a940ed07970df357c9c76fbb90cf851fcaa77dcf09312d"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_roll_link_simplify.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_ankle_roll_link_simplify.STL",
-      "sha256": "b3f91771abc8f7a2318b52127e0c80699025b8c3f19081877f4c2046d3e7d14e"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_calf_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_calf_link.STL",
-      "sha256": "895f0a748df72681d316acccdbce8a0ac6d14a7f69252e6ca60e221159a8d806"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_elbow_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_elbow_link.STL",
-      "sha256": "71277e760dc5578b9595bf21ab53858a78a12f2a6514fe15576c48b5afcc89a7"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_hip_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_hip_pitch_link.STL",
-      "sha256": "ed045182af09a290ad0fa5f7e25e7a810b0199aa397bcf35e8d9b61df0be311b"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_hip_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_hip_roll_link.STL",
-      "sha256": "e31479e1e23e1bd3c4404d4fdfbfa7c2538757b7e33c5fd35d75eece75053478"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_shoulder_pitch_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_shoulder_pitch_link.STL",
-      "sha256": "22f6e72df79200aad81971fc03bdbf4eb22d1f14449525fda942989dfb20f915"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_shoulder_roll_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_shoulder_roll_link.STL",
-      "sha256": "6aded5a075ed6cbe7aadfd4c63481a6768030ec7469547ed77dbe8050a15a63b"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_thigh_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_thigh_link.STL",
-      "sha256": "cadd7e3a7148c744fe655015c9f1df71e109c368aa9a9f266ab9cc4b109b69b3"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_upper_arm_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_upper_arm_link.STL",
-      "sha256": "d7ee48ff8350f7418cccd397c1abc969aa030369817fdd776e6c529b70bd7d91"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/r_wrist_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/r_wrist_link.STL",
-      "sha256": "3c08a9513bd7e7b0cc2c7ef364d447ce2546d7f9ccff14cf8b84979b80b32a3d"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/meshes/torso_link.STL",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/meshes/torso_link.STL",
-      "sha256": "f7d4fe7f5c3ad1c20f517f592f22861e7d9e521847dd2bab8f44f41df86c1439"
-    },
-    {
-      "path": "legged_lab/assets/pi/zedmini_260804/urdf/PiPlus_S_12L8A0G2H0W_LSE_ZedMini_260804_22dof.urdf",
-      "source_path": "legged_lab/assets/pi/zedmini_260804/urdf/PiPlus_S_12L8A0G2H0W_LSE_ZedMini_260804_22dof.urdf",
-      "sha256": "a316088560b315ffc94ed2a89328f4e2339a443544161805b3b307bf065b3bc7"
+      "sha256": "87395fb205f81860081b6355b29e177dbcefb676f8a10f34b49a1af04d1c8d0c",
+      "local_sha256": "bbc7b58c3579d84b18db4cce377f5149c111cee144e1f95e7a9859e1f858821f"
+    },
+    {
+      "path": "legged_lab/assets/pi/pi_12dof.py",
+      "source_path": "legged_lab/assets/pi/pi_12dof.py",
+      "sha256": "68112829372328d89a968a69f8ec80f88fb9ae0936bc54c8f576f23f80328921",
+      "origin": "local Pi12 adaptation",
+      "local_sha256": "2d0039d9d21dce8aafe3151c6df95239a84efb4ac0fa7a0f221b321378d49ad6"
     },
     {
       "path": "legged_lab/envs/__init__.py",
       "source_path": "legged_lab/envs/__init__.py",
       "sha256": "46428d350705dd43700283b71c5b549d07d2f4808fcf3936afc983404ba295c0",
-      "local_sha256": "6f49bb3d567fd29792a0c1789d681eaccea35de9af6ea5b799cc61131254256a"
+      "local_sha256": "e441bc08c0d1e37758b6da2f7640c5605688fa533ae666e67852ca2e6a958d61"
     },
     {
       "path": "legged_lab/envs/base/__init__.py",
@@ -370,141 +59,358 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/left.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/left.npz",
-      "sha256": "2a923888256de9204f7b793e20d82d67867072262ecbb3d8b4e06ce80e301d63"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/Pi_S_12L0A0G0H0W_LSE_lafan_walk.yaml",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/Pi_S_12L0A0G0H0W_LSE_lafan_walk.yaml",
+      "sha256": "11c895232f2c6b44211cc003423ec8879a4d6a2ba24f48b95f05531b0c553558",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/right.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/right.npz",
-      "sha256": "4c5778614bd82a2bce9ea58e65badeca378263dfecf6a968e83806b612d825ab"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/manifest.json",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/manifest.json",
+      "sha256": "7b76c3b5ea7945ee07084e2772970d6af797ce292fc0f2f59610d8bc8ce536f6",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_back.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_back.npz",
-      "sha256": "9a1993518cbb020eb5c619a1563af471e39dd4cd50ea62b009f6b858385e8bb8"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted_mirrored.npz",
+      "sha256": "615aade9108f213bae4c8beb6a49dd22fb7798eaca14bac98dded91a3ff30ff6",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_left_head_pitch_0p9.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_left_head_pitch_0p9.npz",
-      "sha256": "cbadba61e0c85d485b139a6c5fff14ac449c0ce4af733e0d12bebe104886d93b"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted_mirrored.npz",
+      "sha256": "d032e617d62b4b6ed9dea3bb2b2f586781ad038e0c42cdf276cbe9dd158b6de3",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_lhy_head_pitch_0p9.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_lhy_head_pitch_0p9.npz",
-      "sha256": "9def967ccc34c4af3e3bb122892b047af58367855dc32134507d79c3495aab89"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted_mirrored.npz",
+      "sha256": "3cee8e9a6b81caa59cc079d82b04bee171a651d64413e25001d32189f816f078",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_right_head_pitch_0p9.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/new_npz/walk_right_head_pitch_0p9.npz",
-      "sha256": "d7f123546fac7a7274ab61028758a3a0418e53cef175644fa2fa45b863c6d962"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/TURN_LEFT180DEGREES_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/TURN_LEFT180DEGREES_retargeted_mirrored.npz",
+      "sha256": "dd9eea6172a93d82823eed9f52a967a35d61c0729cc13bd24115349c472fde58",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
-      "sha256": "ed85e087a8dea84ac61c3686c53093323223e9df972285c5ef09ac3db305182f"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/TURN_RIGHT180DEGREES_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/TURN_RIGHT180DEGREES_retargeted_mirrored.npz",
+      "sha256": "d025942bf1d7b2a8e1c67a4bbe2f2f7aaa60f9a335345492340f0dc85a536716",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
-      "sha256": "3ae08500c12abde0c2c29d3f7739865020c72ced92d84ee84796a354cae4ad43"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/backward_0.3ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/backward_0.3ms_retargeted_mirrored.npz",
+      "sha256": "d9283d1c16afa06c7e5deda77ba56fa7d1fff402c57681387083aef063273fcf",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/TURN_LEFT180DEGREES_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/TURN_LEFT180DEGREES_retargeted.npz",
-      "sha256": "ce2817609273759c1f86d70dee75899eb50a0f96ece8ef68d4de3c089b4bba87"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/backward_0.6ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/backward_0.6ms_retargeted_mirrored.npz",
+      "sha256": "6f40cbdb475322de60235d2229f42340bcbb44012a96dbc7df81216edb0b608e",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/TURN_RIGHT180DEGREES_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/TURN_RIGHT180DEGREES_retargeted.npz",
-      "sha256": "c9b1823528bc6e372550dfeedd06cbec7c605e47c1350f25f3fab4f0481f360e"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_0.4ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_0.4ms_retargeted_mirrored.npz",
+      "sha256": "3ebdbdde70a09066041079b26b407f46b6096788a3571f1b0fe3c9f271944915",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangyou_retargetted_0_21_fps29__retargetted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangyou_retargetted_0_21_fps29__retargetted.npz",
-      "sha256": "61c7ce9cc54b6e834cb3718d315637d2a150c2b8c8845a319444920e2d4681e8"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_0.8ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_0.8ms_retargeted_mirrored.npz",
+      "sha256": "09b220ba405b0e07b419fa4cf23ee504ebbf873d58a11a881383bdf5fa6ec2f7",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangyou_retargetted_0_21_fps29__retargetted_mirrored.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangyou_retargetted_0_21_fps29__retargetted_mirrored.npz",
-      "sha256": "70e43da2c2af08e620002db35a690576bdf683a10fa56ebe53f53f376d026129"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_1.2ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_1.2ms_retargeted_mirrored.npz",
+      "sha256": "d8c4e4b62530e739a01e53b3be0777ed0a4cd9a5e976a3715944aa773b8dd3b5",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangzuo_retargetted_135_167_fps29_retargetted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangzuo_retargetted_135_167_fps29_retargetted.npz",
-      "sha256": "589bdedeed66ad15da481e30aad9616de545eeaa32c15a9ae035ca09e7d28114"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_1.5ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/forward_1.5ms_retargeted_mirrored.npz",
+      "sha256": "3fd3f5f5ad5f50ac999f8a20b5093ef728eca9eb88e9a6ef0da20b8396744f42",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangzuo_retargetted_135_167_fps29_retargetted_mirrored.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/paoxiangzuo_retargetted_135_167_fps29_retargetted_mirrored.npz",
-      "sha256": "6a64dc38568f0a8898df28cf2075b0bbe8aff4b097c3370ebc5994fa88cfec0d"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/left_0.3ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/left_0.3ms_retargeted_mirrored.npz",
+      "sha256": "526da862b20aa468bdb37333993731196ce58ab8b82571a268762e29d1208a0c",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "sha256": "bcc2bd88e32570102a6a11f377aa4c21647ed4d2311ab8a2b643bd62ddd7d41f"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/left_0.6ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/left_0.6ms_retargeted_mirrored.npz",
+      "sha256": "882bbb04a1fd381e07b82dbe2dc98acf86b715fd5140f369dae05edd60d947e9",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
-      "sha256": "fb50278f57d39079824e227c182d32b781e65f7348cccb685789f296869630c7"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/right_0.3ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/right_0.3ms_retargeted_mirrored.npz",
+      "sha256": "bffc41b40959c3ca15264ff75aac12977466ecf95dd52a5256ee967e95d29ee0",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_back_edited_105_180_retargetted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_back_edited_105_180_retargetted.npz",
-      "sha256": "143e29b1b57dbfd67447bb9a8ca00f7687960b298fa10d01d197ff70c1bd9147"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/right_0.6ms_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/right_0.6ms_retargeted_mirrored.npz",
+      "sha256": "c390245c9e5c59803cec3cf4ea371be8c87889923024d8303b8bd5e1f9894a1f",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_back_edited_105_180_retargetted_mirrored.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_back_edited_105_180_retargetted_mirrored.npz",
-      "sha256": "7ba868fca8dc703dfd2d84b2cf27ce527513001f366a40245e9d8364c769c573"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_0.5rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_0.5rads_retargeted_mirrored.npz",
+      "sha256": "c67affa15e2b9a1501286a05c85979bd5020ebd60237a60f3223fc0d8d780a52",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_forward_retargetted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_forward_retargetted.npz",
-      "sha256": "bd478695b17572682b8453c56418f0ad166b4ed201957db34bff01f91d365bfe"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_1.0rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_1.0rads_retargeted_mirrored.npz",
+      "sha256": "a3e0d7d46881e108b056c1da1f4ff03cf68f201860a1fc121aaeebc416caa5de",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_forward_retargetted_mirrored.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_forward_retargetted_mirrored.npz",
-      "sha256": "1030acbc790fe2bd5cd1305412e3bf4822455a635537c66aff2899275b982242"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_1.5rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_left_1.5rads_retargeted_mirrored.npz",
+      "sha256": "dd2a05d3264fd7e008ec7d9ebc89cf30d01c228d95a499cdf704dbbb6bfae370",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "sha256": "5cc633702431261092c992abbf44375b5b87d5344270875cfb91f9793f060946"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_0.5rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_0.5rads_retargeted_mirrored.npz",
+      "sha256": "4db18a5e58538145521078f0e9bae075b8f756d1b72c51960ba480dc60f3a727",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_22_amp/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
-      "sha256": "5b91f3021e0d16b647a4ce08d209ee84046f3578aff713f7e999338621a9f303"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_1.0rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_1.0rads_retargeted_mirrored.npz",
+      "sha256": "bf0af4a58e7394755e8f0fd54907b2c901f74f12b5a3e7b7407eafd52873024a",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/pi_22dof_cfg.py",
-      "source_path": "legged_lab/envs/pi/pi_22dof_cfg.py",
-      "sha256": "dcd73b83b6acc3fad23c861c908621e96c2f92c77dd4889502cf8aca97e4ede2"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_1.5rads_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/npz_pii/turn_right_1.5rads_retargeted_mirrored.npz",
+      "sha256": "748f0059217ac93eb70aec4b1b18a8defbf80abcde70033f495aeee64f04b95e",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/pi_22dof_env.py",
-      "source_path": "legged_lab/envs/pi/pi_22dof_env.py",
-      "sha256": "d85398862bb51bb135fee8610f08e776382fc8fcf820ca43cd09f1b7f4081cf2"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "sha256": "f7c83bebc0b056d41964df342ef7ef95a67f4b22acdb8c2b0389d7f32e780db7",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/pi_cfg.py",
-      "source_path": "legged_lab/envs/pi/pi_cfg.py",
-      "sha256": "dc5ee9645eb5b205eeab7c84a5f15cf6dc91ecbd17f2c9a163b59ef769f93c37"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_back_retargetted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_back_retargetted_mirrored.npz",
+      "sha256": "86fab7734d383d6498002ce50dfb5576097dd32a61e4c122848265e7c193d95e",
+      "origin": "local Pi12 adaptation"
     },
     {
-      "path": "legged_lab/envs/pi/pi_env.py",
-      "source_path": "legged_lab/envs/pi/pi_env.py",
-      "sha256": "b758c3a4b6934752ba557f7782cb184e130d9e386bba724ceff497bc04bb35b9",
-      "local_sha256": "a60695b32ff83276b6715c9a43a817338447df18aa1ab1e8e513f65da368af9f"
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_forward_retargetted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_forward_retargetted_mirrored.npz",
+      "sha256": "7dd4a22316a7a65d600c7fd597beee3ad46a767592a5219b9029f0b937c0bf34",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_forward_retargetted_reversed_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_forward_retargetted_reversed_mirrored.npz",
+      "sha256": "ca8156392ac5e1687cea10e8d6725ed8919b5bf612d1ffbba68dbc6c7ad963cd",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "sha256": "39c5ddc65a5506c578bf416a1e9844efac6369025f6fb442b5fca56348ec0ea9",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/mirrored/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted_mirrored.npz",
+      "sha256": "76afee60e3ceb9ab3f0ee858805e87e9e986641ef3f14e268414ceb555e6392d",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H0W_Left_Turn_180_retargeted.npz",
+      "sha256": "b6065d31cd82cace5ae346b983806790a785c27d904ef9088b90eab9e5bfb70a",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H0W_Right_Turn_180_retargeted.npz",
+      "sha256": "a8bc231aa9f82d9a7de7bfdf24f7efccd1942a437e16b78345ea171596947543",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/PiPlus_S_12L8A0G2H1W_LSE_Left_Turn_180_retargeted.npz",
+      "sha256": "af1cd6c6d5033cf0601e7afaf868738e78e98c40a637521839fcb4ac7241385f",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/TURN_LEFT180DEGREES_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/TURN_LEFT180DEGREES_retargeted.npz",
+      "sha256": "f3c4501087aaf8b75d3dc796d96623b1e0caa1351d6038d0efe2570c77344be9",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/TURN_RIGHT180DEGREES_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/TURN_RIGHT180DEGREES_retargeted.npz",
+      "sha256": "ecf05959d9fc7afffb8760e0377273446042d239aba22e569d24d296c9872aee",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/backward_0.3ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/backward_0.3ms_retargeted.npz",
+      "sha256": "92e79c1a2276af131ce8c319c06bec09c7102a512b00eaa4439f8faf3c91445b",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/backward_0.6ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/backward_0.6ms_retargeted.npz",
+      "sha256": "a67c0e6ec370b232c3ee4937c322d3452c40db12b5ab014b99e86055e720cb12",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_0.4ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_0.4ms_retargeted.npz",
+      "sha256": "126288a3f23cd8e93dd5e5ed125829f208c2a93f73f74ba9e5e27785807f58f1",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_0.8ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_0.8ms_retargeted.npz",
+      "sha256": "9e45bfbe66c30a32bad43664ea6b48f8786791f176b43981d3b5a3daaf07a540",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_1.2ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_1.2ms_retargeted.npz",
+      "sha256": "3bd32c340ef1a0587d22387e7b3a3bec6707680cc5e8b4f57baf25f1ac48365f",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_1.5ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/forward_1.5ms_retargeted.npz",
+      "sha256": "eeec918ed89486e1be3d8dce747b1153b152b097df59b3d099be7a3064cb5cf2",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/left_0.3ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/left_0.3ms_retargeted.npz",
+      "sha256": "460e109afba97ff4a3092555983072f0c1f40a4a8ebcf2b2fe0691f217b82ab1",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/left_0.6ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/left_0.6ms_retargeted.npz",
+      "sha256": "fac12a9cf369d1c35dd2070c159520a23252ea561ad50d1efa5d3744db165e45",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/right_0.3ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/right_0.3ms_retargeted.npz",
+      "sha256": "3a23ea8f96f28706e41a8a15b77ccb22d86b50b319962593703f256b02d5271e",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/right_0.6ms_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/right_0.6ms_retargeted.npz",
+      "sha256": "ffe58c162a04361c435371fca4102c853b3d2493af730ff01d849afe87e9e7c3",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_0.5rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_0.5rads_retargeted.npz",
+      "sha256": "4809390467fa28d2d73670899820ef1701fa9814b84a0358e07bc306e5cf1177",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_1.0rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_1.0rads_retargeted.npz",
+      "sha256": "0ea40bf7993c70fa68a3366053118462925718011c0588026f84313e96ca53f4",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_1.5rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_left_1.5rads_retargeted.npz",
+      "sha256": "68ab18f4835e116e898a854b84facf896ba87bd95d0b202c9fca98f5ecd8c7e6",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_0.5rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_0.5rads_retargeted.npz",
+      "sha256": "17624aa111eeb90b550bea1bd51e5c401146cf2453efade3ec3f6996f201affc",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_1.0rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_1.0rads_retargeted.npz",
+      "sha256": "063df0108116a15c9762d3e8a5c1e20f7aa3e0c87f36b55f32d4990a7383f28a",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_1.5rads_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/npz_pii/turn_right_1.5rads_retargeted.npz",
+      "sha256": "e386982d616a7817c58f08efe9ed8e23ffc1a5cb9b5fb1b15a1a69bd800a015e",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/run_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "sha256": "613c7502e9d5fda36031e0927a0dd26f99a35c5b54d3f0c63b583b7fcfe74777",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_back_retargetted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_back_retargetted.npz",
+      "sha256": "b8e85c9f42b416767b1732c37f8d90cee860e604c615efd00929b96dd10f6220",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_forward_retargetted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_forward_retargetted.npz",
+      "sha256": "7aa74de562df2a142a4c3d4ce223fa7c56ed4171314306579fa5cc52565fd1fb",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_forward_retargetted_reversed.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_forward_retargetted_reversed.npz",
+      "sha256": "8c978547c6a48ab8724ae1f75d5c6f99ff840c72bac97a5224401893bbc08f19",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_leftside_20260710_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "sha256": "97534845ff81babd8ff72983ed3d32fd4f58243ab6b4ce2943bddb21cef6658d",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "source_path": "legged_lab/envs/pi/datasets/motion_amp_expert/pi_12_amp/original/npz_pi/walk_rightside_20260713_PiPlus_S_12L8A0G2H0W_retargeted.npz",
+      "sha256": "e3c1bba751a3b6c208638797183eab8087eb8f7c2433910bf9665616a6ad93ef",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/pi_12dof_cfg.py",
+      "source_path": "legged_lab/envs/pi/pi_12dof_cfg.py",
+      "sha256": "557d56534b82cbd5f10e97ac1b4f5780395d280643d1fd6e414891f8d42657d5",
+      "origin": "local Pi12 adaptation"
+    },
+    {
+      "path": "legged_lab/envs/pi/pi_12dof_env.py",
+      "source_path": "legged_lab/envs/pi/pi_12dof_env.py",
+      "sha256": "41bc814237cd225a265003a77ce9a9b73f8eb9cab8450fc829c352cc4fc28b6d",
+      "origin": "local Pi12 adaptation"
     },
     {
       "path": "legged_lab/envs/pi/symmetry.py",
       "source_path": "legged_lab/envs/pi/symmetry.py",
       "sha256": "a8fed4b0d5a3a58115cc1654e6b3d9af94d06f04b69a7081b65fce2e7a19b313",
-      "local_sha256": "0b8781176ceec4598dbc31623e0cb60e3e53ca3ccd0c0ba6d1f10fe346821e7c"
+      "local_sha256": "801ff2b32b6543c5537d9756b3a76509c489f6e8be5b4fd90d4cd67e5d0f3b82"
     },
     {
       "path": "legged_lab/mdp/__init__.py",
@@ -524,7 +430,8 @@
     {
       "path": "legged_lab/mdp/rewards.py",
       "source_path": "legged_lab/mdp/rewards.py",
-      "sha256": "8d8497f15d334a0739af3cdd161eda3678489138afd4ecc8a37db423f01020f3"
+      "sha256": "8d8497f15d334a0739af3cdd161eda3678489138afd4ecc8a37db423f01020f3",
+      "local_sha256": "d8ed835723229ad616f6fb2aab78275ce531d571b704e9b056cc994205df3d24"
     },
     {
       "path": "legged_lab/scripts/__init__.py",
@@ -532,48 +439,27 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": "legged_lab/scripts/export_bfm_actor.py",
-      "source_path": "legged_lab/scripts/export_bfm_actor.py",
-      "sha256": "76453cdc18ce1649f9d1826b6611d322d79c778a42949853ae8de4785d6f73cd"
-    },
-    {
       "path": "legged_lab/scripts/export_policy.py",
       "source_path": "legged_lab/scripts/export_policy.py",
       "sha256": "723af3db3d6f702f297bed6de07bd63d28a757759cac3b629338cf27929db6df",
-      "local_sha256": "a4b7e267622a033f3903415259b1ca120cc71780c73b740d04ed57f7a8dc77c8"
+      "local_sha256": "b0cb1bfcdb631e7a6b704fa3c36e7b6a476456ad8d320ca6f05e75ca23cea85c"
     },
     {
       "path": "legged_lab/scripts/play.py",
       "source_path": "legged_lab/scripts/play.py",
       "sha256": "24cacc67f550c21c9ad9fb842e9ea209874f7f4de68c7dfaa111edf707a92382",
-      "local_sha256": "b2b914a76b662bc39e95bf920487b0b456d2b1937adf3a131f49e18a0dab6df3"
+      "local_sha256": "1dd7625a9a004c25fa237395ff4245386960509a81735315faf9913263fe2f92"
     },
     {
       "path": "legged_lab/scripts/train.py",
       "source_path": "legged_lab/scripts/train.py",
       "sha256": "22e476b5a76845225fe203e34b006e3a8840cf31d29dfa5b1457e898c10fdff5",
-      "local_sha256": "c1fb42b3d4c8a5cdddf79edf737076cffd1563e4f060aa2662a01b54f94ded88"
-    },
-    {
-      "path": "legged_lab/scripts/train_bfm_amp.py",
-      "source_path": "legged_lab/scripts/train_bfm_amp.py",
-      "sha256": "f22319650316d2d609615ac8a0cfa1030d611f01c83fdd533464e014d9f94905",
-      "local_sha256": "09aada4d4978dd2317851012e6f3dbd52455ba7f511575d724c4e9c4e2378c4f"
+      "local_sha256": "63b1658797e7758ffb17094600054c643360895d4aa60dcced4c917f9e96aac2"
     },
     {
       "path": "legged_lab/utils/__init__.py",
       "source_path": "legged_lab/utils/__init__.py",
       "sha256": "9bf0d74ec74cb3e3074e6e6b4f8921409cff5a55834de84a6018027574369815"
-    },
-    {
-      "path": "legged_lab/utils/bfm_bridge.py",
-      "source_path": "legged_lab/utils/bfm_bridge.py",
-      "sha256": "bdb2a471bac5ad5e9eb7ce2536f7f8caaed2b802d303acaaf84cd564e7e2f3c5"
-    },
-    {
-      "path": "legged_lab/utils/bfm_training.py",
-      "source_path": "legged_lab/utils/bfm_training.py",
-      "sha256": "fa0ffb22e8ab1888d813c722332bcab2fbaef37bdc681c3ded6ff989a748c5cf"
     },
     {
       "path": "legged_lab/utils/env_utils/__init__.py",
@@ -589,12 +475,8 @@
     {
       "path": "legged_lab/utils/task_registry.py",
       "source_path": "legged_lab/utils/task_registry.py",
-      "sha256": "b1af6a361a82b04792c292c0b9cd9f55c69103545956bf810a930538a46dad2f"
-    },
-    {
-      "path": "LICENSE.rsl_rl",
-      "source_path": "rsl_rl/LICENSE",
-      "sha256": "d96416ef724b3972dd9a8316008b1b51d8972c1be5fd0d38f0b4b1664b125e4e"
+      "sha256": "b1af6a361a82b04792c292c0b9cd9f55c69103545956bf810a930538a46dad2f",
+      "local_sha256": "900e6be18ddf59d5d4df8d87af8f2089c62de1b4aa993dfdb197e19eba781e1d"
     },
     {
       "path": "rsl_rl/__init__.py",
@@ -604,17 +486,14 @@
     {
       "path": "rsl_rl/algorithms/__init__.py",
       "source_path": "rsl_rl/rsl_rl/algorithms/__init__.py",
-      "sha256": "a42dbde049899e58342253258381b8a0a1524093f26f6d2b7d1f8ba114ce502d"
-    },
-    {
-      "path": "rsl_rl/algorithms/amp_ppo.py",
-      "source_path": "rsl_rl/rsl_rl/algorithms/amp_ppo.py",
-      "sha256": "00b479a8635a5e83decf646eb258a3ba40e95737ec831ce736f448e90aae0a82"
+      "sha256": "a42dbde049899e58342253258381b8a0a1524093f26f6d2b7d1f8ba114ce502d",
+      "local_sha256": "7a0602b01c2c3a16818f4abf57a4caea75d377b30f94c4df2e83768a9acd3220"
     },
     {
       "path": "rsl_rl/algorithms/amp_waq_ppo.py",
       "source_path": "rsl_rl/rsl_rl/algorithms/amp_waq_ppo.py",
-      "sha256": "4256f52dd7ba7e1a9a90a85ae241cd3f0e4d9ea23919156ee552a6e8ef4e0bdc"
+      "sha256": "4256f52dd7ba7e1a9a90a85ae241cd3f0e4d9ea23919156ee552a6e8ef4e0bdc",
+      "local_sha256": "263cbe7eeafcbf7eb50f2d24b43fe4b6cc113071c5c9e8f66b87bc69865ab263"
     },
     {
       "path": "rsl_rl/env/__init__.py",
@@ -629,22 +508,13 @@
     {
       "path": "rsl_rl/modules/__init__.py",
       "source_path": "rsl_rl/rsl_rl/modules/__init__.py",
-      "sha256": "553091ad2bf515cbaca6bfcf15cbfb4cb857b4a3f6c7e606cbf51004e6a8790f"
-    },
-    {
-      "path": "rsl_rl/modules/actor_critic.py",
-      "source_path": "rsl_rl/rsl_rl/modules/actor_critic.py",
-      "sha256": "ceec00d1cce05aa38fc9a50bd19e49c6544f8c425df66378769ce4ebbe46cca8"
+      "sha256": "553091ad2bf515cbaca6bfcf15cbfb4cb857b4a3f6c7e606cbf51004e6a8790f",
+      "local_sha256": "a43ff1401f85bf9f98579457600366fe48574e6190cfde97519895de7c7f72fc"
     },
     {
       "path": "rsl_rl/modules/actor_critic_waq.py",
       "source_path": "rsl_rl/rsl_rl/modules/actor_critic_waq.py",
       "sha256": "62a9bdc11d3e2158c7b6f2068c163c0194d10054765e72a55acfbf40ce110323"
-    },
-    {
-      "path": "rsl_rl/modules/bfm_command_actor_critic.py",
-      "source_path": "rsl_rl/rsl_rl/modules/bfm_command_actor_critic.py",
-      "sha256": "1b4b36b7ebce8de46384fed86f216a382dbc79c3d3bef9437cba9295de28ae8b"
     },
     {
       "path": "rsl_rl/modules/discriminator.py",
@@ -659,33 +529,25 @@
     {
       "path": "rsl_rl/runners/__init__.py",
       "source_path": "rsl_rl/rsl_rl/runners/__init__.py",
-      "sha256": "494c84c37ee56298487d5ad3112e7e4343f1bbfdce278f43701ab977092f3af4"
-    },
-    {
-      "path": "rsl_rl/runners/amp_on_policy_runner.py",
-      "source_path": "rsl_rl/rsl_rl/runners/amp_on_policy_runner.py",
-      "sha256": "543287dbbad276581adee5b3c6624d9eea333cee9104f1c717f956706983a66c"
+      "sha256": "494c84c37ee56298487d5ad3112e7e4343f1bbfdce278f43701ab977092f3af4",
+      "local_sha256": "e5a4bb9808a275391f2cf8a95db5665ab58c1408a28de0621337801da8be6b6e"
     },
     {
       "path": "rsl_rl/runners/amp_waq_on_policy_runner.py",
       "source_path": "rsl_rl/rsl_rl/runners/amp_waq_on_policy_runner.py",
       "sha256": "6cdc0cdcc99217d29f42111504025af953ff1a9ce69addf95cbbdb2b699a79d4",
-      "local_sha256": "271a1b717d24988e50d279c132f4f8736f0bebd8c2920d96b3c7c52b6b4dd00e"
+      "local_sha256": "d4249ecc3c2863ddd675c5f3a558d7dfb32d3344da3ed378482ff81d031783b3"
     },
     {
       "path": "rsl_rl/storage/__init__.py",
       "source_path": "rsl_rl/rsl_rl/storage/__init__.py",
-      "sha256": "9831841c3514a36e1d98bba3fbefac157b3281b8b3ba631dfdf4a2f43aafb515"
+      "sha256": "9831841c3514a36e1d98bba3fbefac157b3281b8b3ba631dfdf4a2f43aafb515",
+      "local_sha256": "005ecfbbf9ced4c35c4bc8541e1a9749dd0afcbacd9dd9af94c67dc8df65e9ff"
     },
     {
       "path": "rsl_rl/storage/replay_buffer.py",
       "source_path": "rsl_rl/rsl_rl/storage/replay_buffer.py",
       "sha256": "f23623b3c6fbe02cab01fe754bf281c3b76f5acb4d2cc5dca63c0f0b63de8fd7"
-    },
-    {
-      "path": "rsl_rl/storage/rollout_storage.py",
-      "source_path": "rsl_rl/rsl_rl/storage/rollout_storage.py",
-      "sha256": "d9617868964d0041d500687a097ab75a41b38d3b9e6747211b2f3d51287f5c31"
     },
     {
       "path": "rsl_rl/storage/waq_rollout_storage.py",
@@ -695,17 +557,14 @@
     {
       "path": "rsl_rl/utils/__init__.py",
       "source_path": "rsl_rl/rsl_rl/utils/__init__.py",
-      "sha256": "fe25cf40fa1518f2a69f1139561b62ccd30c73df88f94d62331b380ae476c573"
+      "sha256": "fe25cf40fa1518f2a69f1139561b62ccd30c73df88f94d62331b380ae476c573",
+      "local_sha256": "bb20ac17c3d78d8b6811b0a87ac24f118041f447fe87179bd70dce045175bdf8"
     },
     {
-      "path": "rsl_rl/utils/motion_loader_forpi.py",
-      "source_path": "rsl_rl/rsl_rl/utils/motion_loader_forpi.py",
-      "sha256": "5c4d507e7b78e155f9cf28aadfeba39a08471317963c022637c132c102f4d7e8"
-    },
-    {
-      "path": "rsl_rl/utils/motion_loader_forpi_22dof.py",
-      "source_path": "rsl_rl/rsl_rl/utils/motion_loader_forpi_22dof.py",
-      "sha256": "cec6b98377398457b1e1b437fd0958bad094e084942eb9bf0f51146e9a2de7cb"
+      "path": "rsl_rl/utils/motion_loader_forpi_12dof.py",
+      "source_path": "rsl_rl/utils/motion_loader_forpi_12dof.py",
+      "sha256": "811d2438f9090bb43eb52bab1b5793a73877db8a5ac98f3cd0a96ebec281e899",
+      "origin": "local Pi12 adaptation"
     },
     {
       "path": "rsl_rl/utils/neptune_utils.py",

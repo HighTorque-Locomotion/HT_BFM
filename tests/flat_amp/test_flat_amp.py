@@ -11,32 +11,25 @@ import torch
 from legged_lab.scripts.export_policy import Policy
 from rsl_rl.algorithms import AMPWAQPPO
 from rsl_rl.modules import ActorCriticWaq, Discriminator
-from rsl_rl.utils import AMPLoaderPi, AMPLoaderPi22, Normalizer
+from rsl_rl.utils import Normalizer
+from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12, selected_motion_files
 
 from humanoidverse.flat_amp import VENDOR_ROOT
+from humanoidverse.flat_amp.pi12_paths import motion_yaml, robot_urdf
 
 ROOT = VENDOR_ROOT
 
 
-@pytest.mark.parametrize("joints", [12, 22, 23])
-def test_amp_updates_policy_vae_discriminator_and_exports(joints):
+def test_amp_updates_policy_vae_discriminator_and_exports():
+    joints = 12
     torch.manual_seed(42)
     torch.set_num_threads(1)
     dim = 9 + 3 * joints + 2
     policy = ActorCriticWaq(dim, dim + 5, dim * 10, joints, actor_hidden_dims=[32, 16], critic_hidden_dims=[32, 16])
-    loader_cls = AMPLoaderPi22 if joints == 22 else AMPLoaderPi
-    motion = "pi_22_amp/walk_forward_retargetted.npz" if joints == 22 else "new_npz/left.npz"
-    loader_kwargs = {"motion_files": [str(ROOT / "legged_lab/envs/pi/datasets/motion_amp_expert" / motion)]}
-    if joints == 12:
-        from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12, selected_motion_files
-
-        from humanoidverse.flat_amp.pi12_paths import motion_yaml, robot_urdf
-
-        if not motion_yaml().is_file() or not robot_urdf().is_file():
-            pytest.skip("Pi12 integration requires the supplied HT_lab motions and URDF")
-        loader_cls = AMPLoaderPi12
-        loader_kwargs = {"motion_files": selected_motion_files(motion_yaml())[:1]}
-    loader = loader_cls(
+    if not robot_urdf().is_file():
+        pytest.skip("Pi12 requires the supplied URDF")
+    loader_kwargs = {"motion_files": selected_motion_files(motion_yaml())[:1]}
+    loader = AMPLoaderPi12(
         "cpu",
         time_between_frames=0.02,
         preload_transitions=True,
@@ -44,7 +37,7 @@ def test_amp_updates_policy_vae_discriminator_and_exports(joints):
         amp_exclude_ankle_roll=False,
         **loader_kwargs,
     )
-    assert loader.observation_dim == {12: 36, 22: 65, 23: 70}[joints]
+    assert loader.observation_dim == 36
     discriminator = Discriminator(loader.observation_dim * 2, 0.3, [32, 16], "cpu", 0.65)
     algo = AMPWAQPPO(
         policy,
@@ -87,17 +80,14 @@ def test_amp_updates_policy_vae_discriminator_and_exports(joints):
 
 
 def test_urdfs_have_expected_joints_and_all_meshes():
-    assets = ROOT / "legged_lab/assets/pi"
-    urdfs = list(assets.rglob("*.urdf"))
-    assert len(urdfs) == 2
-    for path in urdfs:
-        root = ET.parse(path)
-        joints = [j.attrib["name"] for j in root.findall("joint") if j.attrib["type"] in {"revolute", "continuous", "prismatic"}]
-        assert len(joints) == (22 if "22dof" in path.name else 23)
-        assert len(joints) == len(set(joints))
-        for mesh in root.findall(".//mesh"):
-            assert (path.parent / mesh.attrib["filename"]).is_file()
-        assert any(link.attrib["name"] == "camera_link" for link in root.findall("link"))
+    path = robot_urdf()
+    if not path.is_file():
+        pytest.skip("Pi12 requires the supplied URDF")
+    root = ET.parse(path)
+    joints = [j.attrib["name"] for j in root.findall("joint") if j.attrib["type"] != "fixed"]
+    assert len(joints) == len(set(joints)) == 12
+    for mesh in root.findall(".//mesh"):
+        assert (path.parent / mesh.attrib["filename"]).is_file()
 
 
 def test_no_perception_or_student_training_packages():
@@ -106,7 +96,6 @@ def test_no_perception_or_student_training_packages():
     assert not (ROOT / "legged_lab/terrains").exists()
     assert {p.name for p in (ROOT / "rsl_rl/algorithms").glob("*.py")} == {
         "__init__.py",
-        "amp_ppo.py",
         "amp_waq_ppo.py",
     }
-    assert {p.name for p in (ROOT / "legged_lab/envs/pi").glob("*cfg*.py")} == {"pi_cfg.py", "pi_22dof_cfg.py", "pi_12dof_cfg.py"}
+    assert {p.name for p in (ROOT / "legged_lab/envs/pi").glob("*cfg*.py")} == {"pi_12dof_cfg.py"}

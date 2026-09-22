@@ -21,7 +21,7 @@ from itertools import chain
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from rsl_rl.modules import ActorCritic, ActorCriticWaq
+from rsl_rl.modules import ActorCriticWaq
 from rsl_rl.storage import ReplayBuffer, WaqRolloutStorage
 from rsl_rl.utils import string_to_callable
 import torch.nn.functional as F

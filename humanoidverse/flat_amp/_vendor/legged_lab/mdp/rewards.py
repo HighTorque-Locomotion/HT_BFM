@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from legged_lab.envs.pi.pi_env import PiDof23Env
+    from legged_lab.envs.pi.pi_12dof_env import PiDof12Env
 import isaaclab.utils.math as math_utils
 import torch
 import math
@@ -47,7 +47,7 @@ def command_activity_masks(
 
 
 def idle_when_commanded(
-    env: PiDof23Env,
+    env: PiDof12Env,
     lin_command_threshold: float = 0.1,
     yaw_command_threshold: float = 0.1,
     lin_velocity_threshold: float = 0.1,
@@ -74,7 +74,7 @@ def idle_when_commanded(
     return (lin_idle_when_commanded | yaw_idle_when_commanded).float()
 
 
-def body_orientation_euler(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def body_orientation_euler(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     body_orientation = math_utils.quat_apply_inverse(
         asset.data.body_quat_w[:, asset_cfg.body_ids[0], :], asset.data.GRAVITY_VEC_W
@@ -86,7 +86,7 @@ def body_orientation_euler(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEnt
 
 
 def stand_still_joint_exp(
-    env: PiDof23Env,
+    env: PiDof12Env,
     lin_command_threshold: float = 0.06,
     yaw_command_threshold: float | None = None,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -105,7 +105,7 @@ def stand_still_joint_exp(
 
 
 def track_lin_vel_xy_yaw_frame_exp(
-    env: PiDof23Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: PiDof12Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     vel_yaw = math_utils.quat_apply_inverse(
@@ -116,7 +116,7 @@ def track_lin_vel_xy_yaw_frame_exp(
 
 
 def track_ang_vel_z_world_exp(
-    env: PiDof23Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: PiDof12Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     ang_vel_error = torch.square(env.command_generator.command[:, 2] - asset.data.root_ang_vel_w[:, 2])
@@ -129,7 +129,7 @@ def _yaw_from_quat_wxyz(quat: torch.Tensor) -> torch.Tensor:
 
 
 def root_heading_yaw_l2(
-    env: PiDof23Env,
+    env: PiDof12Env,
     target_yaw: float = 0.0,
     only_vel_limited: bool = False,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -157,17 +157,17 @@ def root_heading_yaw_l2(
     return penalty
 
 
-def lin_vel_z_l2(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def lin_vel_z_l2(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.square(asset.data.root_lin_vel_b[:, 2])
 
 
-def ang_vel_xy_l2(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def ang_vel_xy_l2(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.root_ang_vel_b[:, :2]), dim=1)
 
 
-def ang_vel_xy_l2_body(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def ang_vel_xy_l2_body(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     body_ang_vel_b = math_utils.quat_apply_inverse(
         asset.data.body_quat_w[:, asset_cfg.body_ids[0], :], asset.data.body_ang_vel_w[:, asset_cfg.body_ids[0], :]
@@ -175,18 +175,18 @@ def ang_vel_xy_l2_body(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityC
     return torch.sum(torch.square(body_ang_vel_b[:, :2]), dim=1)
 
 
-def energy(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def energy(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     reward = torch.norm(torch.abs(asset.data.applied_torque * asset.data.joint_vel), dim=-1)
     return reward
 
 
-def joint_acc_l2(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def joint_acc_l2(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.joint_acc[:, asset_cfg.joint_ids]), dim=1)
 
 
-def action_rate_l2(env: PiDof23Env) -> torch.Tensor:
+def action_rate_l2(env: PiDof12Env) -> torch.Tensor:
     return torch.sum(
         torch.square(
             env.action_buffer._circular_buffer.buffer[:, -1, :] - env.action_buffer._circular_buffer.buffer[:, -2, :]
@@ -195,7 +195,7 @@ def action_rate_l2(env: PiDof23Env) -> torch.Tensor:
     )
 
 
-def action_smoothness(env: PiDof23Env) -> torch.Tensor:
+def action_smoothness(env: PiDof12Env) -> torch.Tensor:
     buf = env.action_buffer._circular_buffer.buffer
     a_t = buf[:, -1, :]
     a_t1 = buf[:, -2, :]
@@ -206,7 +206,7 @@ def action_smoothness(env: PiDof23Env) -> torch.Tensor:
     return term_1 + term_2 + term_3
 
 
-def undesired_contacts(env: PiDof23Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+def undesired_contacts(env: PiDof12Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     net_contact_forces = contact_sensor.data.net_forces_w_history
     is_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold
@@ -214,7 +214,7 @@ def undesired_contacts(env: PiDof23Env, threshold: float, sensor_cfg: SceneEntit
 
 
 def fly(
-    env: PiDof23Env,
+    env: PiDof12Env,
     threshold: float,
     sensor_cfg: SceneEntityCfg,
     lin_command_threshold: float | None = None,
@@ -244,18 +244,18 @@ def fly(
     return no_foot_contact * command_active.float() * (~env.is_on_forbidden).float()
 
 
-def flat_orientation_l2(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def flat_orientation_l2(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
 
 
-def is_terminated(env: PiDof23Env) -> torch.Tensor:
+def is_terminated(env: PiDof12Env) -> torch.Tensor:
     """Penalize terminated episodes that don't correspond to episodic timeouts."""
     return env.reset_buf * ~env.time_out_buf
 
 
 def feet_slide(
-    env: PiDof23Env, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: PiDof12Env, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     contacts = contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :].norm(dim=-1).max(dim=1)[0] > 1.0
@@ -266,7 +266,7 @@ def feet_slide(
 
 
 def feet_x_offset_lateral(
-    env: PiDof23Env,
+    env: PiDof12Env,
     sensor_cfg: SceneEntityCfg,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     lateral_command_threshold: float = 0.1,
@@ -306,7 +306,7 @@ def feet_x_offset_lateral(
 
 
 def body_force(
-    env: PiDof23Env, sensor_cfg: SceneEntityCfg, threshold: float = 500, max_reward: float = 400
+    env: PiDof12Env, sensor_cfg: SceneEntityCfg, threshold: float = 500, max_reward: float = 400
 ) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     reward = contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2].norm(dim=-1)
@@ -317,7 +317,7 @@ def body_force(
 
 
 def joint_deviation_l1(
-    env: PiDof23Env,
+    env: PiDof12Env,
     lin_command_threshold: float = 0.1,
     yaw_command_threshold: float | None = None,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -333,7 +333,7 @@ def joint_deviation_l1(
 
 
 def joint_deviation_l2(
-    env: PiDof23Env,
+    env: PiDof12Env,
     lin_command_threshold: float = 0.1,
     yaw_command_threshold: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -357,7 +357,7 @@ def joint_deviation_l2(
     return torch.sum(torch.square(angle), dim=1) * (~exempt).float()
 
 
-def feet_stumble(env: PiDof23Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+def feet_stumble(env: PiDof12Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     return torch.any(
         torch.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :2], dim=2)
@@ -366,7 +366,7 @@ def feet_stumble(env: PiDof23Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     )
 
 
-def feet_y_distance(env: PiDof23Env) -> torch.Tensor:
+def feet_y_distance(env: PiDof12Env) -> torch.Tensor:
     """Penalize foot y-distance when the commanded y-velocity is low, to maintain a reasonable spacing."""
     leftfoot = env.robot.data.body_pos_w[:, env.feet_body_ids[0], :] - env.robot.data.root_link_pos_w[:, :]
     rightfoot = env.robot.data.body_pos_w[:, env.feet_body_ids[1], :] - env.robot.data.root_link_pos_w[:, :]
@@ -415,7 +415,7 @@ def gait_clock_smooth(phase: torch.Tensor, air_ratio: torch.Tensor, delta_t: flo
 
 
 def gait_feet_frc_perio(
-    env: PiDof23Env,
+    env: PiDof12Env,
     delta_t: float = 0.02,
     lin_command_threshold: float | None = None,
     yaw_command_threshold: float | None = None,
@@ -441,7 +441,7 @@ def gait_feet_frc_perio(
 
 
 def gait_feet_frc_perio_penalize(
-    env: PiDof23Env,
+    env: PiDof12Env,
     delta_t: float = 0.02,
     lin_command_threshold: float | None = None,
     yaw_command_threshold: float | None = None,
@@ -469,7 +469,7 @@ def gait_feet_frc_perio_penalize(
 
 
 def gait_feet_spd_perio(
-    env: PiDof23Env,
+    env: PiDof12Env,
     delta_t: float = 0.02,
     lin_command_threshold: float | None = None,
     yaw_command_threshold: float | None = None,
@@ -494,82 +494,16 @@ def gait_feet_spd_perio(
     return (left_spd_score + right_spd_score) * movement_active.float() * (~env.is_on_forbidden).float()
 
 
-def _run_command_active(
-    env: PiDof23Env,
-    run_command_threshold: float,
-    lin_command_threshold: float | None,
-    yaw_command_threshold: float | None,
-) -> torch.Tensor:
-    """Return the run-mode command mask used by the Pi run rewards."""
-    if lin_command_threshold is None and yaw_command_threshold is None:
-        movement_active = torch.ones(
-            env.command_generator.command.shape[0], device=env.command_generator.command.device, dtype=torch.bool
-        )
-    else:
-        _, _, movement_active = command_activity_masks(
-            env.command_generator.command,
-            lin_command_threshold=0.1 if lin_command_threshold is None else lin_command_threshold,
-            yaw_command_threshold=yaw_command_threshold,
-        )
-    planar_command_speed = torch.linalg.vector_norm(env.command_generator.command[:, :2], dim=1)
-    return movement_active & (planar_command_speed > run_command_threshold)
 
 
-def gait_feet_frc_perio_run(
-    env: PiDof23Env,
-    delta_t: float = 0.02,
-    run_command_threshold: float = 1.0,
-    run_air_ratio: float = 0.65,
-    lin_command_threshold: float | None = None,
-    yaw_command_threshold: float | None = None,
-) -> torch.Tensor:
-    """Reward low foot force during the swing phase of running."""
-    left_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 0], run_air_ratio, delta_t)[0]
-    right_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 1], run_air_ratio, delta_t)[0]
-    left_frc_score = left_frc_swing_mask * torch.exp(-50 * torch.square(env.avg_feet_force_per_step[:, 0]))
-    right_frc_score = right_frc_swing_mask * torch.exp(-50 * torch.square(env.avg_feet_force_per_step[:, 1]))
-    run_active = _run_command_active(env, run_command_threshold, lin_command_threshold, yaw_command_threshold)
-    return (left_frc_score + right_frc_score) * run_active.float() * (~env.is_on_forbidden).float()
 
 
-def gait_feet_frc_perio_penalize_run(
-    env: PiDof23Env,
-    delta_t: float = 0.02,
-    run_command_threshold: float = 1.0,
-    run_air_ratio: float = 0.65,
-    lin_command_threshold: float | None = None,
-    yaw_command_threshold: float | None = None,
-) -> torch.Tensor:
-    """Penalize unintended foot force during the swing phase of running."""
-    left_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 0], run_air_ratio, delta_t)[0]
-    right_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 1], run_air_ratio, delta_t)[0]
-    left_force = env.avg_feet_force_per_step[:, 0]
-    right_force = env.avg_feet_force_per_step[:, 1]
-    left_frc_score = left_frc_swing_mask * (torch.abs(left_force) > 5.0).float()
-    right_frc_score = right_frc_swing_mask * (torch.abs(right_force) > 5.0).float()
-    run_active = _run_command_active(env, run_command_threshold, lin_command_threshold, yaw_command_threshold)
-    return (left_frc_score + right_frc_score) * run_active.float() * (~env.is_on_forbidden).float()
 
 
-def gait_feet_spd_perio_run(
-    env: PiDof23Env,
-    delta_t: float = 0.02,
-    run_command_threshold: float = 1.0,
-    run_air_ratio: float = 0.65,
-    lin_command_threshold: float | None = None,
-    yaw_command_threshold: float | None = None,
-) -> torch.Tensor:
-    """Reward low foot speed during the support phase of running."""
-    left_spd_support_mask = gait_clock_smooth(env.gait_phase[:, 0], run_air_ratio, delta_t)[1]
-    right_spd_support_mask = gait_clock_smooth(env.gait_phase[:, 1], run_air_ratio, delta_t)[1]
-    left_spd_score = left_spd_support_mask * torch.exp(-50 * torch.square(env.avg_feet_speed_per_step[:, 0]))
-    right_spd_score = right_spd_support_mask * torch.exp(-50 * torch.square(env.avg_feet_speed_per_step[:, 1]))
-    run_active = _run_command_active(env, run_command_threshold, lin_command_threshold, yaw_command_threshold)
-    return (left_spd_score + right_spd_score) * run_active.float() * (~env.is_on_forbidden).float()
 
 
 def mjlab_feet_gait(
-    env: PiDof23Env,
+    env: PiDof12Env,
     period: float,
     offset: list[float],
     threshold: float,
@@ -635,6 +569,6 @@ def copysign_new(a, b):
     return torch.abs(a) * torch.sign(b)
 
 
-def joint_torque_l2(env: PiDof23Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def joint_torque_l2(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=1)

@@ -1,5 +1,3 @@
-from .motion_loader_forpi import AMPLoaderPi
-from .motion_loader_forpi_22dof import AMPLoaderPi22
 from .utils import (
     Normalizer,
     resolve_nn_activation,

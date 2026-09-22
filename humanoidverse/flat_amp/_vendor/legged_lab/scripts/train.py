@@ -2,7 +2,6 @@
 
 import argparse
 import copy
-import os
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -22,11 +21,10 @@ def main():
     parser.add_argument("--log-dir", type=Path)
     parser.add_argument("--run-name", default="")
     parser.add_argument("--logger", choices=("tensorboard", "wandb", "neptune"), default="tensorboard")
-    parser.add_argument("--actuator-profile", choices=("ht", "legacy"), default="ht")
+    parser.add_argument("--actuator-profile", choices=("ht",), default="ht")
     parser.add_argument("--amp-preload", type=int, help="Override expert preload count for smoke tests")
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
-    os.environ["PI_22DOF_ACTUATOR_PROFILE"] = args.actuator_profile
     import torch
 
     if args.device and str(args.device).startswith("cuda"):
@@ -36,10 +34,11 @@ def main():
     runner = None
     try:
         from isaaclab.utils.io import dump_yaml
+        from rsl_rl.runners import AmpWaqOnPolicyRunner
+
         import legged_lab.envs  # noqa: F401
         from legged_lab import LEGGED_LAB_ROOT_DIR
         from legged_lab.utils import task_registry
-        from rsl_rl.runners import AmpWaqOnPolicyRunner
 
         env_cfg, agent_cfg = map(copy.deepcopy, task_registry.get_cfgs(args.task))
         if args.num_envs is not None:
@@ -76,7 +75,7 @@ def main():
         print(f"[INFO] Flat AMP run: {log_dir}")
         print(f"[INFO] Runtime sources: {Path(__file__).resolve()}")
         runner.learn(agent_cfg.max_iterations, init_at_random_ep_len=True)
-        print("[INFO] Training and checkpoint save completed.")
+        print("[INFO] Training and checkpoint save completed.", flush=True)
     except Exception:
         traceback.print_exc()
         raise

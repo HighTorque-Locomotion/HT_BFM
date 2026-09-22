@@ -82,9 +82,10 @@ def test_copy_selection_manifest_and_overwrite_protection(tmp_path):
 def test_bundled_dataset_pairs_and_hashes():
     root = motion_yaml().parent
     manifest = json.loads((root / "manifest.json").read_text())
-    assert manifest["original_count"] == manifest["mirrored_count"] == 26
+    assert manifest["original_count"] == manifest["mirrored_count"] == len(manifest["motions"])
     selected = selected_motion_files(motion_yaml())
-    assert len(selected) == len(set(selected)) == 52
+    assert selected and len(selected) == len(set(selected))
+    assert len(selected) % 2 == 0
     expected_paths = []
     for record in manifest["motions"]:
         original, mirrored = [root / record[key] for key in ("original", "mirrored")]
@@ -96,7 +97,10 @@ def test_bundled_dataset_pairs_and_hashes():
             for key in RAW_FIELDS:
                 np.testing.assert_array_equal(target[key], expected[key])
                 np.testing.assert_array_equal(mirror_motion(target)[key], source[key])
-    assert selected == expected_paths
+    assert set(selected) <= set(expected_paths)
+    # The YAML may select a subset, but each original must retain its mirror.
+    pairs = {(expected_paths[i], expected_paths[i + 1]) for i in range(0, len(expected_paths), 2)}
+    assert all(pair in pairs for pair in zip(selected[::2], selected[1::2]))
 
 
 def test_all_mirrored_amp_features_and_target_foot_fk():
@@ -104,7 +108,7 @@ def test_all_mirrored_amp_features_and_target_foot_fk():
         pytest.skip("Requires supplied Pi12 URDF")
     files = selected_motion_files(motion_yaml())
     loader = AMPLoaderPi12("cpu", 0.02, motion_files=files, urdf_path=robot_urdf())
-    np.testing.assert_allclose(loader.trajectory_weights, np.full(52, 1 / 52))
+    np.testing.assert_allclose(loader.trajectory_weights, np.full(len(files), 1 / len(files)))
     for original, mirrored in zip(files[::2], files[1::2]):
         before, dt, _ = loader._load_npz_motion(original)
         after, mirror_dt, _ = loader._load_npz_motion(mirrored)

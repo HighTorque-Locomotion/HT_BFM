@@ -11,12 +11,20 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 import torch
-from rsl_rl.utils.motion_loader_forpi import _quat_apply, _quat_conjugate
 from rsl_rl.utils.motion_loader_forpi_12dof import LEG_JOINT_NAMES, AMPLoaderPi12, selected_motion_files
 
 from humanoidverse.flat_amp import VENDOR_ROOT
 from humanoidverse.flat_amp.__main__ import build_invocation, build_parser
 from humanoidverse.flat_amp.pi12_paths import motion_yaml, robot_urdf
+
+
+def _quat_conjugate(q):
+    return torch.cat((q[..., :1], -q[..., 1:]), dim=-1)
+
+
+def _quat_apply(q, v):
+    t = 2.0 * torch.cross(q[..., 1:], v, dim=-1)
+    return v + q[..., :1] * t + torch.cross(q[..., 1:], t, dim=-1)
 
 
 def test_all_pi12_reward_selectors_match_urdf(urdf):
@@ -353,9 +361,9 @@ def test_pi12_motor_uses_delayed_pd_path():
 
     path = VENDOR_ROOT / "legged_lab/assets/pi/pi_12dof.py"
     node = next(n for n in ast.parse(path.read_text()).body if isinstance(n, ast.ClassDef))
-    namespace = {"HTMotor": object, "DelayedPDActuator": DelayedPD}
+    namespace = {"DelayedPDActuator": DelayedPD, "torch": torch, "Pi12HTMotorCfg": object}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
-    motor = namespace["Pi12HTMotor"]()
+    motor = namespace["Pi12HTMotor"].__new__(namespace["Pi12HTMotor"])
     motor._joint_vel = torch.zeros(2, 12)
     velocity = torch.randn(2, 12)
     action = object()

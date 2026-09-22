@@ -23,10 +23,11 @@ import time
 from collections import deque
 import torch
 import rsl_rl
-from rsl_rl.algorithms import AMPPPO, AMPWAQPPO
+from rsl_rl.algorithms import AMPWAQPPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCriticWaq, ActorCritic, Discriminator, EmpiricalNormalization
-from rsl_rl.utils import AMPLoaderPi, AMPLoaderPi22, Normalizer, store_code_state
+from rsl_rl.modules import ActorCriticWaq, Discriminator, EmpiricalNormalization
+from rsl_rl.utils import Normalizer, store_code_state
+from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12
 
 
 class AmpWaqOnPolicyRunner:
@@ -62,13 +63,9 @@ class AmpWaqOnPolicyRunner:
             raise ValueError("Only AMP task rewards are supported.")
         if "symmetry_cfg" in self.alg_cfg and self.alg_cfg["symmetry_cfg"] is not None:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
-        if train_cfg["amp_loader_class_name"] == "AMPLoaderPi12":
-            from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12
-
-            loader_cls = AMPLoaderPi12
-        else:
-            loader_cls = {"AMPLoaderPi": AMPLoaderPi, "AMPLoaderPi22": AMPLoaderPi22}[train_cfg["amp_loader_class_name"]]
-        amp_data = loader_cls(
+        if train_cfg["amp_loader_class_name"] != "AMPLoaderPi12":
+            raise ValueError("walk_pi_waq_12 requires AMPLoaderPi12")
+        amp_data = AMPLoaderPi12(
             device,
             time_between_frames=self.env.step_dt,
             preload_transitions=True,

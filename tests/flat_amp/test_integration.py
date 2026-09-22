@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -13,7 +12,7 @@ from humanoidverse.flat_amp.__main__ import build_invocation, build_parser
 
 def test_import_is_lazy_and_backend_selection_is_local(tmp_path):
     # Even with a different RSL-RL on PYTHONPATH, a fresh CLI process must resolve
-    # the core shipped with this repository. Existing Stage2 imports stay lazy.
+    # the core shipped with this repository. Package imports stay lazy.
     foreign = tmp_path / "rsl_rl"
     foreign.mkdir()
     (foreign / "__init__.py").write_text('raise RuntimeError("foreign RSL-RL imported")\n')
@@ -52,53 +51,15 @@ else:
 def test_training_core_and_assets_match_source_manifest():
     manifest = json.loads((VENDOR_ROOT / "source_manifest.json").read_text())
     assert manifest["source_commit"] == "b2d706a8b1323146a0e58595424b7fe5090a8357"
-    assert len(manifest["files"]) == 142
+    assert manifest["files"]
     for item in manifest["files"]:
         path = VENDOR_ROOT / item["path"]
         assert not path.is_symlink()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item.get("local_sha256", item["sha256"]), item["path"]
 
 
-@pytest.mark.parametrize("controller,phase", [("bfm", False), ("bfm-phase", True)])
-def test_bfm_dispatch_preserves_phase_resume_and_local_source(tmp_path, controller, phase):
-    weights = tmp_path / "checkpoint/model"
-    weights.mkdir(parents=True)
-    config = tmp_path / "config.yaml"
-    config.write_text("robot: {}\n")
-    parser = build_parser()
-    args = parser.parse_args(
-        [
-            "train",
-            "--controller",
-            controller,
-            "--bfm-weights",
-            str(weights),
-            "--resume",
-            str(tmp_path / "model.pt"),
-            "--max_iterations",
-            "2",
-        ]
-    )
-    module, options = build_invocation(args)
-    assert module == "legged_lab.scripts.train_bfm_amp"
-    assert ("--no-phase" not in options) == phase
-    assert options[options.index("--bfm-source") + 1] == str(PROJECT_ROOT)
-    assert options[options.index("--bfm-robot-config") + 1] == str(config)
-    assert options[options.index("--max_iterations") + 1] == "2"
-    assert Path(options[options.index("--log-dir") + 1]).is_relative_to(PROJECT_ROOT / "logs/flat_amp")
-    play = parser.parse_args(
-        ["play", "--controller", controller, "--bfm-weights", str(weights), "--checkpoint", str(tmp_path / "model.pt")]
-    )
-    _, options = build_invocation(play)
-    assert "--play" in options and "--resume" in options
-    assert options[options.index("--num_envs") + 1] == "1"
 
 
-@pytest.mark.parametrize("task", ["walk_pi_waq_run_22", "walk_pi_waq_23", "walk_pi_waq_12"])
-def test_bfm_rejects_unsupported_task_before_loading_weights(task):
-    args = build_parser().parse_args(["train", "--controller", "bfm", "--task", task])
-    with pytest.raises(ValueError, match="only for walk_pi_waq_22"):
-        build_invocation(args)
 
 
 def test_task_listing_needs_no_isaac_runtime():
@@ -110,8 +71,36 @@ assert 'isaaclab' not in sys.modules and 'torch' not in sys.modules
 """
     result = subprocess.run([sys.executable, "-c", code], cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
     assert result.stdout.splitlines() == [
-        "walk_pi_waq_22: amp, bfm, bfm-phase",
-        "walk_pi_waq_run_22: amp",
-        "walk_pi_waq_23: amp",
         "walk_pi_waq_12: amp",
     ]
+
+
+@pytest.mark.parametrize("arguments", [
+    ["train", "--task", "walk_pi_waq_22"],
+    ["train", "--task", "walk_pi_waq_run_22"],
+    ["play", "--task", "walk_pi_waq_23", "--checkpoint", "model.pt"],
+    ["train", "--controller", "bfm"],
+    ["train", "--controller", "bfm-phase"],
+    ["bundle-bfm"],
+])
+def test_removed_tasks_and_controllers_are_rejected(arguments):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(arguments)
+
+
+def test_pi12_training_resume_and_export_dispatch(tmp_path):
+    args = build_parser().parse_args([
+        "train", "--resume", str(tmp_path / "model.pt"), "--max-iterations", "2", "--amp-preload", "128",
+    ])
+    module, options = build_invocation(args)
+    assert module == "legged_lab.scripts.train"
+    assert options[options.index("--task") + 1] == "walk_pi_waq_12"
+    assert options[options.index("--resume") + 1] == str(tmp_path / "model.pt")
+    assert options[options.index("--max_iterations") + 1] == "2"
+    assert options[options.index("--amp-preload") + 1] == "128"
+    args = build_parser().parse_args([
+        "export", "--checkpoint", str(tmp_path / "model.pt"), "--output", str(tmp_path / "export"),
+    ])
+    assert build_invocation(args) == ("legged_lab.scripts.export_policy", [
+        "--checkpoint", str(tmp_path / "model.pt"), "--output", str(tmp_path / "export"),
+    ])

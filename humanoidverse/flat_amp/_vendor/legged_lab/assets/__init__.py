@@ -16,9 +16,4 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-import os
-
-import toml
-
-# Conveniences to other module directories via relative paths
-ISAAC_ASSET_DIR = os.path.abspath(os.path.dirname(__file__))
+"""Pi12 robot assets."""

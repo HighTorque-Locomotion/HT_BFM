@@ -2,7 +2,6 @@
 
 import argparse
 import copy
-import os
 import time
 import traceback
 from pathlib import Path
@@ -21,14 +20,15 @@ def main():
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--velocity", nargs=3, type=float, metavar=("VX", "VY", "YAW"))
     add_keyboard_arguments(parser)
-    parser.add_argument("--actuator-profile", choices=("ht", "legacy"), default="ht")
+    parser.add_argument("--actuator-profile", choices=("ht",), default="ht")
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    if not args.checkpoint.expanduser().is_file():
+        parser.error(f"Checkpoint does not exist: {args.checkpoint}")
     if args.keyboard_control and args.headless:
         parser.error("--keyboard-control requires a GUI; omit --headless")
     if args.velocity is None:
         args.velocity = (0.0, 0.0, 0.0) if args.keyboard_control else (0.4, 0.0, 0.0)
-    os.environ["PI_22DOF_ACTUATOR_PROFILE"] = args.actuator_profile
     import torch
 
     if args.device and str(args.device).startswith("cuda"):
@@ -75,7 +75,7 @@ def main():
         ).to(env.device)
         saved = torch.load(args.checkpoint.expanduser(), map_location=env.device, weights_only=False)
         if (saved.get("infos") or {}).get("bfm"):
-            raise ValueError("Use train_bfm_amp.py --play for a BFM command encoder checkpoint.")
+            raise ValueError("Expected a walk_pi_waq_12 AMP checkpoint.")
         if "obs_norm_state_dict" in saved:
             raise ValueError("This task uses empirical_normalization=False; checkpoint is incompatible.")
         policy.load_state_dict(saved["model_state_dict"], strict=True)
@@ -99,7 +99,7 @@ def main():
                 if keyboard is not None:
                     # Interactive playback should not run faster than wall time.
                     time.sleep(max(0.0, env.step_dt - (time.perf_counter() - start)))
-        print("[INFO] Deterministic replay completed.")
+        print(f"[INFO] Deterministic replay completed: {args.steps} requested steps.", flush=True)
     except Exception:
         traceback.print_exc()
         raise

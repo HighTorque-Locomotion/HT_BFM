@@ -17,20 +17,6 @@
 # and is distributed under the BSD-3-Clause license.
 
 from legged_lab.utils.task_registry import task_registry
-from .pi.pi_env import PiDof23Env
-from .pi.pi_22dof_env import PiDof22Env
-from .pi.pi_cfg import PiDof23WalkFlatEnvCfg, PiDof23WalkAgentCfg
-from .pi.pi_22dof_cfg import (
-    PiDof22WalkFlatEnvCfg,
-    PiDof22WalkAgentCfg,
-    PiDof22WalkRunFlatEnvCfg,
-    PiDof22WalkRunAgentCfg,
-)
-
-task_registry.register("walk_pi_waq_22", PiDof22Env, PiDof22WalkFlatEnvCfg(), PiDof22WalkAgentCfg())
-task_registry.register("walk_pi_waq_run_22", PiDof22Env, PiDof22WalkRunFlatEnvCfg(), PiDof22WalkRunAgentCfg())
-task_registry.register("walk_pi_waq_23", PiDof23Env, PiDof23WalkFlatEnvCfg(), PiDof23WalkAgentCfg())
-
 from .pi.pi_12dof_cfg import PiDof12WalkAgentCfg, PiDof12WalkFlatEnvCfg
 from .pi.pi_12dof_env import PiDof12Env
 
