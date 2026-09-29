@@ -89,7 +89,7 @@ class KeyboardVelocity:
             # Timer resampling and episode resets must retain the manual command.
             setattr(generator.cfg.ranges, axis, (value, value))
         generator.command[:] = generator.command.new_tensor(command)
-        for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env"):
+        for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env", "is_straight_env"):
             getattr(generator, flag)[:] = False
         self._applied = command
         return True

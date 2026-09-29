@@ -21,20 +21,18 @@
 # and is distributed under the BSD-3-Clause license.
 
 from __future__ import annotations
-import math
+
+from collections.abc import Sequence
 from dataclasses import MISSING
-from isaaclab.managers import CommandTermCfg
-from isaaclab.markers import VisualizationMarkersCfg
+
+import isaaclab.utils.math as math_utils
+import omni.log
+import torch
+from isaaclab.assets import Articulation
+from isaaclab.managers import CommandTerm, CommandTermCfg
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 from isaaclab.utils import configclass
-import torch
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
-import omni.log
-import isaaclab.utils.math as math_utils
-from isaaclab.assets import Articulation
-from isaaclab.managers import CommandTerm
-from isaaclab.markers import VisualizationMarkers
 
 
 class UniformVelocityCommand(CommandTerm):
@@ -84,6 +82,7 @@ class UniformVelocityCommand(CommandTerm):
         self.is_standing_env = torch.zeros_like(self.is_heading_env)
         self.is_onestep_env = torch.zeros_like(self.is_heading_env)
         self.is_turn_only_env = torch.zeros_like(self.is_heading_env)
+        self.is_straight_env = torch.zeros_like(self.is_heading_env)
         self.metrics["error_vel_xy"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_vel_yaw"] = torch.zeros(self.num_envs, device=self.device)
 
@@ -129,6 +128,7 @@ class UniformVelocityCommand(CommandTerm):
         self.is_standing_env[env_ids] = False
         self.is_onestep_env[env_ids] = False
         self.is_turn_only_env[env_ids] = False
+        self.is_straight_env[env_ids] = False
         self.is_standing_env[env_ids] = rnums <= self.cfg.rel_standing_envs
         self.is_onestep_env[env_ids] = (rnums > self.cfg.rel_standing_envs) & (
             rnums <= self.cfg.rel_standing_envs + self.cfg.rel_onestep_envs
@@ -136,6 +136,8 @@ class UniformVelocityCommand(CommandTerm):
         self.is_turn_only_env[env_ids] = (rnums > self.cfg.rel_standing_envs + self.cfg.rel_onestep_envs) & (
             rnums <= self.cfg.rel_standing_envs + self.cfg.rel_onestep_envs + self.cfg.rel_turn_only_envs
         )
+        straight_start = self.cfg.rel_standing_envs + self.cfg.rel_onestep_envs + self.cfg.rel_turn_only_envs
+        self.is_straight_env[env_ids] = (rnums > straight_start) & (rnums <= straight_start + self.cfg.rel_straight_envs)
 
     def _update_command(self):
         """Post-processes the velocity command.
@@ -159,6 +161,9 @@ class UniformVelocityCommand(CommandTerm):
         turn_only_env_ids = self.is_turn_only_env.nonzero(as_tuple=False).flatten()
         self.vel_command_b[turn_only_env_ids, 0] = 0.0
         self.vel_command_b[turn_only_env_ids, 1] = 0.0
+        # Apply after heading control so straight commands retain zero yaw rate on every step.
+        straight_env_ids = self.is_straight_env.nonzero(as_tuple=False).flatten()
+        self.vel_command_b[straight_env_ids, 1:] = 0.0
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
@@ -211,6 +216,8 @@ class UniformVelocityCommandCfg(CommandTermCfg):
     "The sampled probability of environments that should be standing still. Defaults to 0.0."
     rel_onestep_envs: float = 0.0
     rel_turn_only_envs: float = 0.0
+    rel_straight_envs: float = 0.0
+    "Probability of pure forward/backward commands with lateral and yaw velocities set to zero."
     rel_heading_envs: float = 1.0
     "The sampled probability of environments where the robots follow the heading-based angular velocity command\n    (the others follow the sampled angular velocity command). Defaults to 1.0.\n\n    This parameter is only used if :attr:`heading_command` is True.\n    "
 

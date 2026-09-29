@@ -17,13 +17,15 @@
 # and is distributed under the BSD-3-Clause license.
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from legged_lab.envs.pi.pi_12dof_env import PiDof12Env
+import math
+
 import isaaclab.utils.math as math_utils
 import torch
-import math
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
@@ -44,6 +46,17 @@ def command_activity_masks(
     else:
         yaw_active = torch.abs(command[:, 2]) >= yaw_command_threshold
     return (lin_active, yaw_active, lin_active | yaw_active)
+
+
+def straight_command_mask(
+    command: torch.Tensor, lin_command_threshold: float = 0.1, yaw_command_threshold: float = 0.1
+) -> torch.Tensor:
+    """Select forward/backward commands with lateral and yaw commands inside their deadbands."""
+    return (
+        (command[:, 0].abs() >= lin_command_threshold)
+        & (command[:, 1].abs() < lin_command_threshold)
+        & (command[:, 2].abs() < yaw_command_threshold)
+    )
 
 
 def idle_when_commanded(
@@ -80,9 +93,48 @@ def body_orientation_euler(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEnt
         asset.data.body_quat_w[:, asset_cfg.body_ids[0], :], asset.data.GRAVITY_VEC_W
     )
     body_euler = get_euler_xyz_tensor(asset.data.body_quat_w[:, asset_cfg.body_ids[0], :])
-    quat_mismatch = torch.exp(-torch.sum(torch.abs(body_euler[:, 1:3]), dim=1) * 10)
+    # Correct WXYZ conversion returns roll, pitch, yaw; heading must remain free.
+    quat_mismatch = torch.exp(-torch.sum(torch.abs(body_euler[:, :2]), dim=1) * 10)
     orientation = torch.exp(-torch.norm(body_orientation[:, :2], dim=1) * 20)
     return (quat_mismatch + orientation) / 2.0
+
+
+def track_command_tilt_exp(
+    env: PiDof12Env,
+    std: float,
+    tolerance: float = math.radians(3.0),
+    gravity: float = 9.81,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward torso roll/pitch around the commanded steady-turn reference.
+
+    Commands use horizontal heading axes (x forward, y left, z up). No command
+    derivatives are taken: ax = -wz*vy and ay = wz*vx. Align the torso z axis
+    with (ax, ay, gravity) to obtain a soft roll/pitch reference; yaw is free.
+
+    Each axis has a flat tolerance band. Outside it, the reward is
+    exp(-0.5 * sum((excess_error / std)**2)). Both angles are in radians;
+    std is the Gaussian standard deviation, unlike the velocity rewards'
+    exp(-error/std**2) convention. This term is stateless, including on reset.
+    """
+    if not math.isfinite(std) or std <= 0:
+        raise ValueError("std must be finite and positive")
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
+    if not math.isfinite(gravity) or gravity <= 0:
+        raise ValueError("gravity must be finite and positive")
+    command = env.command_generator.command
+    ax = -command[:, 2] * command[:, 1]
+    ay = command[:, 2] * command[:, 0]
+    pitch_ref = torch.atan2(ax, torch.full_like(ax, gravity))
+    roll_ref = torch.atan2(-ay, torch.sqrt(gravity**2 + ax.square()))
+    target = torch.stack((roll_ref, pitch_ref), dim=-1)
+    asset: Articulation = env.scene[asset_cfg.name]
+    roll_pitch = get_euler_xyz_tensor(asset.data.body_quat_w[:, asset_cfg.body_ids[0], :])[:, :2]
+    difference = roll_pitch - target
+    error = torch.atan2(torch.sin(difference), torch.cos(difference)).abs()
+    excess = torch.clamp(error - tolerance, min=0.0)
+    return torch.exp(-0.5 * torch.sum(torch.square(excess / std), dim=-1))
 
 
 def stand_still_joint_exp(
@@ -337,24 +389,17 @@ def joint_deviation_l2(
     lin_command_threshold: float = 0.1,
     yaw_command_threshold: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    exempt_lateral: bool = False,
 ) -> torch.Tensor:
+    """Penalize joint offsets only during straight forward/backward locomotion."""
     asset: Articulation = env.scene[asset_cfg.name]
     angle = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
     command = env.command_generator.command
-    lin_active, yaw_active, _ = command_activity_masks(
+    straight = straight_command_mask(
         command,
         lin_command_threshold=lin_command_threshold,
         yaw_command_threshold=yaw_command_threshold,
     )
-    pure_yaw_active = ~lin_active & yaw_active
-    exempt = pure_yaw_active
-    if exempt_lateral:
-        pure_lateral_active = (command[:, 1].abs() >= lin_command_threshold) & (
-            command[:, 0].abs() < lin_command_threshold
-        )
-        exempt = pure_yaw_active | pure_lateral_active
-    return torch.sum(torch.square(angle), dim=1) * (~exempt).float()
+    return torch.sum(torch.square(angle), dim=1) * straight.float()
 
 
 def feet_stumble(env: PiDof12Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -366,15 +411,19 @@ def feet_stumble(env: PiDof12Env, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     )
 
 
-def feet_y_distance(env: PiDof12Env) -> torch.Tensor:
-    """Penalize foot y-distance when the commanded y-velocity is low, to maintain a reasonable spacing."""
+def feet_y_distance(
+    env: PiDof12Env, lin_command_threshold: float = 0.1, yaw_command_threshold: float = 0.1
+) -> torch.Tensor:
+    """Penalize deviation from 0.16 m foot spacing only when standing or moving straight forward/backward."""
     leftfoot = env.robot.data.body_pos_w[:, env.feet_body_ids[0], :] - env.robot.data.root_link_pos_w[:, :]
     rightfoot = env.robot.data.body_pos_w[:, env.feet_body_ids[1], :] - env.robot.data.root_link_pos_w[:, :]
     leftfoot_b = math_utils.quat_apply(math_utils.quat_conjugate(env.robot.data.root_link_quat_w[:, :]), leftfoot)
     rightfoot_b = math_utils.quat_apply(math_utils.quat_conjugate(env.robot.data.root_link_quat_w[:, :]), rightfoot)
     y_distance_b = torch.abs(leftfoot_b[:, 1] - rightfoot_b[:, 1] - 0.16)
-    y_vel_flag = torch.abs(env.command_generator.command[:, 1]) < 0.1
-    return y_distance_b * y_vel_flag
+    command = env.command_generator.command
+    straight = straight_command_mask(command, lin_command_threshold, yaw_command_threshold)
+    _, _, movement_active = command_activity_masks(command, lin_command_threshold, yaw_command_threshold)
+    return y_distance_b * (straight | ~movement_active).float()
 
 
 def _gauss_cdf(x: torch.Tensor) -> torch.Tensor:
@@ -544,6 +593,7 @@ def mjlab_feet_gait(
 
 
 def get_euler_xyz_tensor(quat):
+    """Convert Isaac Lab WXYZ quaternions to signed roll, pitch, yaw in radians."""
     r, p, w = get_euler_rpy(quat)
     euler_xyz = torch.stack((r, p, w), dim=-1)
     euler_xyz[euler_xyz > torch.pi] -= 2 * torch.pi
@@ -551,7 +601,8 @@ def get_euler_xyz_tensor(quat):
 
 
 def get_euler_rpy(q):
-    qx, qy, qz, qw = (0, 1, 2, 3)
+    """Convert WXYZ quaternions to roll, pitch, yaw in [0, 2*pi)."""
+    qw, qx, qy, qz = (0, 1, 2, 3)
     sinr_cosp = 2.0 * (q[..., qw] * q[..., qx] + q[..., qy] * q[..., qz])
     cosr_cosp = q[..., qw] * q[..., qw] - q[..., qx] * q[..., qx] - q[..., qy] * q[..., qy] + q[..., qz] * q[..., qz]
     roll = torch.atan2(sinr_cosp, cosr_cosp)

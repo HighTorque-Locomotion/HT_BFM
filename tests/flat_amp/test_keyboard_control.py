@@ -38,7 +38,7 @@ def test_command_commit_and_resampling():
     original_ranges = ranges()
     control = KeyboardVelocity(original_ranges)
     generator = SimpleNamespace(cfg=SimpleNamespace(ranges=original_ranges), command=torch.ones(3, 3))
-    for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env"):
+    for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env", "is_straight_env"):
         setattr(generator, flag, torch.ones(3, dtype=torch.bool))
     env = SimpleNamespace(command_generator=generator)
     assert control.apply(env)
@@ -49,7 +49,7 @@ def test_command_commit_and_resampling():
     assert generator.command.count_nonzero() == 0  # Events do not mutate tensors inside render().
     assert control.apply(env)
     torch.testing.assert_close(generator.command, torch.full((3, 3), 0.1))
-    for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env"):
+    for flag in ("is_standing_env", "is_heading_env", "is_onestep_env", "is_turn_only_env", "is_straight_env"):
         assert not getattr(generator, flag).any()
     for i, axis in enumerate(AXES):
         # Timer and reset use these same ranges, so both retain the manual target.

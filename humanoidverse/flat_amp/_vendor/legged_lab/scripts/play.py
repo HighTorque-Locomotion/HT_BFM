@@ -56,6 +56,7 @@ def main():
         env_cfg.commands.rel_standing_envs = 0.0
         env_cfg.commands.rel_onestep_envs = 0.0
         env_cfg.commands.rel_turn_only_envs = 0.0
+        env_cfg.commands.rel_straight_envs = 0.0
         if args.keyboard_control:
             keyboard = KeyboardVelocity(
                 env_cfg.commands.ranges, args.velocity, args.keyboard_linvel_step, args.keyboard_angvel_step

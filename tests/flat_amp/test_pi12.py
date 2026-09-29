@@ -3,6 +3,7 @@
 import ast
 import copy
 import importlib.util
+import math
 import re
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ def test_all_pi12_reward_selectors_match_urdf(urdf):
         return SimpleNamespace(name=name, **kwargs)
 
     namespace = {
+        "math": math,
         "configclass": configclass,
         "RewTerm": SimpleNamespace,
         "SceneEntityCfg": entity,

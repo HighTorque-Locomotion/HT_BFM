@@ -5,6 +5,8 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失。
 
 ## 配置与调参入口
 
+逐次变更、指令比例与验证结果见 [Pi12 调参日志](flat_amp_pi12_tuning_log.md)。
+
 任务配置集中在
 `humanoidverse/flat_amp/_vendor/legged_lab/envs/pi/pi_12dof_cfg.py`。
 参照独立 Pi12 delivery 版本展开，奖励、环境和训练配置不再继承 Pi22/Pi23
@@ -75,6 +77,11 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失。
 | AMP 36 维特征及双脚坐标变换 | `get_amp_obs_for_expert_trans` |
 | 接触、姿态、高度和超时终止 | `check_reset` |
 | 重置、日志及终止前 AMP/Actor 状态保存 | `reset` |
+
+2026-09-28：姿态终止仅保留总倾角 >45°，删除冗余 roll/pitch 阈值及 `bad_euler` 统计。
+总倾角由根部重力投影计算，yaw 自由；接触、高度及 20 s 超时规则保持。
+详细变更与验证见 [调参日志](flat_amp_pi12_tuning_log.md)。
+
 | 站立门控、相位和左右脚步态更新 | `_calculate_gait_para` |
 
 展开保留当前项目的回放面板更新，以及 `step` 内自动重置前保存终止状态的

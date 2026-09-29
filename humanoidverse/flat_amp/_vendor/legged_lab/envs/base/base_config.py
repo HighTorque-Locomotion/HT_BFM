@@ -18,11 +18,13 @@
 
 import math
 from dataclasses import MISSING
+
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
 from isaaclab.utils import configclass
+
 import legged_lab.mdp as mdp
 
 
@@ -51,8 +53,6 @@ class RobotCfg:
     feet_body_names: list = []
     max_tilt_angle_deg: float = 45.0
     max_tilt_angle_rad: float | None = None
-    max_body_pitch_angle_rad: float = 1.0
-    max_body_yaw_angle_rad: float = 0.8
 
 
 @configclass
@@ -87,6 +87,7 @@ class CommandsCfg:
     rel_standing_envs: float = 0.2
     rel_onestep_envs: float = (0.05,)
     rel_turn_only_envs: float = (0.05,)
+    rel_straight_envs: float = 0.0
     rel_heading_envs: float = 1.0
     heading_command: bool = True
     heading_control_stiffness: float = 0.5

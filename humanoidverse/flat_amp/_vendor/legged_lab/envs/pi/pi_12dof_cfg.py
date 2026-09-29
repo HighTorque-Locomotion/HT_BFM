@@ -88,8 +88,8 @@ class PiDof12RewardCfg:
             "body_asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
         },
     )
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
-    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.2)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.3)
     ang_vel_xy_l2_body = RewTerm(
         func=mdp.ang_vel_xy_l2_body, params={"asset_cfg": SceneEntityCfg("robot", body_names=".*torso.*")}, weight=-0.05
     )
@@ -148,7 +148,6 @@ class PiDof12RewardCfg:
             "lin_command_threshold": PI_LIN_COMMAND_THRESHOLD,
             "yaw_command_threshold": PI_YAW_COMMAND_THRESHOLD,
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_thigh.*", ".*_hip_roll.*"]),
-            "exempt_lateral": True,
         },
     )
     joint_deviation_waist_walk = None
@@ -205,7 +204,17 @@ class PiDof12RewardCfg:
     body_orientation_euler = RewTerm(
         func=mdp.body_orientation_euler,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*torso.*")},
+        weight=0.0,
+    )
+    track_command_tilt_exp = RewTerm(
+        func=mdp.track_command_tilt_exp,
         weight=1.0,
+        params={
+            "std": math.radians(5.0),
+            "tolerance": math.radians(3.0),
+            "gravity": 9.81,
+            "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+        },
     )
     stand_still = RewTerm(
         func=mdp.stand_still_joint_exp,
@@ -227,7 +236,14 @@ class PiDof12RewardCfg:
         },
     )
 
-    feet_y_distance = RewTerm(func=mdp.feet_y_distance, weight=-2.0)
+    feet_y_distance = RewTerm(
+        func=mdp.feet_y_distance,
+        weight=-2.0,
+        params={
+            "lin_command_threshold": PI_LIN_COMMAND_THRESHOLD,
+            "yaw_command_threshold": PI_YAW_COMMAND_THRESHOLD,
+        },
+    )
     feet_x_offset_lateral = RewTerm(
         func=mdp.feet_x_offset_lateral,
         weight=-0.0,
@@ -351,8 +367,6 @@ class PiDof12WalkFlatEnvCfg:
         feet_body_names=[".*ankle_roll.*"],
         max_tilt_angle_deg=45.0,
         max_tilt_angle_rad=None,
-        max_body_pitch_angle_rad=1.0,
-        max_body_yaw_angle_rad=0.8,
     )
     reward = PiDof12RewardCfg()
     gait = GaitCfg()
@@ -366,6 +380,7 @@ class PiDof12WalkFlatEnvCfg:
         rel_standing_envs=0.1,
         rel_onestep_envs=0.15,
         rel_turn_only_envs=0.15,
+        rel_straight_envs=0.15,
         rel_heading_envs=1.0,
         heading_command=True,
         heading_control_stiffness=0.5,

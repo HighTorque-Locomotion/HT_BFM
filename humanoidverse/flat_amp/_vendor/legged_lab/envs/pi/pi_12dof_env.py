@@ -42,7 +42,7 @@ from rsl_rl.env import VecEnv
 
 from legged_lab.envs.pi.pi_12dof_cfg import PiDof12WalkFlatEnvCfg
 from legged_lab.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
-from legged_lab.mdp.rewards import command_activity_masks, get_euler_xyz_tensor
+from legged_lab.mdp.rewards import command_activity_masks
 from legged_lab.utils.env_utils.scene import SceneCfg
 
 
@@ -96,6 +96,7 @@ class PiDof12Env(VecEnv):
             rel_standing_envs=self.cfg.commands.rel_standing_envs,
             rel_onestep_envs=self.cfg.commands.rel_onestep_envs,
             rel_turn_only_envs=self.cfg.commands.rel_turn_only_envs,
+            rel_straight_envs=self.cfg.commands.rel_straight_envs,
             rel_heading_envs=self.cfg.commands.rel_heading_envs,
             heading_command=self.cfg.commands.heading_command,
             heading_control_stiffness=self.cfg.commands.heading_control_stiffness,
@@ -183,13 +184,11 @@ class PiDof12Env(VecEnv):
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
         )
         self.init_obs_buffer()
-        self.body_euler = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device, requires_grad=False)
         self.is_on_forbidden = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.is_vel_limited = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.reset_reason_buf = {
             "contact_excess": torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
             "bad_orientation": torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
-            "bad_euler": torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
             "bad_height": torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
             "time_out": torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
         }
@@ -274,7 +273,6 @@ class PiDof12Env(VecEnv):
         self.episode_length_buf[env_ids] = 0
         self.phase_length_buf[env_ids] = 0
         self.gait_start[env_ids] = torch.randint(0, 2, (len(env_ids),)).to(self.device) * 0.5
-        self.body_euler = get_euler_xyz_tensor(self.robot.data.body_quat_w[:, self.torso_body_ids[0], :])
         self.scene.write_data_to_sim()
         self.sim.forward()
 
@@ -300,7 +298,6 @@ class PiDof12Env(VecEnv):
                 self.avg_feet_speed_per_step += torch.norm(self.robot.data.body_lin_vel_w[:, self.feet_body_ids, :], dim=-1)
             self.avg_feet_force_per_step /= self.cfg.sim.decimation
             self.avg_feet_speed_per_step /= self.cfg.sim.decimation
-            self.body_euler = get_euler_xyz_tensor(self.robot.data.body_quat_w[:, self.torso_body_ids[0], :])
             if not self.headless:
                 self.sim.render()
             self.episode_length_buf += 1
@@ -341,20 +338,15 @@ class PiDof12Env(VecEnv):
             limit_angle = math.radians(self.cfg.robot.max_tilt_angle_deg)
         tilt = torch.acos(-self.robot.data.projected_gravity_b[:, 2]).abs()
         bad_orientation = tilt > limit_angle
-        bad_euler = torch.logical_or(
-            torch.abs(self.body_euler[:, 1]) > self.cfg.robot.max_body_pitch_angle_rad,
-            torch.abs(self.body_euler[:, 2]) > self.cfg.robot.max_body_yaw_angle_rad,
-        )
         minimum_height = 0.33
         terrain_base_height = torch.clamp(self.scene.env_origins[:, 2], max=0.0)
         bad_height = self.is_on_forbidden & (self.robot.data.root_pos_w[:, 2] - terrain_base_height < minimum_height)
         time_out_buf = self.episode_length_buf >= self.max_episode_length
         self.reset_reason_buf["contact_excess"].copy_(contact_excess)
         self.reset_reason_buf["bad_orientation"].copy_(bad_orientation)
-        self.reset_reason_buf["bad_euler"].copy_(bad_euler)
         self.reset_reason_buf["bad_height"].copy_(bad_height)
         self.reset_reason_buf["time_out"].copy_(time_out_buf)
-        reset_buf = contact_excess | bad_orientation | time_out_buf | bad_euler | bad_height
+        reset_buf = contact_excess | bad_orientation | time_out_buf | bad_height
         return (reset_buf, time_out_buf)
 
     def init_obs_buffer(self):
