@@ -36,6 +36,22 @@ python -m humanoidverse.flat_amp train --task walk_pi_waq_22 \
 训练结果保存到 `logs/flat_amp/`；其他训练、回放和导出参数见
 `python -m humanoidverse.flat_amp --help` 及各子命令的 `--help`。
 
+双教师蒸馏使用同一平地任务：后退和站立向无相位教师学习，其他运动向有相位教师学习。
+学生从无相位教师初始化，冻结两位教师和底层 BFM，同时进行 PPO、AMP 和潜变量方向蒸馏：
+
+```bash
+python -m humanoidverse.flat_amp distill \
+  --bfm-weights model/pi_flat_amp/bfm_actor \
+  --no-phase-teacher /path/to/no_phase/model_49999.pt \
+  --phase-teacher /path/to/phase/model_49999.pt --headless
+```
+
+默认使用 4096 环境、seed 42、50000 次更新；后退周期 0.5 秒，其他运动 0.8 秒。
+蒸馏系数前 1000 次更新为 5，随后 10000 次线性降至 0.5，再保持 0.5。
+核心实现见 `humanoidverse/flat_amp/_vendor/legged_lab/utils/bfm_distillation.py` 和 `bfm_gait.py`。
+恢复训练用 `distill --resume` 并提供相同教师；回放学生用 `play --controller bfm-phase
+--gait-profile backward_fast --checkpoint /path/to/student.pt --bfm-weights /path/to/bfm_actor`，无需教师。
+
 ## Code
 
 Code will be released in stages:

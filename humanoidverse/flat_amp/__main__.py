@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,20 @@ def positive_int(value):
     return number
 
 
+def nonnegative_int(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be nonnegative")
+    return number
+
+
+def finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise argparse.ArgumentTypeError("must be finite")
+    return number
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="python -m humanoidverse.flat_amp",
@@ -24,19 +39,28 @@ def build_parser():
     )
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("list-tasks", help="List tasks and supported controllers without starting Isaac Sim")
-    for operation in ("train", "play"):
-        command = commands.add_parser(operation, help=f"{operation.capitalize()} a flat AMP policy")
+    for operation in ("train", "play", "distill"):
+        help_text = "Train a phase-enabled student with frozen no-phase and phase teachers" if operation == "distill" else f"{operation.capitalize()} a flat AMP policy"
+        command = commands.add_parser(operation, help=help_text)
         command.add_argument("--task", choices=TASKS, default=TASKS[0])
-        command.add_argument(
-            "--controller", choices=CONTROLLERS, default="amp", help="amp: joint policy; bfm: frozen BFM; bfm-phase: frozen BFM with phase"
-        )
+        if operation == "distill":
+            command.set_defaults(controller="bfm-phase")
+        else:
+            command.add_argument(
+                "--controller", choices=CONTROLLERS, default="amp", help="amp: joint policy; bfm: frozen BFM; bfm-phase: frozen BFM with phase"
+            )
         command.add_argument("--num-envs", "--num_envs", dest="num_envs", type=positive_int)
         command.add_argument("--device", default="cuda:0")
         command.add_argument("--headless", action="store_true")
         command.add_argument("--actuator-profile", choices=("ht", "legacy"), default="ht")
         command.add_argument("--bfm-weights", type=Path, help="Frozen H0W22 actor bundle or original checkpoint directory")
         command.add_argument("--bfm-robot-config", type=Path, help="Defaults to the config.yaml accompanying the BFM weights")
-        if operation == "train":
+        command.add_argument(
+            "--gait-profile", choices=("fixed", "backward_fast"), default="backward_fast" if operation == "distill" else "fixed",
+            help="backward_fast: 0.5s backward / 0.8s other movement; requires bfm-phase and HTMotor",
+        )
+        command.add_argument("--backward-period", type=finite_float, default=0.5)
+        if operation in ("train", "distill"):
             command.add_argument(
                 "--max-iterations",
                 "--max_iterations",
@@ -47,8 +71,21 @@ def build_parser():
             command.add_argument("--seed", type=int)
             command.add_argument("--resume", type=Path)
             command.add_argument("--log-dir", type=Path, help="New run directory; default: logs/flat_amp/<task>/<timestamp>_<controller>")
-            command.add_argument("--amp-preload", type=positive_int, help="Ordinary AMP expert preload override for smoke tests")
+            if operation == "train":
+                command.add_argument("--amp-preload", type=positive_int, help="Ordinary AMP expert preload override for smoke tests")
+            else:
+                command.set_defaults(amp_preload=None)
             command.add_argument("--dry-run", action="store_true", help="Validate frozen BFM weights without Isaac Sim")
+            if operation == "distill":
+                command.add_argument("--distill-no-phase-teacher", "--no-phase-teacher", type=Path, required=True,
+                                     help="Schema-1 checkpoint for backward/standing and student initialization")
+                command.add_argument("--distill-phase-teacher", "--phase-teacher", type=Path, required=True,
+                                     help="Fixed 0.8s schema-2 checkpoint for other movement")
+                command.add_argument("--distill-coef", type=finite_float, default=5.0)
+                command.add_argument("--distill-final-coef", type=finite_float, default=0.5)
+                command.add_argument("--distill-hold", type=nonnegative_int, default=1000)
+                command.add_argument("--distill-decay", type=positive_int, default=10000)
+                command.set_defaults(num_envs=4096, seed=42, max_iterations=50000)
         else:
             command.add_argument("--checkpoint", type=Path, required=True)
             command.add_argument("--steps", type=positive_int, default=1000)
@@ -104,6 +141,16 @@ def build_invocation(args):
         raise ValueError("Frozen H0W22 BFM is supported only for walk_pi_waq_22")
     if not frozen and (args.bfm_weights is not None or args.bfm_robot_config is not None):
         raise ValueError("BFM options require --controller bfm or bfm-phase")
+    if args.backward_period <= 0:
+        raise ValueError("--backward-period must be positive")
+    variable_gait = args.gait_profile == "backward_fast"
+    if variable_gait and (args.controller != "bfm-phase" or args.actuator_profile != "ht"):
+        raise ValueError("backward_fast requires --controller bfm-phase and --actuator-profile ht")
+    if args.operation == "distill":
+        if not variable_gait:
+            raise ValueError("Dual-teacher distillation requires --gait-profile backward_fast")
+        if args.distill_coef <= 0 or not 0 <= args.distill_final_coef <= args.distill_coef:
+            raise ValueError("Distillation coefficients require 0 <= final <= initial and initial > 0")
     result = ["--task", args.task, "--device", args.device, "--actuator-profile", args.actuator_profile]
     if args.headless:
         result += ["--headless"]
@@ -113,13 +160,23 @@ def build_invocation(args):
         result += bfm_options(args)
         if args.controller == "bfm":
             result += ["--no-phase"]
-    if args.operation == "train":
+        if variable_gait:
+            result += ["--gait-profile", "backward_fast", "--backward-period", str(args.backward_period)]
+    if args.operation in ("train", "distill"):
         if args.dry_run and not frozen:
             raise ValueError("--dry-run validates BFM weights and requires a BFM controller")
         if args.amp_preload is not None:
             if frozen:
                 raise ValueError("--amp-preload is supported only for ordinary AMP")
             result += ["--amp-preload", str(args.amp_preload)]
+        if args.operation == "distill":
+            for option in ("distill_no_phase_teacher", "distill_phase_teacher"):
+                path = resolve_path(getattr(args, option))
+                if not path.is_file():
+                    raise ValueError(f"Teacher checkpoint does not exist: {path}")
+                result += ["--" + option.replace("_", "-"), str(path)]
+            for option in ("distill_coef", "distill_final_coef", "distill_hold", "distill_decay"):
+                result += ["--" + option.replace("_", "-"), str(getattr(args, option))]
         for option in ("max_iterations", "seed", "resume"):
             value = getattr(args, option)
             if value is not None:
@@ -128,7 +185,8 @@ def build_invocation(args):
             result += ["--dry-run"]
         else:
             stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
-            log_dir = args.log_dir or PROJECT_ROOT / "logs/flat_amp" / args.task / f"{stamp}_{args.controller}"
+            suffix = "distill" if args.operation == "distill" else args.controller
+            log_dir = args.log_dir or PROJECT_ROOT / "logs/flat_amp" / args.task / f"{stamp}_{suffix}"
             result += ["--log-dir", str(resolve_path(log_dir))]
         module = "train_bfm_amp" if frozen else "train"
     else:

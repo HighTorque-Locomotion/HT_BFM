@@ -103,6 +103,8 @@ class AMPPPO:
         self.transition = RolloutStorage.Transition()
         self.num_value_heads = int(getattr(self.policy, "num_critic_heads", 1))
         self.current_learning_iteration = 0
+        # Optional teacher objective; rollout actions always come from the student.
+        self.policy_auxiliary_loss = None
         self.clip_param = clip_param
         self.num_learning_epochs = num_learning_epochs
         self.num_mini_batches = num_mini_batches
@@ -178,6 +180,7 @@ class AMPPPO:
         mean_grad_pen_loss = 0
         mean_policy_pred = 0
         mean_expert_pred = 0
+        auxiliary_stats = {}
         mean_rnd_loss = None
         if self.symmetry:
             mean_symmetry_loss = 0
@@ -273,6 +276,13 @@ class AMPPPO:
             value_loss_by_head = value_loss_per_element.reshape(-1, value_loss_per_element.shape[-1]).mean(dim=0)
             value_loss = value_loss_by_head.mean()
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            if self.policy_auxiliary_loss is not None:
+                auxiliary_loss, stats = self.policy_auxiliary_loss(
+                    obs_batch[:original_batch_size], mu_batch, self.current_learning_iteration
+                )
+                loss = loss + auxiliary_loss
+                for key, value in stats.items():
+                    auxiliary_stats[key] = auxiliary_stats.get(key, 0) + value.detach()
             if self.symmetry:
                 if not self.symmetry["use_data_augmentation"]:
                     data_augmentation_func = self.symmetry["data_augmentation_func"]
@@ -348,6 +358,8 @@ class AMPPPO:
             "amp_policy_pred": mean_policy_pred,
             "amp_expert_pred": mean_expert_pred,
         }
+        for key, value in auxiliary_stats.items():
+            loss_dict[f"distill/{key}"] = float(value / num_updates)
         if self.num_value_heads == 3:
             loss_dict["value_function_task"] = mean_value_loss_by_head[0].item()
             loss_dict["value_function_style"] = mean_value_loss_by_head[2].item()

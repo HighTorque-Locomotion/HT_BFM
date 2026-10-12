@@ -550,7 +550,9 @@
     {
       "path": "legged_lab/scripts/train_bfm_amp.py",
       "source_path": "legged_lab/scripts/train_bfm_amp.py",
-      "sha256": "f22319650316d2d609615ac8a0cfa1030d611f01c83fdd533464e014d9f94905"
+      "sha256": "5cc7b4fb22d6ed35bbc3777380ec69df0874371a6b88e7f58b20e44f07da1db0",
+      "baseline_sha256": "f22319650316d2d609615ac8a0cfa1030d611f01c83fdd533464e014d9f94905",
+      "historical_snapshot_sha256": "d2e617d869d315fafa15a46ab5fcd7eebdcd4b9961d86da8e6b017ec80f369bf"
     },
     {
       "path": "legged_lab/utils/__init__.py",
@@ -565,7 +567,9 @@
     {
       "path": "legged_lab/utils/bfm_training.py",
       "source_path": "legged_lab/utils/bfm_training.py",
-      "sha256": "fa0ffb22e8ab1888d813c722332bcab2fbaef37bdc681c3ded6ff989a748c5cf"
+      "sha256": "b5a1531337e53f3cde6a29976d9a4ae60aab607f41e91a3cbb4ebb2a5d27fbfa",
+      "baseline_sha256": "fa0ffb22e8ab1888d813c722332bcab2fbaef37bdc681c3ded6ff989a748c5cf",
+      "historical_snapshot_sha256": "7db585e8900346592c988396232d2776546a4841ce786e79cc79c358ed0aa65f"
     },
     {
       "path": "legged_lab/utils/env_utils/__init__.py",
@@ -600,7 +604,9 @@
     {
       "path": "rsl_rl/algorithms/amp_ppo.py",
       "source_path": "rsl_rl/rsl_rl/algorithms/amp_ppo.py",
-      "sha256": "00b479a8635a5e83decf646eb258a3ba40e95737ec831ce736f448e90aae0a82"
+      "sha256": "ddcbcbf6b90fe1970d270936beb5ca00e4888d3621cdc6312a547468dc09ff2e",
+      "baseline_sha256": "00b479a8635a5e83decf646eb258a3ba40e95737ec831ce736f448e90aae0a82",
+      "historical_snapshot_sha256": "374dc7175ac5c1db6b7eae5308382294a5fac49e3851fcf32519e6e7497a7685"
     },
     {
       "path": "rsl_rl/algorithms/amp_waq_ppo.py",
@@ -635,7 +641,9 @@
     {
       "path": "rsl_rl/modules/bfm_command_actor_critic.py",
       "source_path": "rsl_rl/rsl_rl/modules/bfm_command_actor_critic.py",
-      "sha256": "1b4b36b7ebce8de46384fed86f216a382dbc79c3d3bef9437cba9295de28ae8b"
+      "sha256": "c7237ed3cd21c979809df699933de101edc7626b0b09e72eeaf962457d2cc09e",
+      "baseline_sha256": "1b4b36b7ebce8de46384fed86f216a382dbc79c3d3bef9437cba9295de28ae8b",
+      "historical_snapshot_sha256": "f541267c08fecc1c1981aae45a1080f1085f4aa93a6041427fe6a3e521c80d0b"
     },
     {
       "path": "rsl_rl/modules/discriminator.py",
@@ -711,6 +719,67 @@
       "path": "rsl_rl/utils/wandb_utils.py",
       "source_path": "rsl_rl/rsl_rl/utils/wandb_utils.py",
       "sha256": "8824ca7437b4104ba168e7c0e8d052ddc4e636fb77203216f8cf561345286763"
+    },
+    {
+      "path": "legged_lab/utils/bfm_distillation.py",
+      "source_path": "legged_lab/utils/bfm_distillation.py",
+      "sha256": "5a668a7528add128950307b4a5eec2a484f0ef1b7c1e0eae64c40bae5eda46c5",
+      "historical_snapshot_sha256": "5a668a7528add128950307b4a5eec2a484f0ef1b7c1e0eae64c40bae5eda46c5"
+    },
+    {
+      "path": "legged_lab/utils/bfm_gait.py",
+      "source_path": "legged_lab/utils/bfm_gait.py",
+      "sha256": "4bc3a77b0b5185e01f57874d9d7cc74f8c4816577c758e4374f7e2dbd08cfc17",
+      "historical_snapshot_sha256": "4bc3a77b0b5185e01f57874d9d7cc74f8c4816577c758e4374f7e2dbd08cfc17"
+    }
+  ],
+  "extensions": [
+    {
+      "feature": "dual_teacher_bfm_distillation",
+      "source_run": "20260915_2301_distill_p49999_back05_gpu7_40961",
+      "source_manifest_sha256": "041e3dc0b1b006be6cdf987982e361ad2b69865b520840dd8ad0a421fb1b0ab2",
+      "gait_profile": {
+        "name": "backward_fast",
+        "version": 1,
+        "backward_period": 0.5,
+        "default_period": 0.8,
+        "lin_threshold": 0.1,
+        "yaw_threshold": 0.1,
+        "backward_gate": "command_vx <= -lin_threshold; includes backward mixed commands",
+        "phase_update": "progress += dt/T(executed_command); modulo one; standing progress and phase zero",
+        "reset_phase_offsets": [
+          0.0,
+          0.5
+        ],
+        "right_leg_offset": 0.5,
+        "command_sampling": "original task, unchanged",
+        "reward_parameters": "original task, unchanged; all phase rewards use this same gait_phase"
+      },
+      "teacher_sha256": {
+        "version": 1,
+        "no_phase_teacher": {
+          "checkpoint_sha256": "6a5aa030fac34494dd7744756aa233a4670a651d96d8663b0dd1f49702a64ae5",
+          "iteration": 49999,
+          "schema": 1
+        },
+        "phase_teacher": {
+          "checkpoint_sha256": "065a51f8c8a96ce37b75380be06587d78858d1b31953ecb94b89c5f30634d447",
+          "iteration": 49999,
+          "schema": 2
+        },
+        "schedule": {
+          "coefficient": 5.0,
+          "final_coefficient": 0.5,
+          "hold_iterations": 1000,
+          "decay_iterations": 10000,
+          "initial_raw_norm": 16.0
+        },
+        "command_scale": 1.0,
+        "selector": "no-phase for vx<=-0.1 or standing; phase for every other moving command",
+        "loss": "mean of available backward/standing/other group mean cosine losses on normalized z",
+        "rollouts": "student Gaussian only; teachers queried on student PPO minibatch observations",
+        "initialization": "no-phase encoder/critic/AMP; two added input columns zero; positive final-layer rescale; fresh optimizer/std"
+      }
     }
   ]
 }

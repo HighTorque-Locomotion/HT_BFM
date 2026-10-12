@@ -52,11 +52,79 @@ else:
 def test_training_core_and_assets_match_source_manifest():
     manifest = json.loads((VENDOR_ROOT / "source_manifest.json").read_text())
     assert manifest["source_commit"] == "b2d706a8b1323146a0e58595424b7fe5090a8357"
-    assert len(manifest["files"]) == 142
+    assert len(manifest["files"]) >= 142
+    assert len({item["path"] for item in manifest["files"]}) == len(manifest["files"])
     for item in manifest["files"]:
         path = VENDOR_ROOT / item["path"]
         assert not path.is_symlink()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"], item["path"]
+
+
+@pytest.fixture
+def distill_cli_paths(tmp_path):
+    weights = tmp_path / "bfm_actor"
+    weights.mkdir()
+    (weights / "config.yaml").write_text("robot: {}\n")
+    no_phase = tmp_path / "no_phase.pt"
+    phase = tmp_path / "phase.pt"
+    no_phase.touch()
+    phase.touch()
+    return ["--bfm-weights", str(weights), "--no-phase-teacher", str(no_phase), "--phase-teacher", str(phase)]
+
+
+def test_distill_dispatch_uses_historical_defaults_and_own_backend(distill_cli_paths):
+    args = build_parser().parse_args(["distill", *distill_cli_paths])
+    module, options = build_invocation(args)
+    assert module == "legged_lab.scripts.train_bfm_amp"
+    expected = {
+        "--gait-profile": "backward_fast", "--backward-period": "0.5", "--num_envs": "4096",
+        "--seed": "42", "--max_iterations": "50000", "--distill-coef": "5.0",
+        "--distill-final-coef": "0.5", "--distill-hold": "1000", "--distill-decay": "10000",
+        "--bfm-source": str(PROJECT_ROOT),
+    }
+    for option, value in expected.items():
+        assert options[options.index(option) + 1] == value
+    assert "--no-phase" not in options and "--resume" not in options
+    assert Path(options[options.index("--log-dir") + 1]).name.endswith("_distill")
+
+
+def test_distill_dry_run_does_not_allocate_a_log_directory(distill_cli_paths, tmp_path):
+    args = build_parser().parse_args(["distill", *distill_cli_paths, "--dry-run", "--log-dir", str(tmp_path / "run")])
+    _, options = build_invocation(args)
+    assert "--dry-run" in options and "--log-dir" not in options
+    assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("extra", [
+    ["--gait-profile", "fixed"], ["--actuator-profile", "legacy"], ["--task", "walk_pi_waq_23"],
+    ["--distill-coef", "0"], ["--distill-final-coef", "6"], ["--backward-period", "0"],
+])
+def test_distill_rejects_incompatible_modes_before_isaac(distill_cli_paths, extra):
+    args = build_parser().parse_args(["distill", *distill_cli_paths, *extra])
+    with pytest.raises(ValueError):
+        build_invocation(args)
+
+
+def test_distilled_student_play_needs_gait_but_no_teacher(tmp_path):
+    weights = tmp_path / "bfm_actor"
+    weights.mkdir()
+    (weights / "config.yaml").write_text("robot: {}\n")
+    args = build_parser().parse_args([
+        "play", "--controller", "bfm-phase", "--gait-profile", "backward_fast",
+        "--bfm-weights", str(weights), "--checkpoint", str(tmp_path / "student.pt"),
+    ])
+    _, options = build_invocation(args)
+    assert "--play" in options and "--gait-profile" in options
+    assert "--distill-no-phase-teacher" not in options and "--distill-phase-teacher" not in options
+
+
+@pytest.mark.parametrize("operation", ["train", "play"])
+def test_ordinary_amp_cannot_silently_select_variable_bfm_gait(operation, tmp_path):
+    options = [operation, "--gait-profile", "backward_fast"]
+    if operation == "play":
+        options += ["--checkpoint", str(tmp_path / "policy.pt")]
+    with pytest.raises(ValueError, match="bfm-phase"):
+        build_invocation(build_parser().parse_args(options))
 
 
 @pytest.mark.parametrize("controller,phase", [("bfm", False), ("bfm-phase", True)])
