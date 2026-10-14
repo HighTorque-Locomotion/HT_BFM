@@ -48,6 +48,7 @@ from legged_lab.envs.base.base_config import (
     RobotCfg,
     SimCfg,
 )
+from legged_lab.mdp.lateral_window import LateralVelocityWindow
 
 LEG_JOINT_NAMES = [f".*_{joint}_joint" for joint in ("hip_pitch", "hip_roll", "thigh", "calf", "ankle_pitch", "ankle_roll")]
 
@@ -227,7 +228,8 @@ class PiDof12RewardCfg:
     )
     idle_penalty = RewTerm(
         func=mdp.idle_when_commanded,
-        weight=-5.0,
+        # weight=-5.0,
+        weight=0.0,  # Disable idle penalties for the lateral drift ablation.
         params={
             "lin_command_threshold": PI_LIN_COMMAND_THRESHOLD,
             "yaw_command_threshold": PI_YAW_COMMAND_THRESHOLD,
@@ -256,6 +258,14 @@ class PiDof12RewardCfg:
             "contact_threshold": 1.0,
             "x_deadband": 0.03,
         },
+    )
+    lateral_vx_center = RewTerm(
+        func=LateralVelocityWindow, weight=-2.0,
+        params={"channel": "vx", "window_seconds": 1.0},
+    )
+    lateral_wz_center = RewTerm(
+        func=LateralVelocityWindow, weight=-2.0,
+        params={"channel": "wz", "window_seconds": 1.0},
     )
     dof_torque_l2 = RewTerm(func=mdp.joint_torque_l2, weight=-5e-05, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
 

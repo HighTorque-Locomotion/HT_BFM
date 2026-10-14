@@ -1,0 +1,9 @@
+{
+  "dof": 12,
+  "frame_dim": 47,
+  "history_dim": 470,
+  "history_order": "oldest_to_newest",
+  "input": "scaled proprioceptive observation history",
+  "output": "normalized joint actions; apply task action scale/default pose in controller",
+  "checkpoint": "model_49999.pt"
+}

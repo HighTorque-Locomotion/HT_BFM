@@ -54,6 +54,7 @@ def test_all_pi12_reward_selectors_match_urdf(urdf):
         "RewTerm": SimpleNamespace,
         "SceneEntityCfg": entity,
         "mdp": RewardFunctions(),
+        "LateralVelocityWindow": "LateralVelocityWindow",
     }
     path = VENDOR_ROOT / "legged_lab/envs/pi/pi_12dof_cfg.py"
     tree = ast.parse(path.read_text())

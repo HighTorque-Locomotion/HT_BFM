@@ -218,3 +218,33 @@ r = exp(-0.5 * ((e_roll/std)**2 + (e_pitch/std)**2))
 与原判据等价；相关 Python 文件 Ruff 与 `git diff --check` 通过。
 HT_lab 的 35 项 CPU 回归也通过，包括旧/新 BFM 与 pi_soccer 姿态判定对照；
 日志 `HT_lab/logs/setup/pi_bfm_tilt_only_20260928.log`。此次未重跑 GPU 仿真或训练。
+
+
+## 2026-10-12 纯侧移滑动窗口速度居中惩罚
+
+参照 HT_lab hi_walk_23dof 的 waist_yaw_center_symmetry_penalty，新增
+lateral_vx_center / lateral_wz_center 两项，各权重 -2.0。仅指令
+abs(vy)>=0.1、abs(vx)<0.1、abs(wz)<0.1 时累计；窗口1.0秒，控制周期0.02秒时50帧，
+填满后分别输出 abs(max(vx)+min(vx)) 和 abs(max(wz)+min(wz))，不平方、无额外死区。
+vx为根部世界线速度转换至机器人yaw水平坐标系的x分量；wz为世界z角速度，沿用现有跟踪定义。
+退出纯侧移、左右切换或reset清空历史；仅改变速度幅值且不改变侧移方向时窗口继续。
+两项由RewardManager乘dt，AMP混合不变。原29项有效BFM奖励与零权重脚位项保持；有效奖励增至31项。
+HT_lab同步实现，walk角色门控另行保留；Actor观测、网络、随机化、已有模型不改。
+CPU验证覆盖满窗、持续滚动、方向/模式切换、局部坐标、分环境reset及两项相互抵消问题；未进行GPU训练或GUI回放。
+新奖励需要重新训练/续训才能影响策略；极值居中不等于平均速度为零，评估同时关注平均vx/wz及实际位移。
+
+## 2026-10-13 停用idle_penalty，与HT_lab同步
+
+按用户要求，将`PiDof12RewardCfg.idle_penalty.weight`从-5.0改为0.0，
+与HT_lab的`WalkRewardsCfg.idle_penalty`同步。旧权重注释保留，函数和阈值保留。
+该项的平移与转向怠动惩罚全部停用；其余奖励、AMP、专家和网络配置保持。
+Pi12配置的非零权重项减少一项。
+
+原因：瞬时平面速度模长判据允许纯侧移时通过前后漂移越过0.1m/s阈值逃罚。
+HT_lab已完成该奖励冲突的诊断，本次先关闭此项进行后续训练对照；未据此宣称BFM策略已验证改善。
+新启动或续训加载新配置后生效；已有训练进程不会自动更新。本次未启动训练。
+
+验证：`python -m pytest tests/flat_amp/test_pi12.py::test_all_pi12_reward_selectors_match_urdf -q`
+1项通过；该测试补齐此前新增`LateralVelocityWindow`的模拟定义，解决配置求值时的NameError。
+HT_lab的14项CPU同步检查通过。两份配置AST核对权重均为0.0、语法检查通过，
+本项目修改文件Ruff与两项目`git diff --check`通过；未进行GPU训练或策略效果验证。
