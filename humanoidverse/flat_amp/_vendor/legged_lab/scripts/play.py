@@ -50,6 +50,10 @@ def main():
         env_cfg.scene.num_envs = args.num_envs
         env_cfg.scene.play_ui = not args.headless
         env_cfg.scene.max_episode_length_s = 600.0
+        env_cfg.foot_contact_randomization.enabled = False
+        env_cfg.foot_contact_stiffness = 0.0
+        env_cfg.foot_contact_damping = 0.0
+        env_cfg.velocity_curriculum.enabled = False
         env_cfg.noise.add_noise = False
         env_cfg.domain_rand.events.push_robot = None
         env_cfg.commands.heading_command = False

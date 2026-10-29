@@ -1,4 +1,4 @@
-"""Pure lateral velocity centering, adapted from hi_walk_23dof extrema history."""
+"""Pure lateral velocity centering using the signed sliding-window mean."""
 
 import math
 
@@ -8,10 +8,10 @@ from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 
 
 class LateralVelocityWindow(ManagerTermBase):
-    """Return |maximum + minimum| after a full, uninterrupted lateral window.
+    """Return |mean(velocity)| after a full, uninterrupted lateral window.
 
     Each instance owns one velocity channel. Reset and command-mode/direction
-    changes discard history; extrema from another maneuver cannot enter it.
+    changes discard history; samples from another maneuver cannot enter it.
     """
 
     def __init__(self, cfg, env):
@@ -62,5 +62,5 @@ class LateralVelocityWindow(ManagerTermBase):
         self.history[:, :-1] = self.history[:, 1:].clone()
         self.history[:, -1] = torch.where(active, velocity, 0.0)
         self.count = torch.where(active, (self.count + 1).clamp(max=self.window_steps), 0)
-        centered = (self.history.amax(dim=1) + self.history.amin(dim=1)).abs()
+        centered = self.history.mean(dim=1).abs()
         return torch.where(active & (self.count == self.window_steps), centered, 0.0)

@@ -6,7 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor"
 TASKS = ("walk_pi_waq_12",)
-CONTROLLERS = ("amp",)
+CONTROLLERS = ("amp", "bfm")
 
 
 def activate():

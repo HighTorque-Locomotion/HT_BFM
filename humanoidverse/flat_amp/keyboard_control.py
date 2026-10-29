@@ -1,4 +1,4 @@
-"""HT_lab-style keys for AMP play; simulator APIs are imported only on connect."""
+"""HT_lab-style keys for Pi12 play; simulator APIs are imported only on connect."""
 
 import argparse
 import math
@@ -14,7 +14,7 @@ def positive_float(value):
 
 
 def add_keyboard_arguments(parser):
-    parser.add_argument("--keyboard-control", "--keyboard_control", action="store_true", help="Interactive AMP playback in the GUI")
+    parser.add_argument("--keyboard-control", "--keyboard_control", action="store_true", help="Interactive Pi12 playback in the GUI")
     parser.add_argument("--keyboard-linvel-step", "--keyboard_linvel_step", type=positive_float, default=0.1, help="m/s per key event")
     parser.add_argument("--keyboard-angvel-step", "--keyboard_angvel_step", type=positive_float, default=0.1, help="rad/s per key event")
 

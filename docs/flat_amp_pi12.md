@@ -22,7 +22,7 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失。
 | 网络、学习率、PPO、镜像损失、AMP 奖励混合及保存间隔 | `PiDof12WalkAgentCfg` |
 
 例如修改 `track_lin_vel_xy_exp.weight` 对应的定义可调整线速度跟踪权重；
-修改 `commands.ranges.lin_vel_x` 可调整前后速度范围。
+修改 `commands.ranges.lin_vel_x` 可调整速度课程最终的前后速度范围。
 奖励项设为 `None` 或 `weight=0.0` 会禁用该项；新增奖励可直接添加 `RewTerm`。
 奖励计算函数位于 `humanoidverse/flat_amp/_vendor/legged_lab/mdp/rewards.py`，
 若只给 Pi12 添加新计算逻辑，可在该模块新增函数并仅在 Pi12 配置中引用；
@@ -39,6 +39,47 @@ ActorCriticWaq、PPO、AMP 判别器、历史编码器与镜像损失。
 检查通过。RTX 4090 上完成 16 环境、2 次训练迭代、2048 AMP 预载的短跑，
 保存 checkpoint 后重新创建策略、严格加载权重并在同一训练环境推理 50 步，
 动作、观测和奖励均为有限值；本次未验证 GUI 回放或长跑收敛。
+
+## 速度课程（AMP / BFM 共用）
+
+`PiDof12WalkFlatEnvCfg.velocity_curriculum` 默认启用，参数类及计算实现位于
+`humanoidverse/flat_amp/velocity_curriculum.py`。参考 HT_lab 的
+`hi_walk_23dof@701e2e031c35199a67caec52fbf346212420bd79` 分支中
+`hi_walk_amp/mdp/curriculums.py::velocity_ranges_curriculum`，将按地形分组适配为
+平地任务的混合、纯侧移、原地转向和直行/后退四种指令模式。
+
+| 模式 | 初始 vx（m/s） | 初始 vy（m/s） | 初始 wz（rad/s） | 最终范围 |
+| --- | --- | --- | --- | --- |
+| 混合 | [-0.15, 0.30] | [-0.15, 0.15] | [-0.30, 0.30] | vx [-1.0, 1.5]，vy ±0.8，wz ±2.0 |
+| 纯侧移 | 0 | [-0.15, 0.15] | 0 | vy ±0.8 |
+| 原地转向 | 0 | 0 | [-0.50, 0.50] | wz ±2.0 |
+| 直行/后退 | [0.10, 0.50] | 0 | 0 | vx [-1.0, 1.5] |
+
+每个环境独立保存四个 `[0,1]` 难度等级。实际采样范围为
+`initial + level * (target - initial)`；episode reset 时更新等级，10 秒指令重采样只换
+指令/模式，不额外升级。原有站立 10%、侧移/转向/直行各 15%、混合 45% 比例保持。
+
+评分沿用参考实现的 `exp(-error² / 0.5²)`：平移模式使用机身坐标系 XY 速度误差平方和，
+纯转向使用机身 z 轴角速度误差平方。为适应 episode 内切换模式，按模式分别累计均值，
+再乘实际执行步数占完整 episode 步数的比例（上限 1）；因此提前跌倒不会仅凭短暂的
+准确跟踪获得高分。站立不计分，未出现过的模式不改变等级。
+
+- 混合、侧移、直行：评分 `>0.70` 升级，`<0.55` 降级。
+- 原地转向：评分 `>0.50` 升级，`<0.35` 降级。
+- 每次升级 `+0.05`，降级 `-0.02`，中间区间和恰好等于阈值时保持。
+
+航向控制增益从 0.5 调为 1.0，使角速度能达到 ±2 rad/s；每步计算的航向指令仍受当前
+环境、当前模式课程范围限幅。速度上限是各分量上限，不是平面速度模长上限。
+
+TensorBoard 的 `Curriculum/<模式>/level` 和各轴 `*_min` / `*_max` 记录全体环境的
+平均等级及平均范围。AMP/BFM checkpoint 保存各环境课程等级，续训恢复；环境数变化时
+用原各模式的平均等级初始化。旧 checkpoint 无该字段时从初始难度开始。
+续训启动时已采样的低速指令保留到下一次正常采样，随后使用恢复的课程等级。
+不恢复旧 episode 的分数和累计步数。
+
+固定速度和键盘回放均关闭课程，直接使用指定速度；键盘限幅采用最终范围。
+BFM 部署导出的 `interface.json` 同样记录最终指令范围。设置
+`velocity_curriculum.enabled=False` 可关闭训练课程并直接从最终范围采样。
 
 ## 环境实现入口
 
@@ -169,10 +210,12 @@ AMP 判别器 `[1024,512,256]`。50 Hz 控制（200 Hz 物理仿真，decimation
 指令域沿用行走任务：vx `[-0.6,1.0]`、vy `[-0.5,0.5]`、yaw `[-1.57,1.57]`。
 虽然专家 YAML 含跑步片段，本任务仍使用现有行走指令和步态奖励。
 
-电机参数来自 HT_lab 的 `assets/Pi_S_12L0A0G0H0W.py` 及其 5047 配置：
-armature=0.012910，Kp≈50.9666、Kd≈3.24464，effort_limit_sim=20 Nm、
-velocity_limit_sim=60 rad/s。识别曲线的 max_torque=20 Nm、max_velocity=6 rad/s；
-后者与仿真关节速度限值含义不同。动作 scale 为 `0.25 * 20 / Kp`（约 0.0981 rad）。
+Pi12 实机电机确认为 5036，参数对齐 HT_lab 的 `assets/PiPlus_S_12L8A0G2H0W_5036.py`
+及 `HTMotorCfg_5036` 配置：armature=0.013212，Kp≈52.15889、Kd≈3.32054，
+effort_limit_sim=24 Nm、velocity_limit_sim=60 rad/s。
+力速曲线为 `|ω| = -0.006667|T|² - 0.113990|T| + 7.732552`，
+max_torque=23.7 Nm、max_velocity=7.95 rad/s；后者与仿真关节速度限值含义不同。
+驱动按曲线限幅，制动按 23.7 Nm 限幅。动作 scale 为 `0.25 * 24 / Kp`（约 0.115033 rad）。
 默认姿态为 hip_pitch=-0.25、calf=0.65、ankle_pitch=-0.4，其余为 0，根高度 0.351 m。
 电机延迟沿用 HT_lab Pi12 训练配置的 0..4 个物理步，使用 delayed PD 路径；
 不改变已有 PiPlus 任务的电机实现。`--actuator-profile legacy` 不适用于本任务。
@@ -230,38 +273,10 @@ python -m humanoidverse.flat_amp play \
 `--keyboard-angvel-step` 调整，以上键盘参数也接受 HT_lab 风格的下划线写法。
 指令按任务配置限幅（Pi12：vx `[-0.6,1.0]`，vy `[-0.5,0.5]`，yaw `[-1.57,1.57]`），
 所有并行环境使用同一指令；重置和定时重采样保留最新键盘指令。
-键盘模式按控制周期节流，不快于实时；不支持 `--headless` 或 BFM controller。
+键盘模式按控制周期节流，不快于实时；不支持 `--headless`。
+BFM controller 也已接入相同键盘操作，命令见 [BFM 训练说明](flat_amp_pi12_bfm.md)。
 `--steps` 仍控制回放步数上限。未加键盘开关时，固定速度回放行为不变。
 
-2026-09-15 键盘功能接入后，56 项 CPU 回归测试通过，涵盖按键事件、释放保持、
-限幅、指令同步、最新历史帧更新和订阅清理。当前执行环境未设置 DISPLAY，
-Isaac Sim 无法枚举渲染 GPU，实际 GUI 验证未完成；请在本机桌面终端运行。
-
-CPU 单元测试覆盖专家轨迹、关节顺序、四元数、AMP 特征、PPO 更新和导出；
-实际 Isaac 仿真需要可用 NVIDIA 驱动/GPU。适配完成不代表长跑已经收敛。
-
-2026-09-14 修复 `stand_still` 继承的上肢/头部关节选择器后，37 项 CPU 测试通过；
-在 RTX 4090 / Isaac Sim 5.1 上完成上述 16 环境、2 次迭代、2048 AMP 预载的
-GPU 短跑，正常保存 `model_0.pt` 和 `model_1.pt`。新增检查覆盖全部启用奖励的
-关节和刚体名称匹配。该短跑仅验证训练链路，不代表策略已经学会行走。
 
 
-## 2026-09-22 单任务清理
 
-项目仅注册 `walk_pi_waq_12`。Pi22/Pi23、BFM、Stage2 及其他任务的源码、入口、
-配置和对应测试已移除；`.gitignore` 忽略的内容保留。
-`AMPLoaderPi12` 的加载、插值和采样方法已展开为独立实现，Pi12 5047 电机直接
-继承 Isaac Lab 的 `DelayedPDActuator`。任务环境与奖励参数保持原样。
-历史验证记录中的其他任务及旧数据数量仅描述当时状态，以本节和当前配置为准。
-
-本次清理验证（`conda activate HT_BFM`，RTX 4090）：
-
-- `python -m pytest tests/flat_amp -q`：49 项通过；Ruff 与 `git diff --check` 通过。
-- 实际训练 16 个环境、2 次迭代、2048 条 AMP 预载，生成 `model_0.pt` 和 `model_1.pt`；
-  从 `model_1.pt` 恢复训练 1 次迭代成功。checkpoint 策略参数均为有限值。
-- 独立无界面播放入口加载训练权重，完成 2 个环境、100 步播放。
-- TorchScript / ONNX 导出成功，ONNX checker 通过；ONNX Runtime 与 TorchScript
-  在 batch=1、8、32 时输出一致（atol=1e-6、rtol=1e-5）。
-- 独立加载器的当前全部专家特征及 100 个插值样本与清理前逐位一致；55 个 NPZ/YAML 文件未变。
-- 图形面板测试未通过：本机 Isaac Sim 报 NVIDIA/Vulkan 设备初始化失败，90 秒超时；
-  未据此声称 GUI 可用，也未验证长期训练收敛。

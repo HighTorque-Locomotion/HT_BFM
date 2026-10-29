@@ -40,6 +40,7 @@ from isaaclab.utils.buffers import CircularBuffer, DelayBuffer
 from isaaclab.utils.math import quat_apply, quat_conjugate
 from rsl_rl.env import VecEnv
 
+from humanoidverse.flat_amp.foot_contact import bind_foot_contact_materials, sample_foot_contact_parameters
 from legged_lab.envs.pi.pi_12dof_cfg import PiDof12WalkFlatEnvCfg
 from legged_lab.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
 from legged_lab.mdp.rewards import command_activity_masks
@@ -61,7 +62,14 @@ class PiDof12Env(VecEnv):
         self.physics_dt = self.cfg.sim.dt
         self.step_dt = self.cfg.sim.decimation * self.cfg.sim.dt
         self.num_envs = self.cfg.scene.num_envs
-        self.seed(cfg.scene.seed)
+        seed = self.seed(cfg.scene.seed)
+        self.foot_contact_parameters, self.foot_contact_groups = sample_foot_contact_parameters(
+            self.num_envs,
+            cfg.foot_contact_randomization,
+            seed=seed,
+            stiffness=cfg.foot_contact_stiffness,
+            damping=cfg.foot_contact_damping,
+        )
         sim_cfg = sim_utils.SimulationCfg(
             device=cfg.device,
             dt=cfg.sim.dt,
@@ -75,8 +83,27 @@ class PiDof12Env(VecEnv):
             ),
         )
         self.sim = SimulationContext(sim_cfg)
-        scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
+        scene_cfg = SceneCfg(
+            config=cfg.scene,
+            physics_dt=self.physics_dt,
+            step_dt=self.step_dt,
+        )
+        # 通过 USD 单独绑定脚底材质，避免物理复制共享的影响。
+        scene_cfg.replicate_physics = False
         self.scene = InteractiveScene(scene_cfg)
+
+        # 对照实验固定脚底摩擦为下方的 1.0。
+        cfg.domain_rand.events.foot_friction = None
+
+        bind_foot_contact_materials(self.scene.stage, self.scene.env_prim_paths, self.foot_contact_parameters)
+        counts = np.bincount(self.foot_contact_groups, minlength=4)
+        print(
+            f"[Foot contact] rigid={counts[0]}, reproduction={counts[1]}, random={counts[2]}, fixed={counts[3]}; "
+            f"env_0: stiffness={self.foot_contact_parameters[0, 0]:.3f}, "
+            f"damping={self.foot_contact_parameters[0, 1]:.3f}",
+            flush=True,
+        )
+
         self.sim.reset()
         self.robot: Articulation = self.scene["robot"]
         joint_names = list(self.robot.joint_names)
@@ -102,6 +129,7 @@ class PiDof12Env(VecEnv):
             heading_control_stiffness=self.cfg.commands.heading_control_stiffness,
             debug_vis=self.cfg.commands.debug_vis,
             ranges=self.cfg.commands.ranges,
+            velocity_curriculum=self.cfg.velocity_curriculum,
         )
         self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
         self.reward_manager = RewardManager(self.cfg.reward, self)
@@ -167,6 +195,8 @@ class PiDof12Env(VecEnv):
         self.phase_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.gait_start = torch.randint(0, 2, (self.num_envs,)).to(self.device) * 0.5
         self.gait_phase = torch.zeros(self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False)
+        self.swing_contact_penalized = torch.zeros_like(self.gait_phase, dtype=torch.bool)
+        self.swing_contact_previous_phase = torch.full_like(self.gait_phase, -1.0)
         self.gait_cycle = torch.full((self.num_envs,), self.cfg.gait.gait_cycle, dtype=torch.float, device=self.device, requires_grad=False)
         self.phase_ratio = torch.tensor(
             [self.cfg.gait.gait_air_ratio_l, self.cfg.gait.gait_air_ratio_r], dtype=torch.float, device=self.device
@@ -250,6 +280,8 @@ class PiDof12Env(VecEnv):
             return
         self.avg_feet_force_per_step[env_ids] = 0.0
         self.avg_feet_speed_per_step[env_ids] = 0.0
+        self.swing_contact_penalized[env_ids] = False
+        self.swing_contact_previous_phase[env_ids] = -1.0
         self.extras["log"] = dict()
         for reason_name, reason_buf in self.reset_reason_buf.items():
             reason_count = torch.count_nonzero(reason_buf[env_ids]).float()
@@ -266,7 +298,8 @@ class PiDof12Env(VecEnv):
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
         self.extras["time_outs"] = self.time_out_buf
-        self.command_generator.reset(env_ids)
+        command_extras = self.command_generator.reset(env_ids)
+        self.extras["log"].update(command_extras)
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)

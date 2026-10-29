@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Pi12 asset and identified 5047 motors, matching HT_lab's Pi12 configuration."""
+"""Pi12 asset and identified 5036 motors, using HT_lab's HTMotorCfg_5036 profile."""
 
 from __future__ import annotations
 
@@ -15,15 +15,15 @@ from isaaclab.utils import configclass
 
 from humanoidverse.flat_amp.pi12_paths import robot_urdf
 
-ARMATURE_5047 = 0.012910
+ARMATURE_5036 = 0.013212
 NATURAL_FREQ = 10 * 2.0 * 3.1415926535
 DAMPING_RATIO = 2.0
-STIFFNESS_5047 = ARMATURE_5047 * NATURAL_FREQ**2
-DAMPING_5047 = 2.0 * DAMPING_RATIO * ARMATURE_5047 * NATURAL_FREQ
+STIFFNESS_5036 = ARMATURE_5036 * NATURAL_FREQ**2
+DAMPING_5036 = 2.0 * DAMPING_RATIO * ARMATURE_5036 * NATURAL_FREQ
 
 
 class Pi12HTMotor(DelayedPDActuator):
-    """Pi12 delayed PD actuator with the identified 5047 torque-speed curve."""
+    """Pi12 delayed PD actuator with the identified 5036 torque-speed curve."""
 
     def compute(self, control_action, joint_pos, joint_vel):
         self._joint_vel[:] = joint_vel
@@ -35,11 +35,11 @@ class Pi12HTMotor(DelayedPDActuator):
         self._joint_vel = torch.zeros_like(self.computed_effort)
 
         # Store curve parameters
-        self._curve_a = cfg.curve_param_a  # -0.0141
-        self._curve_b = cfg.curve_param_b  # -0.0709
-        self._curve_c = cfg.curve_param_c  # 6.2756
-        self._max_torque = cfg.max_torque  # 20.0
-        self._max_velocity = cfg.max_velocity  # 6.0
+        self._curve_a = cfg.curve_param_a
+        self._curve_b = cfg.curve_param_b
+        self._curve_c = cfg.curve_param_c
+        self._max_torque = cfg.max_torque
+        self._max_velocity = cfg.max_velocity
 
         # Override parent class limits with identified values
         self._saturation_effort = self._max_torque
@@ -67,14 +67,14 @@ class Pi12HTMotor(DelayedPDActuator):
 
         # --- Compute maximum torque for motoring mode ---
         # Solve the curve equation for maximum torque at current velocity
-        # Given: |ω| = -0.0141|T|² - 0.0709|T| + 6.2756
-        # Rearrange to: 0.0141|T|² + 0.0709|T| + (|ω| - 6.2756) = 0
+        # Given: |ω| = curve_a * |T|² + curve_b * |T| + curve_c
+        # Rearrange with a=-curve_a, b=-curve_b, c=|ω|-curve_c.
         # Use quadratic formula: T = (-b + sqrt(b² - 4ac)) / (2a)
         # Note: We take the positive root to get the valid positive solution
 
-        a = -self._curve_a  # 0.0141
-        b = -self._curve_b  # 0.0709
-        c = abs_vel - self._curve_c  # |ω| - 6.2756
+        a = -self._curve_a
+        b = -self._curve_b
+        c = abs_vel - self._curve_c
 
         # Discriminant
         discriminant = b * b - 4 * a * c
@@ -114,26 +114,26 @@ class Pi12HTMotor(DelayedPDActuator):
 @configclass
 class Pi12HTMotorCfg(DelayedPDActuatorCfg):
     class_type: type = Pi12HTMotor
-    curve_param_a: float = -0.0141
-    curve_param_b: float = -0.0709
-    curve_param_c: float = 6.2756
-    max_torque: float = 20.0
-    max_velocity: float = 6.0
-    saturation_effort: float = 20.0
+    curve_param_a: float = -0.006667
+    curve_param_b: float = -0.113990
+    curve_param_c: float = 7.732552
+    max_torque: float = 23.7
+    max_velocity: float = 7.95
+    saturation_effort: float = 23.7
 
 
 def _motor(patterns):
     return Pi12HTMotorCfg(
         class_type=Pi12HTMotor,
         joint_names_expr=patterns,
-        effort_limit_sim=20.0,
+        effort_limit_sim=24.0,
         velocity_limit_sim=60.0,
-        stiffness=STIFFNESS_5047,
-        damping=DAMPING_5047,
-        armature=ARMATURE_5047,
-        max_torque=20.0,
-        max_velocity=6.0,
-        saturation_effort=20.0,
+        stiffness=STIFFNESS_5036,
+        damping=DAMPING_5036,
+        armature=ARMATURE_5036,
+        max_torque=23.7,
+        max_velocity=7.95,
+        saturation_effort=23.7,
         min_delay=0,
         max_delay=4,
     )
@@ -178,4 +178,4 @@ PI_12DOF_CFG = ArticulationCfg(
     },
 )
 
-PI_12DOF_ACTION_SCALE = 0.25 * 20.0 / STIFFNESS_5047
+PI_12DOF_ACTION_SCALE = 0.25 * 24.0 / STIFFNESS_5036

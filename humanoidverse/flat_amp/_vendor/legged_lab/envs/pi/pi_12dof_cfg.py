@@ -33,6 +33,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 import legged_lab.mdp as mdp
 from humanoidverse.flat_amp.pi12_paths import motion_yaml, robot_urdf
+from humanoidverse.flat_amp.velocity_curriculum import VelocityCurriculumCfg
 from legged_lab.assets.pi.pi_12dof import PI_12DOF_ACTION_SCALE, PI_12DOF_CFG
 from legged_lab.envs.base.base_config import (
     ActionDelayCfg,
@@ -123,7 +124,7 @@ class PiDof12RewardCfg:
         weight=-0.03,
         params={
             "sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"),
-            "threshold": 170,
+            "threshold": 150,
             "max_reward": 400,
         },
     )
@@ -188,7 +189,9 @@ class PiDof12RewardCfg:
         func=mdp.gait_feet_frc_perio_penalize,
         weight=-1.0,
         params={
-            "delta_t": 0.015,
+            # One discrete penalty per swing; each foot uses its own local phase.
+            "phase_start": 0.10,
+            "phase_end": 0.40,
             "lin_command_threshold": PI_LIN_COMMAND_THRESHOLD,
             "yaw_command_threshold": PI_YAW_COMMAND_THRESHOLD,
         },
@@ -212,7 +215,7 @@ class PiDof12RewardCfg:
         weight=1.0,
         params={
             "std": math.radians(5.0),
-            "tolerance": math.radians(3.0),
+            "tolerance": 0.0,
             "gravity": 9.81,
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
         },
@@ -356,10 +359,28 @@ class PiEventCfg:
 
 
 @configclass
+class FootContactRandomizationCfg:
+    """Startup-only compliance: 30% rigid, 70% log-uniform soft contact."""
+
+    enabled: bool = True
+    rigid_fraction: float = 0.3
+    # reproduction_fraction: float = 0.1  # Disabled fixed k=2000 N/m, c=0 group.
+    reproduction_fraction: float = 0.0
+    reproduction_stiffness: float = 2000.0
+    stiffness_range: tuple[float, float] = (2000.0, 200000.0)
+    damping_ratio_range: tuple[float, float] = (0.0, 0.5)
+    reference_mass: float = 8.0  # Tuning reference, not the effective mass of each contact point.
+
+
+@configclass
 class PiDof12WalkFlatEnvCfg:
     amp_exclude_ankle_roll = AMP_EXCLUDE_ANKLE_ROLL
     amp_motion_files_display = []
     device: str = "cuda:0"
+    foot_contact_randomization = FootContactRandomizationCfg()
+    # Fixed values used only when foot_contact_randomization.enabled=False.
+    foot_contact_stiffness: float = 0.0  # N/m
+    foot_contact_damping: float = 0.0  # N·s/m
     scene: BaseSceneCfg = BaseSceneCfg(
         max_episode_length_s=20.0,
         num_envs=4096,
@@ -380,6 +401,7 @@ class PiDof12WalkFlatEnvCfg:
     )
     reward = PiDof12RewardCfg()
     gait = GaitCfg()
+    velocity_curriculum = VelocityCurriculumCfg()
     normalization: NormalizationCfg = NormalizationCfg(
         obs_scales=ObsScalesCfg(lin_vel=1.0, ang_vel=1.0, projected_gravity=1.0, commands=1.0, joint_pos=1.0, joint_vel=1.0, actions=1.0),
         clip_observations=100.0,
@@ -393,9 +415,9 @@ class PiDof12WalkFlatEnvCfg:
         rel_straight_envs=0.15,
         rel_heading_envs=1.0,
         heading_command=True,
-        heading_control_stiffness=0.5,
+        heading_control_stiffness=1.0,  # Allows the heading controller to reach the final +/-2 rad/s cap.
         debug_vis=True,
-        ranges=CommandRangesCfg(lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)),
+        ranges=CommandRangesCfg(lin_vel_x=(-1.0, 1.5), lin_vel_y=(-0.8, 0.8), ang_vel_z=(-2.0, 2.0), heading=(-math.pi, math.pi)),
     )
     noise: NoiseCfg = NoiseCfg(
         add_noise=True,
@@ -450,7 +472,7 @@ class PiDof12WalkAgentCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 1000
     runner_class_name = "AmpWaqOnPolicyRunner"
     experiment_name = "walk_pi_waq_12"
-    run_name = "pi12_ht5047_amp"
+    run_name = "pi12_ht5036_amp"
     logger = "tensorboard"
     neptune_project = "walk_pi_waq_12"
     wandb_project = "walk_pi_waq_12"

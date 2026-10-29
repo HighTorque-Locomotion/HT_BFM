@@ -102,7 +102,7 @@ def body_orientation_euler(env: PiDof12Env, asset_cfg: SceneEntityCfg = SceneEnt
 def track_command_tilt_exp(
     env: PiDof12Env,
     std: float,
-    tolerance: float = math.radians(3.0),
+    tolerance: float = 0.0,
     gravity: float = 9.81,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
@@ -112,7 +112,7 @@ def track_command_tilt_exp(
     derivatives are taken: ax = -wz*vy and ay = wz*vx. Align the torso z axis
     with (ax, ay, gravity) to obtain a soft roll/pitch reference; yaw is free.
 
-    Each axis has a flat tolerance band. Outside it, the reward is
+    Each axis has an optional flat tolerance band (disabled by default). Outside it, the reward is
     exp(-0.5 * sum((excess_error / std)**2)). Both angles are in radians;
     std is the Gaussian standard deviation, unlike the velocity rewards'
     exp(-error/std**2) convention. This term is stateless, including on reset.
@@ -309,11 +309,14 @@ def is_terminated(env: PiDof12Env) -> torch.Tensor:
 def feet_slide(
     env: PiDof12Env, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
+    """Penalize foot planar speed and world-z angular speed during contact."""
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     contacts = contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :].norm(dim=-1).max(dim=1)[0] > 1.0
     asset: Articulation = env.scene[asset_cfg.name]
     body_vel = asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2]
+    body_ang_vel_z = asset.data.body_ang_vel_w[:, asset_cfg.body_ids, 2]
     reward = torch.sum(body_vel.norm(dim=-1) * contacts, dim=1)
+    reward += torch.sum(body_ang_vel_z.abs() * contacts, dim=1)
     return reward
 
 
@@ -489,32 +492,76 @@ def gait_feet_frc_perio(
     return (left_frc_score + right_frc_score) * movement_active.float() * (~env.is_on_forbidden).float()
 
 
+# Original continuous, smoothed implementation retained for reference.
+# def gait_feet_frc_perio_penalize(
+#     env: PiDof12Env,
+#     delta_t: float = 0.02,
+#     lin_command_threshold: float | None = None,
+#     yaw_command_threshold: float | None = None,
+#     max_lin_command_threshold: float | None = None,
+# ) -> torch.Tensor:
+#     """Penalize foot force during the swing phase of the gait."""
+#     left_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 0], env.phase_ratio[:, 0], delta_t)[0]
+#     right_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 1], env.phase_ratio[:, 1], delta_t)[0]
+#     left_force = env.avg_feet_force_per_step[:, 0]
+#     right_force = env.avg_feet_force_per_step[:, 1]
+#     left_frc_score = left_frc_swing_mask * (torch.abs(left_force) > 5.0).float()
+#     right_frc_score = right_frc_swing_mask * (torch.abs(right_force) > 5.0).float()
+#     if lin_command_threshold is None and yaw_command_threshold is None:
+#         movement_active = torch.ones_like(left_frc_score, dtype=torch.bool)
+#     else:
+#         _, _, movement_active = command_activity_masks(
+#             env.command_generator.command,
+#             lin_command_threshold=0.1 if lin_command_threshold is None else lin_command_threshold,
+#             yaw_command_threshold=yaw_command_threshold,
+#         )
+#     if max_lin_command_threshold is not None:
+#         planar_command_speed = torch.linalg.vector_norm(env.command_generator.command[:, :2], dim=1)
+#         movement_active &= planar_command_speed <= max_lin_command_threshold
+#     return (left_frc_score + right_frc_score) * movement_active.float() * (~env.is_on_forbidden).float()
+
+
 def gait_feet_frc_perio_penalize(
     env: PiDof12Env,
     delta_t: float = 0.02,
-    lin_command_threshold: float | None = None,
-    yaw_command_threshold: float | None = None,
+    lin_command_threshold: float | None = 0.1,
+    yaw_command_threshold: float | None = 0.1,
     max_lin_command_threshold: float | None = None,
+    phase_start: float = 0.10,
+    phase_end: float = 0.40,
 ) -> torch.Tensor:
-    """Penalize foot force during the swing phase of the gait."""
-    left_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 0], env.phase_ratio[:, 0], delta_t)[0]
-    right_frc_swing_mask = gait_clock_smooth(env.gait_phase[:, 1], env.phase_ratio[:, 1], delta_t)[0]
-    left_force = env.avg_feet_force_per_step[:, 0]
-    right_force = env.avg_feet_force_per_step[:, 1]
-    left_frc_score = left_frc_swing_mask * (torch.abs(left_force) > 5.0).float()
-    right_frc_score = right_frc_swing_mask * (torch.abs(right_force) > 5.0).float()
-    if lin_command_threshold is None and yaw_command_threshold is None:
-        movement_active = torch.ones_like(left_frc_score, dtype=torch.bool)
-    else:
-        _, _, movement_active = command_activity_masks(
-            env.command_generator.command,
-            lin_command_threshold=0.1 if lin_command_threshold is None else lin_command_threshold,
-            yaw_command_threshold=yaw_command_threshold,
-        )
+    """Charge once per foot/swing for >5 N contact inside the local phase window.
+
+    With weight=-1, division by step_dt cancels RewardManager's dt scaling,
+    giving a discrete -1 task-reward contribution per event. delta_t remains
+    accepted for old configs but no longer smooths the phase boundaries.
+    """
+    if not 0.0 <= phase_start < phase_end <= 0.5:
+        raise ValueError("Expected 0 <= phase_start < phase_end <= 0.5")
+    phase = env.gait_phase
+    # Rearm in stance or on wrap/restart; never rearm just because contact ends.
+    new_swing = phase < env.swing_contact_previous_phase
+    in_stance = phase >= env.phase_ratio
+    env.swing_contact_penalized &= ~(new_swing | in_stance)
+    env.swing_contact_previous_phase.copy_(phase)
+
+    _, _, movement_active = command_activity_masks(
+        env.command_generator.command,
+        lin_command_threshold=0.1 if lin_command_threshold is None else lin_command_threshold,
+        yaw_command_threshold=yaw_command_threshold,
+    )
     if max_lin_command_threshold is not None:
         planar_command_speed = torch.linalg.vector_norm(env.command_generator.command[:, :2], dim=1)
         movement_active &= planar_command_speed <= max_lin_command_threshold
-    return (left_frc_score + right_frc_score) * movement_active.float() * (~env.is_on_forbidden).float()
+    in_window = (phase >= phase_start) & (phase <= phase_end) & ~in_stance
+    triggered = (
+        in_window
+        & (env.avg_feet_force_per_step > 5.0)
+        & movement_active[:, None]
+        & ~env.swing_contact_penalized
+    )
+    env.swing_contact_penalized |= triggered
+    return triggered.sum(dim=1).to(phase.dtype) / env.step_dt
 
 
 def gait_feet_spd_perio(

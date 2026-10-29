@@ -17,15 +17,19 @@
 # and is distributed under the BSD-3-Clause license.
 
 from __future__ import annotations
+
 import os
 import statistics
 import time
 from collections import deque
+
 import torch
+
 import rsl_rl
+from humanoidverse.flat_amp.velocity_curriculum import load_velocity_curriculum, save_velocity_curriculum
 from rsl_rl.algorithms import AMPWAQPPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCriticWaq, Discriminator, EmpiricalNormalization
+from rsl_rl.modules import ActorCriticWaq, Discriminator, EmpiricalNormalization  # noqa: F401 -- ActorCriticWaq is resolved by eval.
 from rsl_rl.utils import Normalizer, store_code_state
 from rsl_rl.utils.motion_loader_forpi_12dof import AMPLoaderPi12
 
@@ -46,7 +50,6 @@ class AmpWaqOnPolicyRunner:
         num_obs = singe_obs.shape[1]
         num_obs_history = obs_all.shape[1]
         lin_vel_index = extras["observations"].get("lin_vel_index", None)
-        obs_history_length = int(num_obs_history / num_obs)
         if "critic" in extras["observations"]:
             self.privileged_obs_type = "critic"
         else:
@@ -312,6 +315,7 @@ class AmpWaqOnPolicyRunner:
             "amp_normalizer": self.alg.amp_normalizer,
             "iter": self.current_learning_iteration,
             "infos": infos,
+            "velocity_curriculum": save_velocity_curriculum(self.env),
         }
         if self.empirical_normalization:
             saved_dict["obs_norm_state_dict"] = self.obs_normalizer.state_dict()
@@ -331,6 +335,7 @@ class AmpWaqOnPolicyRunner:
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
             self.alg.learning_rate = float(self.alg.optimizer.param_groups[0]["lr"])
+            load_velocity_curriculum(self.env, loaded_dict.get("velocity_curriculum"))
         self.current_learning_iteration = int(loaded_dict["iter"])
         return loaded_dict.get("infos")
 

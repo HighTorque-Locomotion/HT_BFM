@@ -34,6 +34,8 @@ from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 from isaaclab.utils import configclass
 
+from humanoidverse.flat_amp.velocity_curriculum import VelocityCurriculum, VelocityCurriculumCfg
+
 
 class UniformVelocityCommand(CommandTerm):
     """Command generator that generates a velocity command in SE(2) from uniform distribution.
@@ -85,6 +87,12 @@ class UniformVelocityCommand(CommandTerm):
         self.is_straight_env = torch.zeros_like(self.is_heading_env)
         self.metrics["error_vel_xy"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_vel_yaw"] = torch.zeros(self.num_envs, device=self.device)
+        self.velocity_curriculum = None
+        if cfg.velocity_curriculum is not None and cfg.velocity_curriculum.enabled:
+            self.velocity_curriculum = VelocityCurriculum(cfg.velocity_curriculum, cfg.ranges, self.num_envs, self.device)
+        self.current_velocity_ranges = torch.tensor(
+            [cfg.ranges.lin_vel_x, cfg.ranges.lin_vel_y, cfg.ranges.ang_vel_z], device=self.device
+        ).expand(self.num_envs, -1, -1).clone()
 
     def __str__(self) -> str:
         """Return a string representation of the command generator."""
@@ -107,6 +115,11 @@ class UniformVelocityCommand(CommandTerm):
     "\n    Implementation specific functions.\n    "
 
     def _update_metrics(self):
+        if self.velocity_curriculum is not None:
+            self.velocity_curriculum.observe(
+                self.vel_command_b, self.robot.data.root_lin_vel_b[:, :2], self.robot.data.root_ang_vel_b[:, 2],
+                self._curriculum_modes(), self.is_standing_env,
+            )
         max_command_time = self.cfg.resampling_time_range[1]
         max_command_step = max_command_time / self._env.step_dt
         self.metrics["error_vel_xy"] += (
@@ -115,6 +128,26 @@ class UniformVelocityCommand(CommandTerm):
         self.metrics["error_vel_yaw"] += (
             torch.abs(self.vel_command_b[:, 2] - self.robot.data.root_ang_vel_b[:, 2]) / max_command_step
         )
+
+    def _curriculum_modes(self):
+        # The command sampler makes these categories mutually exclusive.
+        modes = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        modes[self.is_onestep_env] = 1
+        modes[self.is_turn_only_env] = 2
+        modes[self.is_straight_env] = 3
+        return modes
+
+    def reset(self, env_ids=None):
+        ids = torch.arange(self.num_envs, device=self.device) if env_ids is None else env_ids
+        if isinstance(ids, slice):
+            ids = torch.arange(self.num_envs, device=self.device)[ids]
+        if self.velocity_curriculum is not None:
+            self.velocity_curriculum.reset(ids, self._env.max_episode_length)
+        extras = super().reset(ids)
+        self._update_command()
+        if self.velocity_curriculum is not None:
+            extras.update(self.velocity_curriculum.logs())
+        return extras
 
     def _resample_command(self, env_ids: Sequence[int]):
         r = torch.empty(len(env_ids), device=self.device)
@@ -138,6 +171,13 @@ class UniformVelocityCommand(CommandTerm):
         )
         straight_start = self.cfg.rel_standing_envs + self.cfg.rel_onestep_envs + self.cfg.rel_turn_only_envs
         self.is_straight_env[env_ids] = (rnums > straight_start) & (rnums <= straight_start + self.cfg.rel_straight_envs)
+        if self.velocity_curriculum is not None:
+            modes = self._curriculum_modes()[env_ids]
+            ranges = self.velocity_curriculum.ranges(env_ids, modes)
+            self.current_velocity_ranges[env_ids] = ranges
+            self.vel_command_b[env_ids] = ranges[..., 0] + torch.rand(
+                ranges.shape[:2], device=self.device
+            ) * (ranges[..., 1] - ranges[..., 0])
 
     def _update_command(self):
         """Post-processes the velocity command.
@@ -153,6 +193,13 @@ class UniformVelocityCommand(CommandTerm):
                 min=self.cfg.ranges.ang_vel_z[0],
                 max=self.cfg.ranges.ang_vel_z[1],
             )
+            if self.velocity_curriculum is not None:
+                # Heading control must obey the same per-environment course limits.
+                self.vel_command_b[env_ids, 2] = torch.clamp(
+                    self.vel_command_b[env_ids, 2],
+                    min=self.current_velocity_ranges[env_ids, 2, 0],
+                    max=self.current_velocity_ranges[env_ids, 2, 1],
+                )
         standing_env_ids = self.is_standing_env.nonzero(as_tuple=False).flatten()
         self.vel_command_b[standing_env_ids, :] = 0.0
         onestep_env_ids = self.is_onestep_env.nonzero(as_tuple=False).flatten()
@@ -220,6 +267,8 @@ class UniformVelocityCommandCfg(CommandTermCfg):
     "Probability of pure forward/backward commands with lateral and yaw velocities set to zero."
     rel_heading_envs: float = 1.0
     "The sampled probability of environments where the robots follow the heading-based angular velocity command\n    (the others follow the sampled angular velocity command). Defaults to 1.0.\n\n    This parameter is only used if :attr:`heading_command` is True.\n    "
+
+    velocity_curriculum: VelocityCurriculumCfg | None = None
 
     @configclass
     class Ranges:

@@ -1,4 +1,4 @@
-"""Export ordinary flat AMP inference as TorchScript and ONNX, without Isaac Sim."""
+"""Export AMP or paired BFM+AMP deployment models, without Isaac Sim."""
 
 import argparse
 import json
@@ -24,16 +24,41 @@ class Policy(nn.Module):
         return self.actor(torch.cat((self.velocity(h), self.latent(h), current), dim=-1))
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True, help="New export directory")
-    args = parser.parse_args()
+    parser.add_argument("--output", type=Path, help="New export directory; required unless --check-only")
+    parser.add_argument("--controller", choices=("amp", "bfm"), help="Default: detect from checkpoint metadata")
+    parser.add_argument("--bfm-weights", type=Path, help="BFM: original native weights used for training")
+    parser.add_argument("--bfm-robot-config", type=Path, help="BFM: override the original config.yaml")
+    parser.add_argument("--env-config", type=Path, help="BFM: default <checkpoint parent>/params/env.yaml")
+    parser.add_argument("--urdf", type=Path, help="BFM: override the target URDF location saved in env.yaml")
+    parser.add_argument("--check-only", action="store_true", help="BFM: validate native models/config without exporting")
+    args = parser.parse_args(argv)
+    if args.output is None and not args.check_only:
+        parser.error("--output is required unless --check-only is selected")
+    if not args.check_only and args.output.expanduser().exists():
+        raise FileExistsError(f"Output must be new: {args.output}")
+    # Explicit local checkpoints include RSL-RL normalizer objects.
     saved = torch.load(args.checkpoint.expanduser(), map_location="cpu", weights_only=False)
-    if (saved.get("infos") or {}).get("bfm"):
-        raise ValueError("BFM command checkpoints require the frozen actor and bridge at inference.")
+    controller = "bfm" if (saved.get("infos") or {}).get("bfm") is not None else "amp"
+    if args.controller is not None and args.controller != controller:
+        raise ValueError(f"--controller {args.controller} does not match the {controller} checkpoint")
     if "obs_norm_state_dict" in saved:
-        raise ValueError("Expected a flat AMP checkpoint without empirical observation normalization.")
+        raise ValueError("Expected a flat_amp checkpoint without empirical observation normalization.")
+    if controller == "bfm":
+        if args.bfm_weights is None:
+            parser.error("BFM+AMP export requires --bfm-weights with the original native BFM")
+        from legged_lab.scripts.export_bfm_policy import export_checkpoint
+
+        return export_checkpoint(args, saved)
+    if args.bfm_weights or args.bfm_robot_config or args.env_config or args.urdf or args.check_only:
+        parser.error("BFM export options require a BFM+AMP checkpoint")
+    export_amp_checkpoint(args, saved)
+
+
+def export_amp_checkpoint(args, saved):
+    """Preserve the ordinary AMP TorchScript/ONNX interface."""
     state = saved["model_state_dict"]
 
     def sizes(prefix):
