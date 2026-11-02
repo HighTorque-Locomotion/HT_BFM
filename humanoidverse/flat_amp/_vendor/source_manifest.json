@@ -209,14 +209,14 @@
       "source_path": "legged_lab/envs/pi/pi_12dof_cfg.py",
       "sha256": "557d56534b82cbd5f10e97ac1b4f5780395d280643d1fd6e414891f8d42657d5",
       "origin": "local Pi12 adaptation",
-      "local_sha256": "d5e13fe1660009c84d2595a38cfea41bd78683530512643950d210af51cd21d9"
+      "local_sha256": "8de0bfb011768b4d3b360bcd688f2cf38bab89f6962789f7d728efaf6e2cbbe0"
     },
     {
       "path": "legged_lab/envs/pi/pi_12dof_env.py",
       "source_path": "legged_lab/envs/pi/pi_12dof_env.py",
       "sha256": "41bc814237cd225a265003a77ce9a9b73f8eb9cab8450fc829c352cc4fc28b6d",
       "origin": "local Pi12 adaptation",
-      "local_sha256": "b82e9feda9adccb95f6ade3f1770e9fcb77a9914844d167706324717451fba01"
+      "local_sha256": "79cab27647262f6306eb302e6a0ba5284089a41ce699ea5c86ac081d0771ae96"
     },
     {
       "path": "legged_lab/envs/pi/symmetry.py",
@@ -244,7 +244,7 @@
       "path": "legged_lab/mdp/rewards.py",
       "source_path": "legged_lab/mdp/rewards.py",
       "sha256": "8d8497f15d334a0739af3cdd161eda3678489138afd4ecc8a37db423f01020f3",
-      "local_sha256": "4839489059dfb37cc3836ca7d74dfd435dbb982fa4cf2e6a31eabdb77254d3fd"
+      "local_sha256": "2b3ddcf737822894a18d0c8a48605ab4812c4231d13fcde43533bb0d8fba211b"
     },
     {
       "path": "legged_lab/scripts/__init__.py",

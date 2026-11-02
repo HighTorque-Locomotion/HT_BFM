@@ -163,6 +163,29 @@ class PiDof12RewardCfg:
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch.*", ".*_calf.*", ".*_ankle.*"]),
         },
     )
+    swing_height_shortfall = RewTerm(
+        func=mdp.SwingHeightShortfallPenalty,
+        weight=-1.0,
+        params={
+            "phase_window": (0.10, 0.45),
+            "minimum_height": 0.017,
+            "lin_command_threshold": PI_LIN_COMMAND_THRESHOLD,
+            "yaw_command_threshold": PI_YAW_COMMAND_THRESHOLD,
+        },
+    )
+    stance_leg_pitch_sum_exp = RewTerm(
+        func=mdp.stance_leg_pitch_sum_exp,
+        weight=1.5,
+        params={
+            "std": math.radians(10.0),
+            "left_asset_cfg": SceneEntityCfg(
+                "robot", joint_names=["l_hip_pitch_joint", "l_calf_joint", "l_ankle_pitch_joint"]
+            ),
+            "right_asset_cfg": SceneEntityCfg(
+                "robot", joint_names=["r_hip_pitch_joint", "r_calf_joint", "r_ankle_pitch_joint"]
+            ),
+        },
+    )
     foot_gait = RewTerm(
         func=mdp.mjlab_feet_gait,
         weight=0.5,
@@ -218,6 +241,17 @@ class PiDof12RewardCfg:
             "tolerance": 0.0,
             "gravity": 9.81,
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+        },
+    )
+    base_com_feet_midpoint_exp = RewTerm(
+        func=mdp.base_com_feet_midpoint_exp,
+        weight=1.0,
+        params={
+            "std": 0.03,  # Gaussian width outside tolerance: 3.5 cm total error -> 0.368.
+            "tolerance": 0.005,  # Full reward within +/-5 mm of the target.
+            "foot_x_offset": -0.03,  # Each foot's local x; compare only robot heading x.
+            "base_cfg": SceneEntityCfg("robot", body_names="base_link"),
+            "feet_cfg": SceneEntityCfg("robot", body_names=["l_ankle_roll_link", "r_ankle_roll_link"]),
         },
     )
     stand_still = RewTerm(

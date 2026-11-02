@@ -27,8 +27,68 @@ import math
 import isaaclab.utils.math as math_utils
 import torch
 from isaaclab.assets import Articulation
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
+
+from humanoidverse.flat_amp.foot_height import FootHeightShortfallEvents, SoleClearance
+
+
+class SwingHeightShortfallPenalty(ManagerTermBase):
+    """Collect substep shortfalls; charge once per foot/cycle without dt scaling.
+
+    Adapted from HT_lab's SwingHeightShortfallPenalty, using Pi12's shared
+    gait clock and command generator. Only enabled terms register the hooks.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self.events = FootHeightShortfallEvents(
+            env.num_envs, env.device, phase_window=cfg.params["phase_window"], minimum_height=cfg.params["minimum_height"]
+        )
+        self.geometry = SoleClearance.from_stage(env.scene.stage, env.device)
+        self.feet_ids, _ = env.robot.find_bodies(["l_ankle_roll_link", "r_ankle_roll_link"], preserve_order=True)
+        self.lin_threshold = cfg.params["lin_command_threshold"]
+        self.yaw_threshold = cfg.params["yaw_command_threshold"]
+        self.step_events = torch.zeros(env.num_envs, 2, dtype=torch.bool, device=env.device)
+        self.last_events = torch.zeros_like(self.step_events)
+        self.last_clearance = torch.zeros(env.num_envs, 2, device=env.device)
+        self.previous_moving = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        self.offsets = torch.tensor([0.0, 0.5], device=env.device)
+        env.swing_height_shortfall_penalty = self
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        self.events.reset(env_ids)
+        self.step_events[ids] = False
+        self.last_events[ids] = False
+        self.last_clearance[ids] = 0
+        self.previous_moving[ids] = -1
+
+    def begin_step(self, env):
+        self.step_events.zero_()
+        _, _, self.moving = command_activity_masks(env.command_generator.command, self.lin_threshold, self.yaw_threshold)
+        self.events.reset(self.previous_moving != self.moving.long())
+        self.previous_moving.copy_(self.moving)
+        # Derive from the live clock, since gait_phase can be stale after reset
+        # or a command change. Match _calculate_gait_para at the last substep.
+        self.start_phase = env.phase_length_buf * env.step_dt / env.cfg.gait.gait_cycle + env.gait_start
+
+    def record_substep(self, env, substep):
+        data = env.robot.data
+        self.last_clearance.copy_(
+            self.geometry(data.body_pos_w[:, self.feet_ids], data.body_quat_w[:, self.feet_ids], env.scene.env_origins[:, 2])
+        )
+        phase = (
+            self.start_phase[:, None] + self.offsets + (substep + 1) * env.physics_dt / env.cfg.gait.gait_cycle
+        ) % 1.0
+        phase = torch.where(self.moving[:, None], phase, 0.0)
+        self.step_events |= self.events.update(self.last_clearance, phase, None, self.moving)
+
+    def __call__(self, env, phase_window, minimum_height, lin_command_threshold, yaw_command_threshold):
+        self.last_events.copy_(self.step_events)
+        self.step_events.zero_()
+        # RewardManager multiplies by dt: preserve an actual -1 event at weight -1.
+        return self.last_events.sum(dim=-1).float() / env.step_dt
 
 
 def command_activity_masks(
@@ -135,6 +195,48 @@ def track_command_tilt_exp(
     error = torch.atan2(torch.sin(difference), torch.cos(difference)).abs()
     excess = torch.clamp(error - tolerance, min=0.0)
     return torch.exp(-0.5 * torch.sum(torch.square(excess / std), dim=-1))
+
+
+def base_com_feet_midpoint_exp(
+    env: PiDof12Env,
+    std: float,
+    base_cfg: SceneEntityCfg,
+    feet_cfg: SceneEntityCfg,
+    foot_x_offset: float = -0.03,
+    tolerance: float = 0.005,
+) -> torch.Tensor:
+    """Align base COM with offset foot midpoint along the robot heading x axis.
+
+    Shift each ankle-roll link origin along its local x axis before averaging,
+    including the swing foot regardless of contact or phase. Project the error
+    onto the root yaw frame's x axis; lateral and vertical errors are ignored.
+    The base position is its actual COM, not its
+    link origin or the whole-robot COM. foot_x_offset is in meters.
+    Return exp(-(max(abs(error_x) - tolerance, 0) / std)**2), with lengths in meters.
+    With tolerance=0.005 and std=0.03, errors up to 5 mm score 1; 35 mm scores exp(-1).
+    This width is sqrt(2) times the conventional Gaussian standard deviation.
+    """
+    if not math.isfinite(std) or std <= 0:
+        raise ValueError("std must be finite and positive")
+    if not math.isfinite(foot_x_offset):
+        raise ValueError("foot_x_offset must be finite")
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
+    base: Articulation = env.scene[base_cfg.name]
+    feet: Articulation = env.scene[feet_cfg.name]
+    base_xy = base.data.body_com_pos_w[:, base_cfg.body_ids, :2]
+    feet_xy = feet.data.body_link_pos_w[:, feet_cfg.body_ids, :2]
+    if base_xy.shape[1] != 1 or feet_xy.shape[1] != 2:
+        raise ValueError("Expected exactly one base body and two foot bodies")
+    # First column of the foot rotation matrix, restricted to world XY (WXYZ).
+    w, x, y, z = feet.data.body_link_quat_w[:, feet_cfg.body_ids].unbind(dim=-1)
+    foot_x_axis_xy = torch.stack((1.0 - 2.0 * (y.square() + z.square()), 2.0 * (x * y + w * z)), dim=-1)
+    midpoint_xy = (feet_xy + foot_x_offset * foot_x_axis_xy).mean(dim=1)
+    error_xy = base_xy[:, 0] - midpoint_xy
+    yaw = _yaw_from_quat_wxyz(base.data.root_quat_w)
+    error_x = error_xy[:, 0] * torch.cos(yaw) + error_xy[:, 1] * torch.sin(yaw)
+    excess = torch.clamp(error_x.abs() - tolerance, min=0.0)
+    return torch.exp(-excess.square() / std**2)
 
 
 def stand_still_joint_exp(
@@ -431,6 +533,30 @@ def feet_y_distance(
 
 def _gauss_cdf(x: torch.Tensor) -> torch.Tensor:
     return 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+
+
+def stance_leg_pitch_sum_exp(
+    env: PiDof12Env,
+    std: float,
+    left_asset_cfg: SceneEntityCfg,
+    right_asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Reward zero hip-pitch + calf + ankle-pitch sum in each foot's stance.
+
+    Use actual joint angles in radians and exp(-0.5 * (error / std)**2).
+    Each leg is gated by its own local phase in [0.5, 1); sum both rewards.
+    Standing commands set both phases to zero and therefore receive no reward.
+    Joint IDs are resolved by name separately for each leg by the reward manager.
+    """
+    if not math.isfinite(std) or std <= 0:
+        raise ValueError("std must be finite and positive")
+    left_asset: Articulation = env.scene[left_asset_cfg.name]
+    right_asset: Articulation = env.scene[right_asset_cfg.name]
+    left_error = left_asset.data.joint_pos[:, left_asset_cfg.joint_ids].sum(dim=-1)
+    right_error = right_asset.data.joint_pos[:, right_asset_cfg.joint_ids].sum(dim=-1)
+    error = torch.stack((left_error, right_error), dim=-1)
+    in_stance = (env.gait_phase >= 0.5) & (env.gait_phase < 1.0)
+    return (torch.exp(-0.5 * (error / std).square()) * in_stance).sum(dim=-1)
 
 
 def gait_clock_smooth(phase: torch.Tensor, air_ratio: torch.Tensor, delta_t: float):

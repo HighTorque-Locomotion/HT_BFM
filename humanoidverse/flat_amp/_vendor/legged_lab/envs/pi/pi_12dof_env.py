@@ -321,12 +321,17 @@ class PiDof12Env(VecEnv):
             self.avg_feet_speed_per_step = torch.zeros(
                 self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
             )
-            for _ in range(self.cfg.sim.decimation):
+            height_shortfall = getattr(self, "swing_height_shortfall_penalty", None)
+            if height_shortfall is not None:
+                height_shortfall.begin_step(self)
+            for substep in range(self.cfg.sim.decimation):
                 self.sim_step_counter += 1
                 self.robot.set_joint_position_target(processed_actions)
                 self.scene.write_data_to_sim()
                 self.sim.step(render=False)
                 self.scene.update(dt=self.physics_dt)
+                if height_shortfall is not None:
+                    height_shortfall.record_substep(self, substep)
                 self.avg_feet_force_per_step += torch.norm(self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3], dim=-1)
                 self.avg_feet_speed_per_step += torch.norm(self.robot.data.body_lin_vel_w[:, self.feet_body_ids, :], dim=-1)
             self.avg_feet_force_per_step /= self.cfg.sim.decimation
